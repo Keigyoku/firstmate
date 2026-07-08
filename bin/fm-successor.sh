@@ -134,6 +134,22 @@ retire_predecessor() {
   fi
 }
 
+mark_predecessor_retired() {
+  local predecessor=$1 meta=$2 successor=$3 handoff=$4 retired_dir retired_meta tmp
+  retired_dir="$STATE/retired"
+  retired_meta="$retired_dir/$predecessor.meta"
+  mkdir -p "$retired_dir"
+  tmp=$(mktemp "$retired_dir/$predecessor.meta.tmp.XXXXXX")
+  cat "$meta" > "$tmp"
+  {
+    printf 'retired_by=%s\n' "$successor"
+    printf 'retired_handoff=%s\n' "$handoff"
+    printf 'retired_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } >> "$tmp"
+  mv "$tmp" "$retired_meta"
+  rm -f "$meta"
+}
+
 cleanup_successor_after_failure() {
   local successor=$1 meta backend target
   meta="$STATE/$successor.meta"
@@ -224,5 +240,6 @@ fi
 
 fm_watchdog_event successor_spawn "$PREDECESSOR" succeeded "successor=$SUCCESSOR_ID handoff=$HANDOFF"
 retire_predecessor "$PREDECESSOR" "$META"
+mark_predecessor_retired "$PREDECESSOR" "$META" "$SUCCESSOR_ID" "$HANDOFF"
 fm_watchdog_event predecessor_retired "$PREDECESSOR" closed "successor=$SUCCESSOR_ID"
 printf '%s\n' "$spawn_output"

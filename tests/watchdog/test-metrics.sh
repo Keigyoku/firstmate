@@ -274,6 +274,10 @@ test_threshold_defaults() {
     || fail "default compact threshold should be 85"
   [ "$(printf '%s' "$out" | jq -r 'has("rotate_to")')" = false ] \
     || fail "default rotation should stay reserved for W4"
+  [ "$(printf '%s' "$out" | jq -r '.thresholds | has("embargo_at_5hr_pct")')" = false ] \
+    || fail "default embargo thresholds should stay reserved for W4"
+  [ "$(printf '%s' "$out" | jq -r '.reserved_w4.embargo_at_5hr_pct')" = 85 ] \
+    || fail "reserved W4 embargo default should be preserved"
   pass "watchdog thresholds fall back to shipped defaults"
 }
 

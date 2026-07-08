@@ -110,7 +110,7 @@ SH
 }
 
 test_successor_spawns_with_handoff_brief_and_retires_predecessor() {
-  local home project worktree spawn_log retire_log spawn_double retire_double handoff brief event
+  local home project worktree spawn_log retire_log spawn_double retire_double handoff brief event retired_meta
   home="$TMP_ROOT/success-home"
   project="$home/project"
   worktree="$home/worktree"
@@ -118,9 +118,10 @@ test_successor_spawns_with_handoff_brief_and_retires_predecessor() {
   retire_log="$TMP_ROOT/success-retire.log"
   spawn_double="$TMP_ROOT/success-spawn-double"
   retire_double="$TMP_ROOT/success-retire-double"
-  mkdir -p "$home/state" "$home/fm-state" "$project" "$worktree"
+  mkdir -p "$home/state" "$home/fm-state" "$home/data/demo" "$project" "$worktree"
   handoff="$home/fm-state/handoff-latest.md"
   printf 'Continue from W3 HANDOFF MARKER.\n' > "$handoff"
+  printf 'Original objective marker.\n' > "$home/data/demo/brief.md"
   fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$project" "worktree=$worktree" "harness=claude" "model=default" "effort=default" "mode=local-only" "yolo=on"
   make_spawn_double "$spawn_double" "$spawn_log" 0
   make_retire_double "$retire_double" "$retire_log"
@@ -134,6 +135,10 @@ test_successor_spawns_with_handoff_brief_and_retires_predecessor() {
   assert_present "$brief" "successor brief should be generated"
   assert_grep "$handoff" "$brief" "successor brief should include handoff path"
   assert_grep "W3 HANDOFF MARKER" "$brief" "successor brief should include handoff content"
+  assert_absent "$home/state/demo.meta" "retired predecessor meta should leave active state"
+  retired_meta="$home/state/retired/demo.meta"
+  assert_present "$retired_meta" "retired predecessor meta should be archived outside active state"
+  assert_grep "retired_by=demo-next" "$retired_meta" "retired predecessor meta should record successor"
   assert_grep "demo-next $project --adopt-worktree --adopt-worktree-path $worktree --harness claude --backend tmux --mode local-only --yolo on" "$spawn_log" "spawn double should receive successor args"
   [ "$(cat "$retire_log")" = "tmux|target-pane" ] || fail "predecessor should be retired through backend target"
   event="$home/fm-state/watchdog.events"
@@ -243,9 +248,10 @@ test_watch_loop_clear_rotation_starts_successor_and_exits_when_halted() {
   steer_double="$TMP_ROOT/watch-threshold-steer-double"
   spawn_log="$TMP_ROOT/watch-threshold-spawn.log"
   spawn_double="$TMP_ROOT/watch-threshold-spawn-double"
-  mkdir -p "$home/state" "$home/fm-state" "$worktree"
+  mkdir -p "$home/state" "$home/fm-state" "$home/data/demo" "$worktree"
   handoff="$home/fm-state/handoff-latest.md"
   printf 'threshold handoff\n' > "$handoff"
+  printf 'Threshold original objective marker.\n' > "$home/data/demo/brief.md"
   fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$worktree" "worktree=$worktree" "backend=tmux" "harness=codex"
   write_successor_config "$config" 90 95
   write_codex_rollout "$session_dir/rollout-demo.jsonl" "$worktree" 960 old-sid
@@ -294,6 +300,8 @@ test_watch_loop_clear_rotation_starts_successor_and_exits_when_halted() {
   assert_present "$generated_handoff" "unique successor handoff should exist"
   assert_grep "handoff=$generated_handoff" "$home/fm-state/watchdog.halt" "halt flag should record the unique handoff consumed by successor spawn"
   assert_contains "$(cat "$generated_handoff")" "Reason: clear_rotated." "unique successor handoff should name the trigger reason"
+  assert_contains "$(cat "$generated_handoff")" "Original Brief" "unique successor handoff should include original brief section"
+  assert_contains "$(cat "$generated_handoff")" "Threshold original objective marker." "unique successor handoff should embed predecessor brief"
   assert_contains "$(cat "$handoff")" "Reason: clear_rotated." "successor handoff should be refreshed for the current trigger"
   if grep -q 'threshold handoff' "$handoff"; then
     fail "successor handoff should not reuse stale content"
@@ -354,6 +362,8 @@ test_steer_rc4_escalates_to_successor() {
   assert_present "$generated_handoff" "rc4 successor path should create a unique handoff artifact"
   assert_grep "handoff=$generated_handoff" "$home/fm-state/watchdog.halt" "halt flag should record the unique handoff consumed by successor spawn"
   assert_contains "$(cat "$generated_handoff")" "Reason: steer_undeliverable." "unique generated handoff should name the successor reason"
+  assert_contains "$(cat "$generated_handoff")" "Original Brief" "rc4 generated handoff should include original brief section"
+  assert_contains "$(cat "$generated_handoff")" "was not present" "missing rc4 original brief should be explicit"
   assert_present "$handoff" "rc4 successor path should create a handoff artifact"
   assert_contains "$(cat "$handoff")" "Reason: steer_undeliverable." "generated handoff should name the successor reason"
   if grep -q 'stale successor handoff' "$handoff"; then

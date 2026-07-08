@@ -402,11 +402,12 @@ watchdog_halted() {
 }
 
 watchdog_start_successor() {
-  local task=$1 context=$2 reason=$3 rc=${4:-} handoff latest tmp safe_task ts
+  local task=$1 context=$2 reason=$3 rc=${4:-} handoff latest tmp safe_task ts brief_path
   safe_task=$(watchdog_marker_key "$task")
   ts=$(date -u +%Y%m%dT%H%M%SZ)
   handoff="$FM_HOME/fm-state/handoffs/handoff-${safe_task}-${ts}-${$}.md"
   latest="$FM_HOME/fm-state/handoff-latest.md"
+  brief_path="$FM_HOME/data/$task/brief.md"
   mkdir -p "$(dirname "$handoff")"
   tmp=$(mktemp "${handoff}.tmp.XXXXXX")
   {
@@ -416,6 +417,15 @@ watchdog_start_successor() {
     printf 'Context percent: %s.\n' "$context"
     [ -z "$rc" ] || printf 'Steer rc: %s.\n' "$rc"
     printf "Created: \`%s\`.\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '\n## Original Brief\n\n'
+    if [ -f "$brief_path" ]; then
+      printf "Original brief path: \`%s\`.\n\n" "$brief_path"
+      printf '~~~~markdown\n'
+      cat "$brief_path"
+      printf '\n~~~~\n'
+    else
+      printf "Original brief path: \`%s\` was not present when this handoff was generated.\n" "$brief_path"
+    fi
   } > "$tmp"
   mv "$tmp" "$handoff"
   cp "$handoff" "$latest" 2>/dev/null || true

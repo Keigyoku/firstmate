@@ -18,14 +18,17 @@ fm_watchdog_default_config() {
   "poll_interval_sec": 30,
   "thresholds": {
     "compact_at_context_pct": 85,
-    "successor_at_context_pct": 95,
-    "embargo_at_5hr_pct": 85,
-    "embargo_at_7d_pct": 85
+    "successor_at_context_pct": 95
   },
   "steer_retries": 3,
   "steer_timeout_sec": 120,
   "compact_pending_retry_sec": 900,
   "metrics_failure_event_interval_sec": 300,
+  "reserved_w4": {
+    "embargo_at_5hr_pct": 85,
+    "embargo_at_7d_pct": 85,
+    "rotate_to": ["codex", "opencode"]
+  },
   "parser_version": 1
 }
 JSON
