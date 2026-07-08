@@ -5,7 +5,6 @@
 # to $STATE/watchdog/metrics-<session_id>.json.
 # The path is under state/watchdog so watchdog artifacts stay with firstmate's
 # existing runtime signals without mixing into the watcher's own dotfile internals.
-set -euo pipefail
 
 FM_WATCHDOG_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-wake-lib.sh disable=SC1091
@@ -280,13 +279,13 @@ fm_watchdog_collect_metrics() {
   case "$harness" in
     claude)
       source=$(fm_watchdog_latest_claude_checkpoint_for_session "$session_id") \
-        || fm_watchdog_parser_mismatch "no claude token-optimizer checkpoint found for session: $session_id"
-      metrics=$(fm_watchdog_claude_metrics_json "$harness" "$session_id" "$source")
+        || { fm_watchdog_parser_mismatch "no claude token-optimizer checkpoint found for session: $session_id"; return $?; }
+      metrics=$(fm_watchdog_claude_metrics_json "$harness" "$session_id" "$source") || return $?
       ;;
     codex)
       source=$(fm_watchdog_latest_codex_rollout_for_session "$session_id") \
-        || fm_watchdog_parser_mismatch "no codex rollout file found for session: $session_id"
-      metrics=$(fm_watchdog_codex_metrics_json "$harness" "$session_id" "$source")
+        || { fm_watchdog_parser_mismatch "no codex rollout file found for session: $session_id"; return $?; }
+      metrics=$(fm_watchdog_codex_metrics_json "$harness" "$session_id" "$source") || return $?
       ;;
     *)
       metrics=$(fm_watchdog_unknown_metrics_json "$harness")

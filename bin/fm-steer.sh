@@ -25,20 +25,29 @@ CONFIG=$(fm_watchdog_thresholds)
 RETRIES=$(printf '%s' "$CONFIG" | jq -r '.steer_retries // 3')
 case "$RETRIES" in ''|*[!0-9]*) RETRIES=3 ;; esac
 [ "$RETRIES" -gt 0 ] || RETRIES=1
+TIMEOUT_SEC=$(printf '%s' "$CONFIG" | jq -r '.steer_timeout_sec // 120')
+case "$TIMEOUT_SEC" in ''|*[!0-9]*) TIMEOUT_SEC=120 ;; esac
+[ "$TIMEOUT_SEC" -gt 0 ] || TIMEOUT_SEC=120
 
 TARGET=$(fm_backend_resolve_selector "$SID" "$STATE" 2>/dev/null || printf '%s' "$SID")
 BACKEND=$(fm_backend_of_selector "$SID" "$TARGET" "$STATE" 2>/dev/null || printf tmux)
 
 deliver_once() {
   if [ -n "${FM_STEER_BACKEND_CMD:-}" ]; then
-    "$FM_STEER_BACKEND_CMD" "$BACKEND" "$TARGET" "$TEXT"
+    with_timeout "$FM_STEER_BACKEND_CMD" "$BACKEND" "$TARGET" "$TEXT"
     return $?
   fi
-  case "$BACKEND" in
-    herdr) fm_backend_source herdr && fm_backend_herdr_send_text_line "$TARGET" "$TEXT" ;;
-    tmux) fm_backend_source tmux && fm_backend_tmux_send_text_line "$TARGET" "$TEXT" ;;
-    *) FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-send.sh" "$SID" "$TEXT" ;;
-  esac
+  with_timeout env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_SEND_SETTLE=0 "$SCRIPT_DIR/fm-send.sh" "$SID" "$TEXT"
+}
+
+with_timeout() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$TIMEOUT_SEC" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$TIMEOUT_SEC" "$@"
+  else
+    "$@"
+  fi
 }
 
 attempt=1

@@ -35,6 +35,18 @@ SH
   : > "$log"
 }
 
+make_sleep_double() {
+  local path=$1 log=$2
+  cat > "$path" <<'SH'
+#!/usr/bin/env bash
+printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$FM_STEER_DOUBLE_LOG"
+sleep 5
+exit 0
+SH
+  chmod +x "$path"
+  : > "$log"
+}
+
 test_success_delivers_exact_text_and_event() {
   local home config double log event
   home="$TMP_ROOT/success-home"
@@ -83,7 +95,39 @@ test_failure_retries_three_then_rc4() {
   pass "steer retries three times before rc 4"
 }
 
+test_timeout_bounds_each_attempt() {
+  local home config double log status elapsed start finish event
+  if ! command -v timeout >/dev/null 2>&1 && ! command -v gtimeout >/dev/null 2>&1; then
+    pass "timeout helper unavailable; skipping steer timeout coverage"
+    return
+  fi
+  home="$TMP_ROOT/timeout-home"
+  config="$TMP_ROOT/timeout-config"
+  double="$TMP_ROOT/timeout-double"
+  log="$TMP_ROOT/timeout.log"
+  mkdir -p "$home/state"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "backend=tmux" "harness=claude"
+  write_config "$config" 1
+  jq '.steer_timeout_sec = 1' "$config/watchdog.json" > "$config/watchdog.json.tmp"
+  mv "$config/watchdog.json.tmp" "$config/watchdog.json"
+  make_sleep_double "$double" "$log"
+
+  start=$(date +%s)
+  FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_STEER_BACKEND_CMD="$double" \
+    FM_STEER_DOUBLE_LOG="$log" FM_STEER_BACKOFF_SEC=0 \
+    "$ROOT/bin/fm-steer.sh" demo 'timeout me' >/dev/null 2>&1
+  status=$?
+  finish=$(date +%s)
+  elapsed=$((finish - start))
+  expect_code 4 "$status" "timed-out steer should exit 4"
+  [ "$elapsed" -lt 5 ] || fail "steer timeout should stop the sleeping backend command, elapsed ${elapsed}s"
+  event="$home/fm-state/watchdog.events"
+  [ "$(jq -r '.status' "$event")" = undeliverable ] || fail "timeout event status should be undeliverable"
+  pass "steer timeout bounds a stuck backend attempt"
+}
+
 test_success_delivers_exact_text_and_event
 test_failure_retries_three_then_rc4
+test_timeout_bounds_each_attempt
 
 echo "# all watchdog steer tests passed"

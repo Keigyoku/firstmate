@@ -106,7 +106,11 @@ else
   stat_sig()   { stat -c '%s:%Y' "$1" 2>/dev/null; }
 fi
 
-POLL=${FM_POLL:-15}                   # seconds between cycles
+WATCHDOG_BOOT_CONFIG=$(fm_watchdog_thresholds 2>/dev/null || true)
+WATCHDOG_POLL=$(printf '%s' "$WATCHDOG_BOOT_CONFIG" | jq -r '.poll_interval_sec // empty' 2>/dev/null || true)
+case "$WATCHDOG_POLL" in ''|null|*[!0-9]*) WATCHDOG_POLL=15 ;; esac
+[ "$WATCHDOG_POLL" -gt 0 ] || WATCHDOG_POLL=15
+POLL=${FM_POLL:-$WATCHDOG_POLL}       # seconds between cycles
 HEARTBEAT=${FM_HEARTBEAT:-600}        # base seconds between heartbeat scans
 HEARTBEAT_MAX=${FM_HEARTBEAT_MAX:-7200}  # heartbeat backoff cap
 CHECK_INTERVAL=${FM_CHECK_INTERVAL:-300}  # seconds between *.check.sh sweeps
