@@ -4,7 +4,8 @@
 # and keeps blocking; it queues and exits only for actionable wakes.
 # Before each normal wake scan it also runs the session-metrics watchdog, which
 # can steer a non-secondmate Claude/Codex task into an unmanned compact cycle
-# when configured context thresholds are crossed.
+# when configured context thresholds are crossed, or launch a successor when the
+# successor threshold is crossed or steering becomes undeliverable.
 # The no-verb signal and stale path is absorb-only-when-provably-working: a wake
 # is absorbed only when the crew shows POSITIVE evidence it is still working (an
 # actively-running no-mistakes step, or a backend busy signal), and surfaced
@@ -263,6 +264,24 @@ watchdog_check_rotation() {  # <task> <harness> <marker-file>
   rm -f "$marker"
 }
 
+watchdog_check_clear_rotation() {  # <task> <harness> <marker-file>
+  local task=$1 harness=$2 marker=$3 old_sig old_sid context file sig new_sid
+  [ -s "$marker" ] || return 0
+  old_sig=$(sed -n '1p' "$marker")
+  old_sid=$(sed -n '2p' "$marker")
+  context=$(sed -n '3p' "$marker")
+  file=$(fm_watchdog_session_file "$harness" "$task" 2>/dev/null || true)
+  [ -n "$file" ] || return 0
+  sig=$(fm_watchdog_file_identity "$file" 2>/dev/null || true)
+  [ -n "$sig" ] || return 0
+  [ "$sig" != "$old_sig" ] || return 0
+  new_sid=$(fm_watchdog_session_id_from_file "$harness" "$file" 2>/dev/null || basename "$file")
+  fm_watchdog_event clear_rotated "$task" successor_takeover "old_sid=$old_sid new_sid=$new_sid file=$file"
+  printf '%s\n%s\n' "$old_sig" "$old_sid" > "$STATE/watchdog/.clear-handled-$(watchdog_marker_key "$task")"
+  rm -f "$marker"
+  watchdog_start_successor "$task" "${context:-unknown}" "clear_rotated"
+}
+
 watchdog_steer_inflight() {
   local marker=$1 pid
   [ -s "$marker" ] || return 1
@@ -276,7 +295,7 @@ watchdog_steer_inflight() {
 }
 
 watchdog_pending_active() {
-  local pending=$1 task=$2 retry_sec=$3 key=$4 age
+  local pending=$1 task=$2 retry_sec=$3 key=$4 kind=${5:-compact} age
   [ -s "$pending" ] || return 1
   case "$retry_sec" in ''|null|*[!0-9]*) retry_sec=900 ;; esac
   [ "$retry_sec" -gt 0 ] || retry_sec=900
@@ -284,7 +303,7 @@ watchdog_pending_active() {
   if [ "$age" -lt "$retry_sec" ]; then
     return 0
   fi
-  fm_watchdog_event compact_pending_expired "$task" retrying "age_sec=$age retry_sec=$retry_sec key=$key"
+  fm_watchdog_event "${kind}_pending_expired" "$task" retrying "age_sec=$age retry_sec=$retry_sec key=$key"
   rm -f "$pending"
   return 1
 }
@@ -317,10 +336,15 @@ watchdog_collect_failure_recent() {
 watchdog_start_compact_steer() {
   local task=$1 context=$2 compact=$3 sig=$4 sid=$5 key=$6 pending=$7 inflight=$8 pid
   (
+    local rc
     if "$SCRIPT_DIR/fm-steer.sh" "$task" "/compact complete current task, then /compact"; then
       printf '%s\n%s\n' "$sig" "$sid" > "$pending"
     else
-      fm_watchdog_event compact_steer_failed "$task" "rc=$?" "context_pct=$context threshold=$compact"
+      rc=$?
+      fm_watchdog_event compact_steer_failed "$task" "rc=$rc" "context_pct=$context threshold=$compact"
+      if [ "$rc" -eq 4 ]; then
+        watchdog_start_successor "$task" "$context" "steer_undeliverable" "$rc"
+      fi
     fi
     rm -f "$inflight"
   ) >/dev/null 2>&1 &
@@ -329,11 +353,59 @@ watchdog_start_compact_steer() {
   fm_watchdog_event compact_steer_started "$task" "pid=$pid" "context_pct=$context threshold=$compact key=$key"
 }
 
+watchdog_start_clear_steer() {
+  local task=$1 context=$2 threshold=$3 sig=$4 sid=$5 key=$6 pending=$7 inflight=$8 pid
+  (
+    local rc
+    if "$SCRIPT_DIR/fm-steer.sh" "$task" "/clear complete current task, then /clear"; then
+      printf '%s\n%s\n%s\n' "$sig" "$sid" "$context" > "$pending"
+    else
+      rc=$?
+      fm_watchdog_event clear_steer_failed "$task" "rc=$rc" "context_pct=$context threshold=$threshold"
+      if [ "$rc" -eq 4 ]; then
+        watchdog_start_successor "$task" "$context" "steer_undeliverable" "$rc"
+      fi
+    fi
+    rm -f "$inflight"
+  ) >/dev/null 2>&1 &
+  pid=$!
+  printf '%s\n' "$pid" > "$inflight"
+  fm_watchdog_event clear_steer_started "$task" "pid=$pid" "context_pct=$context threshold=$threshold key=$key"
+}
+
+watchdog_halt_file() {
+  printf '%s/fm-state/watchdog.halt\n' "$FM_HOME"
+}
+
+watchdog_halted() {
+  local halt
+  halt=$(watchdog_halt_file)
+  [ ! -s "$halt" ] && return 1
+  echo "watchdog halted: $(sed -n 's/^reason=//p' "$halt" | head -1)" >&2
+  return 0
+}
+
+watchdog_start_successor() {
+  local task=$1 context=$2 reason=$3 rc=${4:-} handoff
+  handoff="$FM_HOME/fm-state/handoff-latest.md"
+  fm_watchdog_event successor_threshold "$task" triggered "context_pct=$context reason=$reason handoff=$handoff rc=$rc"
+  if "$SCRIPT_DIR/fm-successor.sh" "$task" "$handoff"; then
+    fm_watchdog_event successor_complete "$task" succeeded "reason=$reason"
+  else
+    fm_watchdog_event successor_complete "$task" failed "reason=$reason"
+    [ -s "$(watchdog_halt_file)" ] && exit 0
+  fi
+}
+
 watchdog_threshold_scan() {
-  local config compact pending_retry failure_interval meta task harness metrics context file sig sid key handled pending inflight err_file
+  local config compact successor pending_retry failure_interval meta task harness metrics context file sig sid key handled pending inflight clear_pending clear_inflight err_file
+  watchdog_halted && exit 0
   config=$(fm_watchdog_thresholds 2>/dev/null) || return 0
   compact=$(printf '%s' "$config" | jq -r '.thresholds.compact_at_context_pct // empty' 2>/dev/null || true)
-  case "$compact" in ''|null|*[!0-9.]* ) return 0 ;; esac
+  successor=$(printf '%s' "$config" | jq -r '.thresholds.successor_at_context_pct // empty' 2>/dev/null || true)
+  case "$compact" in ''|null|*[!0-9.]* ) compact= ;; esac
+  case "$successor" in ''|null|*[!0-9.]* ) successor= ;; esac
+  [ -n "$compact$successor" ] || return 0
   pending_retry=$(printf '%s' "$config" | jq -r '.compact_pending_retry_sec // empty' 2>/dev/null || true)
   failure_interval=$(printf '%s' "$config" | jq -r '.metrics_failure_event_interval_sec // empty' 2>/dev/null || true)
   for meta in "$STATE"/*.meta; do
@@ -346,8 +418,13 @@ watchdog_threshold_scan() {
     key=$(watchdog_marker_key "$task")
     pending="$STATE/watchdog/.compact-pending-$key"
     inflight="$STATE/watchdog/.compact-steering-$key"
+    clear_pending="$STATE/watchdog/.clear-pending-$key"
+    clear_inflight="$STATE/watchdog/.clear-steering-$key"
     watchdog_check_rotation "$task" "$harness" "$pending"
-    watchdog_pending_active "$pending" "$task" "$pending_retry" "$key" && continue
+    watchdog_check_clear_rotation "$task" "$harness" "$clear_pending"
+    watchdog_pending_active "$clear_pending" "$task" "$pending_retry" "$key" clear && continue
+    watchdog_steer_inflight "$clear_inflight" && continue
+    watchdog_pending_active "$pending" "$task" "$pending_retry" "$key" compact && continue
     watchdog_steer_inflight "$inflight" && continue
     mkdir -p "$STATE/watchdog"
     err_file="$STATE/watchdog/.metrics-error-$key"
@@ -362,14 +439,22 @@ watchdog_threshold_scan() {
     [ -n "$metrics" ] || continue
     context=$(jq -r '.context_pct // empty' "$metrics" 2>/dev/null || true)
     case "$context" in ''|null|*[!0-9.]* ) continue ;; esac
-    awk "BEGIN { exit !($context >= $compact) }" || continue
     file=$(fm_watchdog_session_file "$harness" "$task" 2>/dev/null || true)
     [ -n "$file" ] || continue
     sig=$(fm_watchdog_file_identity "$file" 2>/dev/null || true)
     [ -n "$sig" ] || continue
+    sid=$(fm_watchdog_session_id_from_file "$harness" "$file" 2>/dev/null || basename "$file")
+    if [ -n "$successor" ] && awk "BEGIN { exit !($context >= $successor) }"; then
+      handled=$(cat "$STATE/watchdog/.clear-handled-$key" 2>/dev/null || true)
+      [ "$(printf '%s\n' "$handled" | sed -n '1p')" = "$sig" ] && continue
+      fm_watchdog_event clear_threshold "$task" triggered "context_pct=$context threshold=$successor sid=$sid"
+      watchdog_start_clear_steer "$task" "$context" "$successor" "$sig" "$sid" "$key" "$clear_pending" "$clear_inflight"
+      continue
+    fi
+    [ -n "$compact" ] || continue
+    awk "BEGIN { exit !($context >= $compact) }" || continue
     handled=$(cat "$STATE/watchdog/.compact-handled-$key" 2>/dev/null || true)
     [ "$(printf '%s\n' "$handled" | sed -n '1p')" = "$sig" ] && continue
-    sid=$(fm_watchdog_session_id_from_file "$harness" "$file" 2>/dev/null || basename "$file")
     fm_watchdog_event compact_threshold "$task" triggered "context_pct=$context threshold=$compact sid=$sid"
     watchdog_start_compact_steer "$task" "$context" "$compact" "$sig" "$sid" "$key" "$pending" "$inflight"
   done

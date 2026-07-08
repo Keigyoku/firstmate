@@ -37,7 +37,7 @@ deliver_once() {
     with_timeout "$FM_STEER_BACKEND_CMD" "$BACKEND" "$TARGET" "$TEXT"
     return $?
   fi
-  with_timeout env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_SEND_SETTLE=0 "$SCRIPT_DIR/fm-send.sh" "$SID" "$TEXT"
+  with_timeout env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_SEND_SETTLE="${FM_STEER_SEND_SETTLE:-0}" "$SCRIPT_DIR/fm-send.sh" "$SID" "$TEXT"
 }
 
 with_timeout() {

@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# Spawn a watchdog successor from a handoff artifact and retire its predecessor.
+# Usage: fm-successor.sh <predecessor-sid> <handoff-path>
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+
+# shellcheck source=bin/fm-backend.sh disable=SC1091
+. "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-watchdog-lib.sh
+. "$SCRIPT_DIR/fm-watchdog-lib.sh"
+
+usage() {
+  echo "usage: fm-successor.sh <predecessor-sid> <handoff-path>" >&2
+}
+
+watchdog_halt_path() {
+  printf '%s/fm-state/watchdog.halt\n' "$FM_HOME"
+}
+
+successor_failure_artifact() {
+  local ts
+  ts=$(date -u +%Y%m%dT%H%M%SZ)
+  printf '%s/fm-state/steer-failure-%s.md\n' "$FM_HOME" "$ts"
+}
+
+write_failure_and_halt() {
+  local predecessor=$1 handoff=$2 reason=$3 artifact halt
+  artifact=$(successor_failure_artifact)
+  halt=$(watchdog_halt_path)
+  mkdir -p "$(dirname "$artifact")"
+  {
+    printf '# Watchdog Successor Failure\n\n'
+    printf 'Predecessor: `%s`.\n' "$predecessor"
+    printf 'Handoff: `%s`.\n' "$handoff"
+    printf 'Reason: %s.\n' "$reason"
+    printf 'Timestamp: `%s`.\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$artifact"
+  {
+    printf 'halted_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'predecessor=%s\n' "$predecessor"
+    printf 'handoff=%s\n' "$handoff"
+    printf 'artifact=%s\n' "$artifact"
+    printf 'reason=%s\n' "$reason"
+  } > "$halt"
+  fm_watchdog_event successor_spawn_failed "$predecessor" halted "handoff=$handoff artifact=$artifact reason=$reason"
+  echo "fm-successor: spawn failed; watchdog halted; see $artifact" >&2
+}
+
+meta_value() {
+  local meta=$1 key=$2
+  fm_meta_get "$meta" "$key"
+}
+
+make_successor_id() {
+  local predecessor=$1 suffix
+  suffix=$(date -u +%H%M%S)
+  printf '%s-successor-%s\n' "$predecessor" "$suffix" | tr -c 'A-Za-z0-9_.-' '-'
+}
+
+write_successor_brief() {
+  local brief=$1 predecessor=$2 handoff=$3
+  mkdir -p "$(dirname "$brief")"
+  {
+    printf '# Successor Handoff\n\n'
+    printf 'You are a successor session for `%s`.\n' "$predecessor"
+    printf 'Read and continue from this handoff artifact: `%s`.\n' "$handoff"
+    printf '\n'
+    printf '## Handoff Content\n\n'
+    cat "$handoff"
+    printf '\n'
+  } > "$brief"
+}
+
+run_spawn() {
+  if [ -n "${FM_SUCCESSOR_SPAWN_CMD:-}" ]; then
+    "$FM_SUCCESSOR_SPAWN_CMD" "$@"
+  else
+    "$SCRIPT_DIR/fm-spawn.sh" "$@"
+  fi
+}
+
+retire_predecessor() {
+  local predecessor=$1 meta=$2 backend target
+  backend=$(meta_value "$meta" backend)
+  [ -n "$backend" ] || backend=tmux
+  target=$(fm_backend_resolve_selector "$predecessor" "$STATE" 2>/dev/null || meta_value "$meta" window)
+  [ -n "$target" ] || return 0
+  if [ -n "${FM_SUCCESSOR_RETIRE_CMD:-}" ]; then
+    "$FM_SUCCESSOR_RETIRE_CMD" "$backend" "$target"
+  else
+    fm_backend_kill "$backend" "$target"
+  fi
+}
+
+if [ "$#" -ne 2 ]; then
+  usage
+  exit 2
+fi
+
+PREDECESSOR=$1
+HANDOFF=$2
+META="$STATE/$PREDECESSOR.meta"
+
+if [ ! -f "$META" ]; then
+  write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "missing predecessor meta $META"
+  exit 1
+fi
+if [ ! -f "$HANDOFF" ]; then
+  write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "missing handoff artifact"
+  exit 1
+fi
+
+SUCCESSOR_ID=${FM_SUCCESSOR_ID:-$(make_successor_id "$PREDECESSOR")}
+BRIEF="$DATA/$SUCCESSOR_ID/brief.md"
+PROJECT=$(meta_value "$META" project)
+[ -n "$PROJECT" ] || PROJECT=$(meta_value "$META" worktree)
+HARNESS=$(meta_value "$META" harness)
+BACKEND=$(meta_value "$META" backend)
+MODEL=$(meta_value "$META" model)
+EFFORT=$(meta_value "$META" effort)
+
+if [ -z "$PROJECT" ]; then
+  write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "predecessor meta has no project or worktree"
+  exit 1
+fi
+
+write_successor_brief "$BRIEF" "$PREDECESSOR" "$HANDOFF"
+fm_watchdog_event successor_spawn "$PREDECESSOR" started "successor=$SUCCESSOR_ID handoff=$HANDOFF brief=$BRIEF"
+
+spawn_args=("$SUCCESSOR_ID" "$PROJECT")
+[ -z "$HARNESS" ] || spawn_args+=(--harness "$HARNESS")
+[ -z "$BACKEND" ] || spawn_args+=(--backend "$BACKEND")
+[ -z "$MODEL" ] || [ "$MODEL" = default ] || spawn_args+=(--model "$MODEL")
+[ -z "$EFFORT" ] || [ "$EFFORT" = default ] || spawn_args+=(--effort "$EFFORT")
+
+if ! spawn_output=$(run_spawn "${spawn_args[@]}" 2>&1); then
+  write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "spawn failed: $spawn_output"
+  exit 1
+fi
+
+fm_watchdog_event successor_spawn "$PREDECESSOR" succeeded "successor=$SUCCESSOR_ID handoff=$HANDOFF"
+retire_predecessor "$PREDECESSOR" "$META"
+fm_watchdog_event predecessor_retired "$PREDECESSOR" closed "successor=$SUCCESSOR_ID"
+printf '%s\n' "$spawn_output"

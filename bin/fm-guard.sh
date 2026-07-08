@@ -72,6 +72,22 @@ beacon_desc=$FM_SUP_BEACON_DESC
 
 # No fresh watcher with tasks in flight is the dangerous state: emit a prominent,
 # bordered banner FIRST so it reads as an alarm, not a buried stderr line.
+halt_file="$FM_HOME/fm-state/watchdog.halt"
+if [ -s "$halt_file" ]; then
+  halt_artifact=$(sed -n 's/^artifact=//p' "$halt_file" | head -1)
+  halt_reason=$(sed -n 's/^reason=//p' "$halt_file" | head -1)
+  rule='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+  {
+    printf '●%s\n' "$rule"
+    printf '●  WATCHDOG HALTED - SUCCESSOR SPAWN FAILED\n'
+    printf '●  %s task(s) in flight, but the watchdog halt flag is set.\n' "$in_flight"
+    [ -z "$halt_reason" ] || printf '●  Reason: %s\n' "$halt_reason"
+    [ -z "$halt_artifact" ] || printf '●  Artifact: %s\n' "$halt_artifact"
+    printf '●  Do not re-arm until the failure is inspected and %s is removed deliberately.\n' "$halt_file"
+    printf '●%s\n' "$rule"
+  } >&2
+fi
+
 if [ "$watcher_fresh" = false ]; then
   if [ "$READ_ONLY" -eq 1 ]; then
     fix='Watcher repair belongs to the session holding the fleet lock; do not drain or re-arm from this read-only session.'

@@ -190,6 +190,14 @@ test_unknown_harness_is_observe_only_tolerant() {
   pass "unknown harness writes tolerant null metrics"
 }
 
+test_claude_project_key_matches_cli_normalization() {
+  local out
+  out=$(bash -c '. "$1"; fm_watchdog_claude_project_key "/var/home/mlight/.treehouse/firstmate-7bab20/1/firstmate"' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  [ "$out" = "-var-home-mlight--treehouse-firstmate-7bab20-1-firstmate" ] \
+    || fail "claude project key should replace every non-alphanumeric byte, got $out"
+  pass "claude project key matches Claude CLI normalization"
+}
+
 test_codex_metrics_are_scoped_to_task_worktree() {
   local home session_dir target_wt other_wt out context
   home="$TMP_ROOT/codex-scope-home"
@@ -316,6 +324,7 @@ test_codex_rollout_selection_matches_session
 test_meta_backed_codex_rollout_accepts_root_session_id
 test_codex_rollout_missing_session_is_loud
 test_unknown_harness_is_observe_only_tolerant
+test_claude_project_key_matches_cli_normalization
 test_codex_metrics_are_scoped_to_task_worktree
 test_codex_session_lookup_uses_task_cache
 test_threshold_defaults
