@@ -11,6 +11,8 @@ CONFIG_DIR="$SCRATCH/config"
 BIN_DIR="$SCRATCH/bin"
 GLOBAL_CLAUDE_PROJECTS=${FM_W3_GLOBAL_CLAUDE_PROJECTS:-$HOME/.claude/projects}
 REAL_TMUX=${FM_W3_REAL_TMUX:-}
+SOURCE_CLAUDE_CONFIG=${FM_W3_SOURCE_CLAUDE_CONFIG:-$HOME/.claude}
+SOURCE_CLAUDE_APP_STATE=${FM_W3_SOURCE_CLAUDE_APP_STATE:-$HOME/.claude.json}
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -85,6 +87,20 @@ write_claude_settings() {
 JSON
 }
 
+copy_isolated_claude_auth() {
+  [ -f "$SOURCE_CLAUDE_CONFIG/.credentials.json" ] \
+    || fail "missing source Claude credentials file: $SOURCE_CLAUDE_CONFIG/.credentials.json"
+  [ -f "$SOURCE_CLAUDE_APP_STATE" ] \
+    || fail "missing source Claude app-state file: $SOURCE_CLAUDE_APP_STATE"
+  install -m 600 "$SOURCE_CLAUDE_CONFIG/.credentials.json" "$CLAUDE_CONFIG/.credentials.json"
+  jq '{
+        oauthAccount,
+        hasCompletedOnboarding: true,
+        autoCompactEnabled: false
+      }' "$SOURCE_CLAUDE_APP_STATE" > "$CLAUDE_CONFIG/.claude.json"
+  chmod 600 "$CLAUDE_CONFIG/.claude.json"
+}
+
 write_watchdog_config() {
   mkdir -p "$CONFIG_DIR"
   jq '.thresholds.compact_at_context_pct = 40
@@ -121,6 +137,7 @@ prepare() {
   "$REAL_TMUX" -L "$SOCKET" ls > "$SCRATCH/private-tmux-ls.txt"
   write_tmux_shim
   write_claude_settings
+  copy_isolated_claude_auth
   write_watchdog_config
   write_env_file
   snapshot_default_tmux "$SCRATCH/default-tmux-after-prepare"
