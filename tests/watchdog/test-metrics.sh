@@ -163,6 +163,38 @@ test_codex_metrics_are_scoped_to_task_worktree() {
   pass "codex metrics are scoped to the task worktree"
 }
 
+test_codex_session_lookup_uses_task_cache() {
+  local home session_dir target_wt other_wt fakebin out cached
+  home="$TMP_ROOT/codex-cache-home"
+  session_dir="$TMP_ROOT/codex-cache-sessions"
+  target_wt="$TMP_ROOT/worktrees/cache-target"
+  other_wt="$TMP_ROOT/worktrees/cache-other"
+  fakebin="$TMP_ROOT/codex-cache-fakebin"
+  mkdir -p "$home/state" "$target_wt" "$other_wt" "$fakebin"
+  fm_write_meta "$home/state/demo.meta" "worktree=$target_wt" "harness=codex"
+  write_codex_rollout "$session_dir/2026/07/07/rollout-target.jsonl" "$target_wt" 100 1000
+  for n in 1 2 3 4 5; do
+    write_codex_rollout "$session_dir/2026/07/07/rollout-other-$n.jsonl" "$other_wt" 950 1000
+  done
+
+  out=$(FM_HOME="$home" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    bash -c '. "$1"; fm_watchdog_session_file codex demo' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  cached="$home/state/watchdog/.codex-rollout-demo"
+  assert_present "$cached" "codex session lookup should persist the matched rollout path"
+  [ "$(sed -n '1p' "$cached")" = "$out" ] || fail "codex rollout cache should record the selected path"
+
+  cat > "$fakebin/jq" <<'SH'
+#!/usr/bin/env bash
+printf 'jq should not be called for a valid codex rollout cache\n' >&2
+exit 99
+SH
+  chmod +x "$fakebin/jq"
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    bash -c '. "$1"; fm_watchdog_session_file codex demo' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  [ "$out" = "$(sed -n '1p' "$cached")" ] || fail "cached codex rollout path should be reused without reparsing history"
+  pass "codex session lookup reuses the task rollout cache"
+}
+
 test_threshold_defaults() {
   local out
   out=$(FM_HOME="$TMP_ROOT/no-config-home" bash -c '. "$1"; fm_watchdog_thresholds' _ "$ROOT/bin/fm-watchdog-lib.sh")
@@ -235,6 +267,7 @@ test_codex_rollout_selection_matches_session
 test_codex_rollout_missing_session_is_loud
 test_unknown_harness_is_observe_only_tolerant
 test_codex_metrics_are_scoped_to_task_worktree
+test_codex_session_lookup_uses_task_cache
 test_threshold_defaults
 test_threshold_config_override
 test_malformed_threshold_config_falls_back_loudly

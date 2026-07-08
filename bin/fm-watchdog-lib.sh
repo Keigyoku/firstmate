@@ -224,10 +224,45 @@ fm_watchdog_codex_rollout_cwd() {
   jq -r 'select(.type == "session_meta") | .payload.cwd // empty' "$1" 2>/dev/null | head -n 1
 }
 
+fm_watchdog_task_key() {
+  printf '%s' "$1" | tr ':/.' '___'
+}
+
+fm_watchdog_codex_rollout_cache_path() {
+  local task=$1
+  printf '%s/.codex-rollout-%s\n' "$(fm_watchdog_metrics_dir)" "$(fm_watchdog_task_key "$task")"
+}
+
+fm_watchdog_codex_rollout_cache_write() {
+  local cache=$1 file=$2 worktree=$3 tmp
+  mkdir -p "$(dirname "$cache")"
+  tmp=$(mktemp "${cache}.tmp.XXXXXX")
+  printf '%s\n%s\n' "$file" "$(fm_watchdog_canonical_path "$worktree")" > "$tmp"
+  mv "$tmp" "$cache"
+}
+
+fm_watchdog_codex_cached_rollout() {
+  local cache=$1 worktree=$2 file cached_worktree
+  [ -s "$cache" ] || return 1
+  file=$(sed -n '1p' "$cache")
+  cached_worktree=$(sed -n '2p' "$cache")
+  [ -f "$file" ] || return 1
+  [ "$cached_worktree" = "$(fm_watchdog_canonical_path "$worktree")" ] || return 1
+  printf '%s\n' "$file"
+}
+
 fm_watchdog_latest_codex_rollout_for_worktree() {
-  local worktree=$1 dir=${FM_WATCHDOG_CODEX_SESSION_DIR:-$HOME/.codex/sessions}
-  local file cwd mtime best_file='' best_mtime=-1
+  local worktree=$1 task=${2:-} dir=${FM_WATCHDOG_CODEX_SESSION_DIR:-$HOME/.codex/sessions}
+  local cache='' cached='' file cwd mtime best_file='' best_mtime=-1 search_dir seen_dirs=''
   [ -d "$dir" ] || return 1
+  if [ -n "$task" ]; then
+    cache=$(fm_watchdog_codex_rollout_cache_path "$task")
+    cached=$(fm_watchdog_codex_cached_rollout "$cache" "$worktree" 2>/dev/null || true)
+    if [ -n "$cached" ]; then
+      best_file=$cached
+      best_mtime=$(fm_path_mtime "$cached") || best_mtime=-1
+    fi
+  fi
   while IFS= read -r -d '' file; do
     cwd=$(fm_watchdog_codex_rollout_cwd "$file")
     [ -n "$cwd" ] || continue
@@ -240,8 +275,22 @@ fm_watchdog_latest_codex_rollout_for_worktree() {
       best_mtime=$mtime
       best_file=$file
     fi
-  done < <(find "$dir" -type f -name 'rollout-*.jsonl' -print0 2>/dev/null)
+  done < <(
+    if [ -n "$best_file" ]; then
+      for search_dir in "$(dirname "$best_file")" "$dir/$(date +%Y/%m/%d)"; do
+        [ -d "$search_dir" ] || continue
+        case "|$seen_dirs|" in
+          *"|$search_dir|"*) continue ;;
+        esac
+        seen_dirs="$seen_dirs|$search_dir"
+        find "$search_dir" -maxdepth 1 -type f -name 'rollout-*.jsonl' -newer "$best_file" -print0 2>/dev/null
+      done
+    else
+      find "$dir" -type f -name 'rollout-*.jsonl' -print0 2>/dev/null
+    fi
+  )
   [ -n "$best_file" ] || return 1
+  [ -n "$cache" ] && fm_watchdog_codex_rollout_cache_write "$cache" "$best_file" "$worktree"
   printf '%s\n' "$best_file"
 }
 
@@ -261,7 +310,7 @@ fm_watchdog_session_file() {
     if [ -n "$worktree" ]; then
       case "$harness" in
         claude) fm_watchdog_latest_claude_jsonl_for_worktree "$worktree"; return $? ;;
-        codex) fm_watchdog_latest_codex_rollout_for_worktree "$worktree"; return $? ;;
+        codex) fm_watchdog_latest_codex_rollout_for_worktree "$worktree" "$task"; return $? ;;
       esac
     fi
   fi
