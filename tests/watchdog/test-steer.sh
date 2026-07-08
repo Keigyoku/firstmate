@@ -438,16 +438,24 @@ test_same_file_claude_compact_summary_rearms_session() {
   send_count=$(wc -l < "$log" | tr -d '[:space:]')
   [ "$send_count" = 1 ] || fail "handled same-file compact generation should not steer again, got $send_count sends"
 
-  write_claude_jsonl "$session_file" claude-sid compact-next
+  write_claude_checkpoint "$checkpoint_dir" claude-sid 0
   "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CLAUDE_SESSION_DIR="$session_dir" \
     FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR="$checkpoint_dir" FM_STEER_BACKEND_CMD="$double" \
     FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
   status=$?
-  expect_code 124 "$status" "new same-file compact generation should be stopped by test timeout"
+  expect_code 124 "$status" "below-threshold same-file compact pass should be stopped by test timeout"
+  [ ! -e "$handled" ] || fail "below-threshold pass should clear handled compact marker"
+
+  write_claude_checkpoint "$checkpoint_dir" claude-sid 50
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CLAUDE_SESSION_DIR="$session_dir" \
+    FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR="$checkpoint_dir" FM_STEER_BACKEND_CMD="$double" \
+    FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "same generation after recovery should be stopped by test timeout"
   threshold_count=$(grep -c '"type":"compact_threshold"' "$event")
-  [ "$threshold_count" = 2 ] || fail "new compact summary generation should trigger another threshold, got $threshold_count"
+  [ "$threshold_count" = 2 ] || fail "same compact generation after recovery should trigger another threshold, got $threshold_count"
   send_count=$(wc -l < "$log" | tr -d '[:space:]')
-  [ "$send_count" = 2 ] || fail "new compact summary generation should steer again, got $send_count sends"
+  [ "$send_count" = 2 ] || fail "same compact generation after recovery should steer again, got $send_count sends"
   pass "watcher re-arms after same-file Claude compact summary"
 }
 

@@ -123,7 +123,7 @@ test_spawn_failure_writes_halt_flag_and_failure_artifact() {
 }
 
 test_watch_loop_clear_rotation_starts_successor_and_exits_when_halted() {
-  local home config session_dir worktree steer_log steer_double spawn_log spawn_double handoff pending status event timeout_cmd
+  local home config session_dir worktree steer_log steer_double spawn_log spawn_double handoff generated_handoff pending status event timeout_cmd
   if command -v timeout >/dev/null 2>&1; then
     timeout_cmd=timeout
   elif command -v gtimeout >/dev/null 2>&1; then
@@ -185,6 +185,12 @@ test_watch_loop_clear_rotation_starts_successor_and_exits_when_halted() {
   assert_grep '"type":"clear_steer_started","sid":"demo"' "$event" "clear steer start event should be logged"
   assert_grep '"type":"clear_rotated","sid":"demo","status":"successor_takeover"' "$event" "clear rotation should be logged"
   assert_grep '"type":"successor_spawn_failed","sid":"demo","status":"halted"' "$event" "spawn failure should halt through watch loop"
+  generated_handoff=$(jq -r 'select(.type == "successor_threshold") | .detail | capture("handoff=(?<handoff>[^ ]+)").handoff' "$event" | tail -1)
+  [ -n "$generated_handoff" ] || fail "successor threshold event should record the generated handoff"
+  [ "$generated_handoff" != "$handoff" ] || fail "successor spawn should consume a unique handoff, not handoff-latest"
+  assert_present "$generated_handoff" "unique successor handoff should exist"
+  assert_grep "handoff=$generated_handoff" "$home/fm-state/watchdog.halt" "halt flag should record the unique handoff consumed by successor spawn"
+  assert_contains "$(cat "$generated_handoff")" "Reason: clear_rotated." "unique successor handoff should name the trigger reason"
   assert_contains "$(cat "$handoff")" "Reason: clear_rotated." "successor handoff should be refreshed for the current trigger"
   if grep -q 'threshold handoff' "$handoff"; then
     fail "successor handoff should not reuse stale content"
@@ -193,7 +199,7 @@ test_watch_loop_clear_rotation_starts_successor_and_exits_when_halted() {
 }
 
 test_steer_rc4_escalates_to_successor() {
-  local home config session_dir worktree steer_log steer_double spawn_log spawn_double handoff status event timeout_cmd
+  local home config session_dir worktree steer_log steer_double spawn_log spawn_double handoff generated_handoff status event timeout_cmd
   if command -v timeout >/dev/null 2>&1; then
     timeout_cmd=timeout
   elif command -v gtimeout >/dev/null 2>&1; then
@@ -239,6 +245,12 @@ test_steer_rc4_escalates_to_successor() {
   event="$home/fm-state/watchdog.events"
   assert_grep '"type":"compact_steer_failed","sid":"demo","status":"rc=4"' "$event" "rc4 steer failure should be logged"
   assert_grep 'reason=steer_undeliverable' "$event" "successor event should record steer-undeliverable reason"
+  generated_handoff=$(jq -r 'select(.type == "successor_threshold") | .detail | capture("handoff=(?<handoff>[^ ]+)").handoff' "$event" | tail -1)
+  [ -n "$generated_handoff" ] || fail "successor threshold event should record the generated handoff"
+  [ "$generated_handoff" != "$handoff" ] || fail "rc4 successor spawn should consume a unique handoff, not handoff-latest"
+  assert_present "$generated_handoff" "rc4 successor path should create a unique handoff artifact"
+  assert_grep "handoff=$generated_handoff" "$home/fm-state/watchdog.halt" "halt flag should record the unique handoff consumed by successor spawn"
+  assert_contains "$(cat "$generated_handoff")" "Reason: steer_undeliverable." "unique generated handoff should name the successor reason"
   assert_present "$handoff" "rc4 successor path should create a handoff artifact"
   assert_contains "$(cat "$handoff")" "Reason: steer_undeliverable." "generated handoff should name the successor reason"
   if grep -q 'stale successor handoff' "$handoff"; then

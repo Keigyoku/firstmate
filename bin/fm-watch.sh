@@ -402,8 +402,11 @@ watchdog_halted() {
 }
 
 watchdog_start_successor() {
-  local task=$1 context=$2 reason=$3 rc=${4:-} handoff tmp
-  handoff="$FM_HOME/fm-state/handoff-latest.md"
+  local task=$1 context=$2 reason=$3 rc=${4:-} handoff latest tmp safe_task ts
+  safe_task=$(watchdog_marker_key "$task")
+  ts=$(date -u +%Y%m%dT%H%M%SZ)
+  handoff="$FM_HOME/fm-state/handoffs/handoff-${safe_task}-${ts}-${$}.md"
+  latest="$FM_HOME/fm-state/handoff-latest.md"
   mkdir -p "$(dirname "$handoff")"
   tmp=$(mktemp "${handoff}.tmp.XXXXXX")
   {
@@ -415,6 +418,7 @@ watchdog_start_successor() {
     printf "Created: \`%s\`.\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } > "$tmp"
   mv "$tmp" "$handoff"
+  cp "$handoff" "$latest" 2>/dev/null || true
   fm_watchdog_event successor_threshold "$task" triggered "context_pct=$context reason=$reason handoff=$handoff rc=$rc"
   if "$SCRIPT_DIR/fm-successor.sh" "$task" "$handoff"; then
     fm_watchdog_event successor_complete "$task" succeeded "reason=$reason"
@@ -488,6 +492,10 @@ watchdog_threshold_scan() {
     [ -n "$metrics" ] || continue
     context=$(jq -r '.context_pct // empty' "$metrics" 2>/dev/null || true)
     case "$context" in ''|null|*[!0-9.]* ) continue ;; esac
+    if [ -n "$compact" ] && awk "BEGIN { exit !($context < $compact) }"; then
+      handled=$(cat "$STATE/watchdog/.compact-handled-$key" 2>/dev/null || true)
+      watchdog_compact_handled "$handled" "$sig" "$generation" && rm -f "$STATE/watchdog/.compact-handled-$key"
+    fi
     if [ -n "$successor" ] && awk "BEGIN { exit !($context >= $successor) }"; then
       handled=$(cat "$STATE/watchdog/.clear-handled-$key" 2>/dev/null || true)
       [ "$(printf '%s\n' "$handled" | sed -n '1p')" = "$sig" ] && continue
