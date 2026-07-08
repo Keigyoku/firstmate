@@ -45,8 +45,11 @@ with_timeout() {
     timeout "$TIMEOUT_SEC" "$@"
   elif command -v gtimeout >/dev/null 2>&1; then
     gtimeout "$TIMEOUT_SEC" "$@"
+  elif command -v perl >/dev/null 2>&1; then
+    perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } local $SIG{ALRM} = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; exit 124 }; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$TIMEOUT_SEC" "$@"
   else
-    "$@"
+    echo "fm-steer: missing timeout, gtimeout, or perl for bounded delivery" >&2
+    return 124
   fi
 }
 

@@ -62,6 +62,17 @@ SH
   : > "$log"
 }
 
+make_no_timeout_toolbin() {
+  local dir=$1 toolbin=$1/notimeoutbin tool real
+  mkdir -p "$toolbin"
+  for tool in bash env dirname pwd jq grep sed cut tail cat date mktemp mkdir rm readlink rmdir perl sleep basename uname stat ln; do
+    real=$(command -v "$tool" || true)
+    [ -n "$real" ] || fail "missing tool for no-timeout path: $tool"
+    ln -s "$real" "$toolbin/$tool"
+  done
+  printf '%s\n' "$toolbin"
+}
+
 test_success_delivers_exact_text_and_event() {
   local home config double log event
   home="$TMP_ROOT/success-home"
@@ -112,10 +123,6 @@ test_failure_retries_three_then_rc4() {
 
 test_timeout_bounds_each_attempt() {
   local home config double log status elapsed start finish event
-  if ! command -v timeout >/dev/null 2>&1 && ! command -v gtimeout >/dev/null 2>&1; then
-    pass "timeout helper unavailable; skipping steer timeout coverage"
-    return
-  fi
   home="$TMP_ROOT/timeout-home"
   config="$TMP_ROOT/timeout-config"
   double="$TMP_ROOT/timeout-double"
@@ -139,6 +146,34 @@ test_timeout_bounds_each_attempt() {
   event="$home/fm-state/watchdog.events"
   [ "$(jq -r '.status' "$event")" = undeliverable ] || fail "timeout event status should be undeliverable"
   pass "steer timeout bounds a stuck backend attempt"
+}
+
+test_timeout_uses_perl_when_timeout_tools_are_absent() {
+  local home config double log status elapsed start finish event toolbin
+  home="$TMP_ROOT/perl-timeout-home"
+  config="$TMP_ROOT/perl-timeout-config"
+  double="$TMP_ROOT/perl-timeout-double"
+  log="$TMP_ROOT/perl-timeout.log"
+  mkdir -p "$home/state"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "backend=tmux" "harness=claude"
+  write_config "$config" 1
+  jq '.steer_timeout_sec = 1' "$config/watchdog.json" > "$config/watchdog.json.tmp"
+  mv "$config/watchdog.json.tmp" "$config/watchdog.json"
+  make_sleep_double "$double" "$log"
+  toolbin=$(make_no_timeout_toolbin "$TMP_ROOT/perl-timeout")
+
+  start=$SECONDS
+  PATH="$toolbin" FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_STEER_BACKEND_CMD="$double" \
+    FM_STEER_DOUBLE_LOG="$log" FM_STEER_BACKOFF_SEC=0 \
+    "$ROOT/bin/fm-steer.sh" demo 'timeout me without timeout tools' >/dev/null 2>&1
+  status=$?
+  finish=$SECONDS
+  elapsed=$((finish - start))
+  expect_code 4 "$status" "timed-out steer should exit 4 without timeout tools"
+  [ "$elapsed" -lt 5 ] || fail "perl fallback did not bound steer delivery (elapsed ${elapsed}s)"
+  event="$home/fm-state/watchdog.events"
+  [ "$(jq -r '.status' "$event")" = undeliverable ] || fail "perl timeout event status should be undeliverable"
+  pass "steer timeout uses perl when timeout tools are absent"
 }
 
 test_watcher_starts_compact_steer_without_blocking() {
@@ -238,6 +273,7 @@ test_rotation_rearms_new_session() {
 test_success_delivers_exact_text_and_event
 test_failure_retries_three_then_rc4
 test_timeout_bounds_each_attempt
+test_timeout_uses_perl_when_timeout_tools_are_absent
 test_watcher_starts_compact_steer_without_blocking
 test_rotation_rearms_new_session
 
