@@ -140,7 +140,20 @@ fm_watchdog_reset_epoch() {
   case "$value" in
     ''|null) return 1 ;;
     *[!0-9]*)
-      date -u -d "$value" +%s 2>/dev/null || return 1
+      perl -MTime::Piece -e '
+        my $value = shift;
+        $value =~ s/\.\d+//;
+        $value =~ s/Z$/+0000/;
+        $value =~ s/([+-]\d\d):(\d\d)$/$1$2/;
+        for my $format ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S%z") {
+          my $t = eval { Time::Piece->strptime($value, $format) };
+          if ($t) {
+            print $t->epoch, "\n";
+            exit 0;
+          }
+        }
+        exit 1;
+      ' "$value" 2>/dev/null || return 1
       ;;
     *)
       if [ "$value" -gt 9999999999 ]; then

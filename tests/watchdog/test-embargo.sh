@@ -130,6 +130,21 @@ test_budget_embargo_auto_lift_waits_for_triggering_bucket() {
   pass "budget embargo auto-lift waits for the triggering reset bucket"
 }
 
+test_budget_embargo_reset_parser_is_portable() {
+  local home out
+  home="$TMP_ROOT/reset-parser-home"
+  mkdir -p "$home/state"
+  out=$(FM_HOME="$home" bash -c '. "$1"; fm_watchdog_reset_epoch 1783514096' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  [ "$out" = 1783514096 ] || fail "numeric reset epoch should be preserved, got $out"
+  out=$(FM_HOME="$home" bash -c '. "$1"; fm_watchdog_reset_epoch 1783514096000' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  [ "$out" = 1783514096 ] || fail "millisecond reset epoch should be normalized, got $out"
+  out=$(FM_HOME="$home" bash -c '. "$1"; fm_watchdog_reset_epoch 2026-07-08T12:34:56Z' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  [ "$out" = 1783514096 ] || fail "UTC RFC3339 reset timestamp should parse portably, got $out"
+  out=$(FM_HOME="$home" bash -c '. "$1"; fm_watchdog_reset_epoch 2026-07-08T07:34:56-05:00' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  [ "$out" = 1783514096 ] || fail "offset RFC3339 reset timestamp should parse portably, got $out"
+  pass "budget embargo reset parser accepts portable timestamp formats"
+}
+
 test_budget_embargo_does_not_raise_from_crossed_reset_metrics() {
   local home config session_dir worktree status flag timeout_cmd
   if command -v timeout >/dev/null 2>&1; then
@@ -166,6 +181,7 @@ test_budget_embargo_does_not_raise_from_crossed_reset_metrics() {
 test_budget_embargo_gate_rotation_and_lift
 test_budget_embargo_auto_lifts_at_reset_boundary
 test_budget_embargo_auto_lift_waits_for_triggering_bucket
+test_budget_embargo_reset_parser_is_portable
 test_budget_embargo_does_not_raise_from_crossed_reset_metrics
 
 echo "# all watchdog embargo tests passed"
