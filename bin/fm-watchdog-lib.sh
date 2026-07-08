@@ -45,6 +45,23 @@ fm_watchdog_metrics_dir() {
   printf '%s/watchdog\n' "$STATE"
 }
 
+fm_watchdog_events_path() {
+  printf '%s/fm-state/watchdog.events\n' "$FM_HOME"
+}
+
+fm_watchdog_event() {
+  local type=$1 sid=$2 status=${3:-} detail=${4:-} path
+  path=$(fm_watchdog_events_path)
+  mkdir -p "$(dirname "$path")"
+  jq -cn \
+    --arg type "$type" \
+    --arg sid "$sid" \
+    --arg status "$status" \
+    --arg detail "$detail" \
+    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{type:$type,sid:$sid,status:$status,detail:$detail,ts:$ts}' >> "$path"
+}
+
 fm_watchdog_metrics_path() {
   local session_id=$1
   printf '%s/metrics-%s.json\n' "$(fm_watchdog_metrics_dir)" "$session_id"
@@ -133,6 +150,28 @@ fm_watchdog_latest_codex_rollout_for_session() {
   done < <(find "$dir" -type f -name 'rollout-*.jsonl' -print0 2>/dev/null)
   [ -n "$best_file" ] || return 1
   printf '%s\n' "$best_file"
+}
+
+fm_watchdog_latest_claude_jsonl() {
+  local dir=${FM_WATCHDOG_CLAUDE_SESSION_DIR:-$HOME/.claude/projects}
+  fm_watchdog_latest_file "$dir" '*.jsonl'
+}
+
+fm_watchdog_session_file() {
+  case "$1" in
+    claude) fm_watchdog_latest_claude_jsonl ;;
+    codex) fm_watchdog_latest_codex_rollout ;;
+    *) return 1 ;;
+  esac
+}
+
+fm_watchdog_file_identity() {
+  local file=$1
+  if [ "$(uname)" = Darwin ]; then
+    stat -f '%i:%N' "$file" 2>/dev/null
+  else
+    stat -c '%i:%n' "$file" 2>/dev/null
+  fi
 }
 
 fm_watchdog_write_metrics() {

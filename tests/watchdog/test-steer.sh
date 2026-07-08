@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Behavior tests for backend-aware watchdog steering.
+set -u
+
+# shellcheck source=tests/lib.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
+
+TMP_ROOT=$(fm_test_tmproot fm-watchdog-steer-tests)
+
+write_config() {
+  local dir=$1 retries=$2
+  mkdir -p "$dir"
+  jq --argjson retries "$retries" '.steer_retries = $retries' "$ROOT/docs/examples/watchdog.json" > "$dir/watchdog.json"
+}
+
+make_success_double() {
+  local path=$1 log=$2
+  cat > "$path" <<'SH'
+#!/usr/bin/env bash
+printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$FM_STEER_DOUBLE_LOG"
+exit 0
+SH
+  chmod +x "$path"
+  : > "$log"
+}
+
+make_failure_double() {
+  local path=$1 log=$2
+  cat > "$path" <<'SH'
+#!/usr/bin/env bash
+printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$FM_STEER_DOUBLE_LOG"
+exit 9
+SH
+  chmod +x "$path"
+  : > "$log"
+}
+
+test_success_delivers_exact_text_and_event() {
+  local home config double log event
+  home="$TMP_ROOT/success-home"
+  config="$TMP_ROOT/success-config"
+  double="$TMP_ROOT/success-double"
+  log="$TMP_ROOT/success.log"
+  mkdir -p "$home/state"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "backend=herdr" "harness=claude"
+  write_config "$config" 3
+  make_success_double "$double" "$log"
+
+  FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_STEER_BACKEND_CMD="$double" \
+    FM_STEER_DOUBLE_LOG="$log" "$ROOT/bin/fm-steer.sh" demo 'complete current task, then /compact' \
+    || fail "successful steer should exit 0"
+
+  [ "$(cat "$log")" = "herdr|target-pane|complete current task, then /compact" ] \
+    || fail "backend double should receive exact steer text"
+  event="$home/fm-state/watchdog.events"
+  assert_present "$event" "steer event file should be created under fm-state"
+  [ "$(jq -r '.type' "$event")" = steer ] || fail "event type should be steer"
+  [ "$(jq -r '.sid' "$event")" = demo ] || fail "event sid should be demo"
+  [ "$(jq -r '.status' "$event")" = delivered ] || fail "event status should be delivered"
+  pass "steer delivers exact text and writes an append-only event"
+}
+
+test_failure_retries_three_then_rc4() {
+  local home config double log status count event
+  home="$TMP_ROOT/fail-home"
+  config="$TMP_ROOT/fail-config"
+  double="$TMP_ROOT/failure-double"
+  log="$TMP_ROOT/fail.log"
+  mkdir -p "$home/state"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "backend=tmux" "harness=claude"
+  write_config "$config" 3
+  make_failure_double "$double" "$log"
+
+  FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_STEER_BACKEND_CMD="$double" \
+    FM_STEER_DOUBLE_LOG="$log" FM_STEER_BACKOFF_SEC=0 \
+    "$ROOT/bin/fm-steer.sh" demo 'retry me' >/dev/null 2>&1
+  status=$?
+  expect_code 4 "$status" "failing steer should exit 4 after configured retries"
+  count=$(wc -l < "$log" | tr -d '[:space:]')
+  [ "$count" = 3 ] || fail "failing steer should attempt exactly 3 times, got $count"
+  event="$home/fm-state/watchdog.events"
+  [ "$(jq -r '.status' "$event")" = undeliverable ] || fail "failure event status should be undeliverable"
+  pass "steer retries three times before rc 4"
+}
+
+test_success_delivers_exact_text_and_event
+test_failure_retries_three_then_rc4
+
+echo "# all watchdog steer tests passed"
