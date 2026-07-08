@@ -104,6 +104,23 @@ carry_x_link() {
   "$SCRIPT_DIR/fm-x-link.sh" "$successor" "$request" --carry-count "$followups" --carry-ts "$request_ts" >/dev/null
 }
 
+validate_x_link() {
+  local predecessor_meta=$1 request request_ts followups
+  request=$(meta_value "$predecessor_meta" x_request)
+  [ -n "$request" ] || return 0
+  request_ts=$(meta_value "$predecessor_meta" x_request_ts)
+  followups=$(meta_value "$predecessor_meta" x_followups)
+  case "$request" in
+    .*|*[!A-Za-z0-9._-]*) echo "predecessor X link has unsafe request id" >&2; return 1 ;;
+  esac
+  case "$request_ts" in
+    ''|*[!0-9]*) echo "predecessor X link has invalid timestamp" >&2; return 1 ;;
+  esac
+  case "$followups" in
+    ''|*[!0-9]*) echo "predecessor X link has invalid follow-up count" >&2; return 1 ;;
+  esac
+}
+
 retire_predecessor() {
   local predecessor=$1 meta=$2 backend target
   backend=$(meta_value "$meta" backend)
@@ -115,6 +132,23 @@ retire_predecessor() {
   else
     fm_backend_kill "$backend" "$target"
   fi
+}
+
+cleanup_successor_after_failure() {
+  local successor=$1 meta backend target
+  meta="$STATE/$successor.meta"
+  [ -f "$meta" ] || return 0
+  backend=$(meta_value "$meta" backend)
+  [ -n "$backend" ] || backend=tmux
+  target=$(fm_backend_resolve_selector "$successor" "$STATE" 2>/dev/null || meta_value "$meta" window)
+  if [ -n "$target" ]; then
+    if [ -n "${FM_SUCCESSOR_RETIRE_CMD:-}" ]; then
+      "$FM_SUCCESSOR_RETIRE_CMD" "$backend" "$target" || true
+    else
+      fm_backend_kill "$backend" "$target" || true
+    fi
+  fi
+  rm -f "$meta"
 }
 
 if [ "$#" -ne 2 ]; then
@@ -138,24 +172,37 @@ fi
 SUCCESSOR_ID=${FM_SUCCESSOR_ID:-$(make_successor_id "$PREDECESSOR")}
 BRIEF="$DATA/$SUCCESSOR_ID/brief.md"
 WORKTREE=$(meta_value "$META" worktree)
+PROJECT=$(meta_value "$META" project)
 HARNESS=$(meta_value "$META" harness)
 BACKEND=$(meta_value "$META" backend)
 MODEL=$(meta_value "$META" model)
 EFFORT=$(meta_value "$META" effort)
+MODE=$(meta_value "$META" mode)
+YOLO=$(meta_value "$META" yolo)
 
 if [ -z "$WORKTREE" ]; then
   write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "predecessor meta has no worktree"
+  exit 1
+fi
+if [ -z "$PROJECT" ]; then
+  write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "predecessor meta has no project"
+  exit 1
+fi
+if ! x_link_output=$(validate_x_link "$META" 2>&1); then
+  write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "predecessor X link invalid: $x_link_output"
   exit 1
 fi
 
 write_successor_brief "$BRIEF" "$PREDECESSOR" "$HANDOFF"
 fm_watchdog_event successor_spawn "$PREDECESSOR" started "successor=$SUCCESSOR_ID handoff=$HANDOFF brief=$BRIEF"
 
-spawn_args=("$SUCCESSOR_ID" "$WORKTREE" --adopt-worktree)
+spawn_args=("$SUCCESSOR_ID" "$PROJECT" --adopt-worktree --adopt-worktree-path "$WORKTREE")
 [ -z "$HARNESS" ] || spawn_args+=(--harness "$HARNESS")
 [ -z "$BACKEND" ] || spawn_args+=(--backend "$BACKEND")
 [ -z "$MODEL" ] || [ "$MODEL" = default ] || spawn_args+=(--model "$MODEL")
 [ -z "$EFFORT" ] || [ "$EFFORT" = default ] || spawn_args+=(--effort "$EFFORT")
+[ -z "$MODE" ] || spawn_args+=(--mode "$MODE")
+[ -z "$YOLO" ] || spawn_args+=(--yolo "$YOLO")
 
 if ! spawn_output=$(run_spawn "${spawn_args[@]}" 2>&1); then
   write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "spawn failed: $spawn_output"
@@ -163,11 +210,13 @@ if ! spawn_output=$(run_spawn "${spawn_args[@]}" 2>&1); then
 fi
 
 if [ -z "${FM_SUCCESSOR_SPAWN_CMD:-}" ] && ! successor_meta_matches_worktree "$SUCCESSOR_ID" "$WORKTREE"; then
+  cleanup_successor_after_failure "$SUCCESSOR_ID"
   write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "successor did not adopt predecessor worktree $WORKTREE"
   exit 1
 fi
 
 if ! x_link_output=$(carry_x_link "$META" "$SUCCESSOR_ID" 2>&1); then
+  cleanup_successor_after_failure "$SUCCESSOR_ID"
   write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "X link carry failed: $x_link_output"
   exit 1
 fi

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout] [--adopt-worktree]
+# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout] [--adopt-worktree [--adopt-worktree-path <path>] [--mode <mode>] [--yolo <on|off>]]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
@@ -53,8 +53,10 @@
 #   --scout records kind=scout in the task's meta (report deliverable, scratch worktree;
 #   see AGENTS.md task lifecycle); --secondmate records kind=secondmate and launches in a
 #   provisioned firstmate home; the default is kind=ship.
-#   --adopt-worktree is for watchdog successors only: <project-dir> is already the
-#   isolated task worktree to resume, so the spawn skips treehouse get.
+#   --adopt-worktree is for watchdog successors only: the spawn skips treehouse get
+#   and resumes an existing isolated task worktree.
+#   When paired with --adopt-worktree-path, <project-dir> remains the original
+#   project root recorded in meta while the explicit path is the worktree cwd.
 #   Before a secondmate launch, the home is locally fast-forwarded to the primary
 #   default-branch commit when safe; skipped syncs warn and launch unchanged.
 #   Ship/scout spawns refuse to launch unless the resolved task path is a real
@@ -117,6 +119,9 @@ MODEL=
 EFFORT=
 BACKEND_ARG=
 ADOPT_WORKTREE=0
+ADOPT_WORKTREE_PATH=
+MODE_OVERRIDE=
+YOLO_OVERRIDE=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
@@ -133,6 +138,9 @@ for a in "$@"; do
       model) MODEL=$a; MODEL_SET=1 ;;
       effort) EFFORT=$a; EFFORT_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
+      adopt-worktree-path) ADOPT_WORKTREE_PATH=$a ;;
+      mode) MODE_OVERRIDE=$a ;;
+      yolo) YOLO_OVERRIDE=$a ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -150,6 +158,12 @@ for a in "$@"; do
     --effort=*) EFFORT=${a#--effort=}; EFFORT_SET=1 ;;
     --backend) want_value=backend ;;
     --backend=*) BACKEND_ARG=${a#--backend=}; BACKEND_SET=1 ;;
+    --adopt-worktree-path) want_value=adopt-worktree-path ;;
+    --adopt-worktree-path=*) ADOPT_WORKTREE_PATH=${a#--adopt-worktree-path=} ;;
+    --mode) want_value=mode ;;
+    --mode=*) MODE_OVERRIDE=${a#--mode=} ;;
+    --yolo) want_value=yolo ;;
+    --yolo=*) YOLO_OVERRIDE=${a#--yolo=} ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -158,6 +172,11 @@ done
 [ "$MODEL_SET" -eq 0 ] || [ -n "$MODEL" ] || { echo "error: --model requires a non-empty value" >&2; exit 1; }
 [ "$EFFORT_SET" -eq 0 ] || [ -n "$EFFORT" ] || { echo "error: --effort requires a non-empty value" >&2; exit 1; }
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || { echo "error: --backend requires a non-empty value" >&2; exit 1; }
+[ -z "$ADOPT_WORKTREE_PATH" ] || [ "$ADOPT_WORKTREE" -eq 1 ] || { echo "error: --adopt-worktree-path requires --adopt-worktree" >&2; exit 1; }
+[ -z "$MODE_OVERRIDE" ] || [ "$ADOPT_WORKTREE" -eq 1 ] || { echo "error: --mode override requires --adopt-worktree" >&2; exit 1; }
+[ -z "$YOLO_OVERRIDE" ] || [ "$ADOPT_WORKTREE" -eq 1 ] || { echo "error: --yolo override requires --adopt-worktree" >&2; exit 1; }
+case "$MODE_OVERRIDE" in ''|no-mistakes|local-only) ;; *) echo "error: --mode must be no-mistakes or local-only" >&2; exit 1 ;; esac
+case "$YOLO_OVERRIDE" in ''|on|off) ;; *) echo "error: --yolo must be on or off" >&2; exit 1 ;; esac
 case "$EFFORT" in
   ''|low|medium|high|xhigh|max) ;;
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
@@ -789,16 +808,18 @@ if [ "$ADOPT_WORKTREE" -eq 1 ]; then
     echo "error: --adopt-worktree is not supported with backend=orca" >&2
     exit 1
   fi
-  WT=$PROJ_ABS
+  WT=${ADOPT_WORKTREE_PATH:-$PROJ_ABS}
   validate_adopted_worktree
 fi
 
 W="fm-$ID"
+LAUNCH_CWD=$PROJ_ABS
+[ "$ADOPT_WORKTREE" -eq 0 ] || LAUNCH_CWD=$WT
 case "$BACKEND" in
   tmux)
     SES=$(fm_backend_tmux_container_ensure)
     T="$SES:$W"
-    fm_backend_tmux_create_task "$SES" "$W" "$PROJ_ABS" || exit 1
+    fm_backend_tmux_create_task "$SES" "$W" "$LAUNCH_CWD" || exit 1
     ;;
   herdr)
     # fm_backend_herdr_workspace_label resolves the target workspace from
@@ -816,7 +837,7 @@ case "$BACKEND" in
     if [ "$KIND" = secondmate ]; then
       HERDR_LABEL_HOME=$PROJ_ABS
     fi
-    HERDR_CONTAINER_RAW=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_container_ensure "$PROJ_ABS") || exit 1
+    HERDR_CONTAINER_RAW=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_container_ensure "$LAUNCH_CWD") || exit 1
     # fm_backend_herdr_container_ensure echoes "<session>:<workspace_id>\t<seeded_default_tab_id>"
     # (the second field empty when this call ADOPTED a pre-existing workspace
     # rather than creating a fresh one). Split on the guaranteed single tab
@@ -827,7 +848,7 @@ case "$BACKEND" in
     HERDR_SEEDED_DEFAULT_TAB_ID=${HERDR_CONTAINER_RAW#*$'\t'}
     HERDR_SES=${CONTAINER%%:*}
     HERDR_WORKSPACE_ID=${CONTAINER#*:}
-    HERDR_TASK_IDS=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_create_task "$CONTAINER" "$W" "$PROJ_ABS" "$HERDR_SEEDED_DEFAULT_TAB_ID") || exit 1
+    HERDR_TASK_IDS=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_create_task "$CONTAINER" "$W" "$LAUNCH_CWD" "$HERDR_SEEDED_DEFAULT_TAB_ID") || exit 1
     read -r HERDR_TAB_ID HERDR_PANE_ID <<EOF
 $HERDR_TASK_IDS
 EOF
@@ -839,7 +860,7 @@ EOF
     ;;
   zellij)
     ZELLIJ_SES=$(fm_backend_zellij_container_ensure) || exit 1
-    ZELLIJ_TASK_IDS=$(fm_backend_zellij_create_task "$ZELLIJ_SES" "$W" "$PROJ_ABS") || exit 1
+    ZELLIJ_TASK_IDS=$(fm_backend_zellij_create_task "$ZELLIJ_SES" "$W" "$LAUNCH_CWD") || exit 1
     read -r ZELLIJ_TAB_ID ZELLIJ_PANE_ID <<EOF
 $ZELLIJ_TASK_IDS
 EOF
@@ -851,7 +872,7 @@ EOF
     ;;
   cmux)
     fm_backend_cmux_container_ensure || exit 1
-    CMUX_TASK_IDS=$(fm_backend_cmux_create_task "$W" "$PROJ_ABS") || exit 1
+    CMUX_TASK_IDS=$(fm_backend_cmux_create_task "$W" "$LAUNCH_CWD") || exit 1
     read -r CMUX_WORKSPACE_ID CMUX_SURFACE_ID <<EOF
 $CMUX_TASK_IDS
 EOF
@@ -1097,6 +1118,8 @@ else
   read -r MODE YOLO <<EOF
 $("$FM_ROOT/bin/fm-project-mode.sh" "$PROJ_NAME")
 EOF
+  [ -z "$MODE_OVERRIDE" ] || MODE=$MODE_OVERRIDE
+  [ -z "$YOLO_OVERRIDE" ] || YOLO=$YOLO_OVERRIDE
 fi
 
 META_WINDOW=$T
