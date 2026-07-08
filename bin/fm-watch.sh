@@ -272,6 +272,35 @@ watchdog_steer_inflight() {
   return 1
 }
 
+watchdog_pending_active() {
+  local pending=$1 task=$2 retry_sec=$3 key=$4 age
+  [ -s "$pending" ] || return 1
+  case "$retry_sec" in ''|null|*[!0-9]*) retry_sec=900 ;; esac
+  [ "$retry_sec" -gt 0 ] || retry_sec=900
+  age=$(fm_path_age "$pending")
+  if [ "$age" -lt "$retry_sec" ]; then
+    return 0
+  fi
+  fm_watchdog_event compact_pending_expired "$task" retrying "age_sec=$age retry_sec=$retry_sec key=$key"
+  rm -f "$pending"
+  return 1
+}
+
+watchdog_collect_failure() {
+  local task=$1 key=$2 interval=$3 err_file=$4 throttle age detail
+  case "$interval" in ''|null|*[!0-9]*) interval=300 ;; esac
+  [ "$interval" -gt 0 ] || interval=300
+  throttle="$STATE/watchdog/.metrics-failure-$key"
+  if [ -e "$throttle" ]; then
+    age=$(fm_path_age "$throttle")
+    [ "$age" -lt "$interval" ] && return 0
+  fi
+  detail=$(tr '\n' ';' < "$err_file" | sed 's/[[:space:]][[:space:]]*/ /g; s/;*$//' | cut -c 1-300)
+  [ -n "$detail" ] || detail="metrics collection failed"
+  fm_watchdog_event metrics_collect_failed "$task" throttled "$detail"
+  : > "$throttle"
+}
+
 watchdog_start_compact_steer() {
   local task=$1 context=$2 compact=$3 sig=$4 sid=$5 key=$6 pending=$7 inflight=$8 pid
   (
@@ -288,10 +317,12 @@ watchdog_start_compact_steer() {
 }
 
 watchdog_threshold_scan() {
-  local config compact meta task harness metrics context file sig sid key handled pending inflight
+  local config compact pending_retry failure_interval meta task harness metrics context file sig sid key handled pending inflight err_file
   config=$(fm_watchdog_thresholds 2>/dev/null) || return 0
   compact=$(printf '%s' "$config" | jq -r '.thresholds.compact_at_context_pct // empty' 2>/dev/null || true)
   case "$compact" in ''|null|*[!0-9.]* ) return 0 ;; esac
+  pending_retry=$(printf '%s' "$config" | jq -r '.compact_pending_retry_sec // empty' 2>/dev/null || true)
+  failure_interval=$(printf '%s' "$config" | jq -r '.metrics_failure_event_interval_sec // empty' 2>/dev/null || true)
   for meta in "$STATE"/*.meta; do
     [ -e "$meta" ] || continue
     [ "$(fm_meta_get "$meta" kind)" = secondmate ] && continue
@@ -303,9 +334,16 @@ watchdog_threshold_scan() {
     pending="$STATE/watchdog/.compact-pending-$key"
     inflight="$STATE/watchdog/.compact-steering-$key"
     watchdog_check_rotation "$task" "$harness" "$pending"
-    [ -s "$pending" ] && continue
+    watchdog_pending_active "$pending" "$task" "$pending_retry" "$key" && continue
     watchdog_steer_inflight "$inflight" && continue
-    metrics=$(fm_watchdog_collect_metrics "$harness" "$task" 2>/dev/null || true)
+    mkdir -p "$STATE/watchdog"
+    err_file="$STATE/watchdog/.metrics-error-$key"
+    if ! metrics=$(fm_watchdog_collect_metrics "$harness" "$task" 2>"$err_file"); then
+      watchdog_collect_failure "$task" "$key" "$failure_interval" "$err_file"
+      rm -f "$err_file"
+      continue
+    fi
+    rm -f "$err_file"
     [ -n "$metrics" ] || continue
     context=$(jq -r '.context_pct // empty' "$metrics" 2>/dev/null || true)
     case "$context" in ''|null|*[!0-9.]* ) continue ;; esac

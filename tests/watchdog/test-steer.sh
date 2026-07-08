@@ -270,11 +270,98 @@ test_rotation_rearms_new_session() {
   pass "watcher re-arms compact threshold after transcript rotation"
 }
 
+test_stale_pending_retries_without_rotation() {
+  local home config session_dir worktree double log pending status event threshold_count send_count timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping stale pending retry coverage"
+    return
+  fi
+  home="$TMP_ROOT/pending-retry-home"
+  config="$TMP_ROOT/pending-retry-config"
+  session_dir="$TMP_ROOT/pending-retry-sessions"
+  worktree="$TMP_ROOT/pending-retry-worktree"
+  double="$TMP_ROOT/pending-retry-double"
+  log="$TMP_ROOT/pending-retry.log"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  jq '.compact_pending_retry_sec = 1' "$config/watchdog.json" > "$config/watchdog.json.tmp"
+  mv "$config/watchdog.json.tmp" "$config/watchdog.json"
+  make_success_double "$double" "$log"
+  write_codex_rollout "$session_dir/rollout-demo.jsonl" "$worktree" 900 same-sid
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial pending-retry watcher run should be stopped by test timeout"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  assert_present "$pending" "successful compact steer should leave a pending marker"
+
+  sleep 2
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "retry watcher run should be stopped by test timeout"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"type":"compact_pending_expired"' "stale pending marker should be reported before retry"
+  threshold_count=$(grep -c '"type":"compact_threshold"' "$event")
+  [ "$threshold_count" = 2 ] || fail "stale pending session should trigger a second compact threshold, got $threshold_count"
+  send_count=$(wc -l < "$log" | tr -d '[:space:]')
+  [ "$send_count" = 2 ] || fail "stale pending session should retry delivery exactly once, got $send_count sends"
+  pass "watcher retries stale compact pending markers"
+}
+
+test_metrics_collection_failure_is_visible_and_throttled() {
+  local home config session_dir worktree status event failure_count timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping metrics failure visibility coverage"
+    return
+  fi
+  home="$TMP_ROOT/metrics-failure-home"
+  config="$TMP_ROOT/metrics-failure-config"
+  session_dir="$TMP_ROOT/metrics-failure-sessions"
+  worktree="$TMP_ROOT/metrics-failure-worktree"
+  mkdir -p "$home/state" "$session_dir" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  jq '.metrics_failure_event_interval_sec = 60' "$config/watchdog.json" > "$config/watchdog.json.tmp"
+  mv "$config/watchdog.json.tmp" "$config/watchdog.json"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "metrics failure watcher run should be stopped by test timeout"
+  event="$home/fm-state/watchdog.events"
+  assert_present "$event" "metrics collection failure should write a watchdog event"
+  assert_contains "$(cat "$event")" '"type":"metrics_collect_failed"' "metrics failure event should name collection failure"
+  assert_contains "$(cat "$event")" 'no codex rollout file found for demo' "metrics failure detail should include parser stderr"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "throttled metrics failure watcher run should be stopped by test timeout"
+  failure_count=$(grep -c '"type":"metrics_collect_failed"' "$event")
+  [ "$failure_count" = 1 ] || fail "metrics failure event should be throttled, got $failure_count events"
+  pass "watcher reports metrics collection failures with throttling"
+}
+
 test_success_delivers_exact_text_and_event
 test_failure_retries_three_then_rc4
 test_timeout_bounds_each_attempt
 test_timeout_uses_perl_when_timeout_tools_are_absent
 test_watcher_starts_compact_steer_without_blocking
 test_rotation_rearms_new_session
+test_stale_pending_retries_without_rotation
+test_metrics_collection_failure_is_visible_and_throttled
 
 echo "# all watchdog steer tests passed"
