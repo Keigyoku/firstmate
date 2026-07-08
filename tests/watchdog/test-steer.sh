@@ -202,11 +202,51 @@ test_watcher_starts_compact_steer_without_blocking() {
     FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
     "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
   status=$?
+  expect_code 124 "$status" "initial watcher pass should arm the discovered session"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
   expect_code 124 "$status" "watcher should still be sleeping its normal poll when the test timeout stops it"
   event="$home/fm-state/watchdog.events"
   assert_contains "$(cat "$event")" '"type":"compact_steer_started"' "watcher should record async steer start before the backend send completes"
   sleep 5
   pass "watcher starts compact steer asynchronously"
+}
+
+test_unarmed_session_is_not_steered_on_first_discovery() {
+  local home config session_dir worktree double log status event timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping unarmed-session guard coverage"
+    return
+  fi
+  home="$TMP_ROOT/unarmed-home"
+  config="$TMP_ROOT/unarmed-config"
+  session_dir="$TMP_ROOT/unarmed-sessions"
+  worktree="$TMP_ROOT/unarmed-worktree"
+  double="$TMP_ROOT/unarmed-double"
+  log="$TMP_ROOT/unarmed.log"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  write_codex_rollout "$session_dir/rollout-demo.jsonl" "$worktree"
+  make_success_double "$double" "$log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "unarmed watcher pass should be stopped by test timeout"
+  [ ! -s "$log" ] || fail "unarmed session must not be steered on first discovery"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"type":"watchdog_session_armed"' "unarmed first pass should only arm the session"
+  assert_present "$home/state/watchdog/armed-demo" "armed marker should be written for the discovered sid"
+  pass "unarmed session is not steered on first discovery"
 }
 
 test_rotation_rearms_new_session() {
@@ -235,6 +275,12 @@ test_rotation_rearms_new_session() {
     FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
     "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
   status=$?
+  expect_code 124 "$status" "initial rotation watcher pass should arm the old session"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
   expect_code 124 "$status" "initial watcher run should be stopped by test timeout"
   pending="$home/state/watchdog/.compact-pending-demo"
   assert_present "$pending" "successful compact steer should leave a pending old-session marker"
@@ -256,7 +302,7 @@ test_rotation_rearms_new_session() {
   [ ! -e "$pending" ] || fail "rotation should clear the old pending marker"
 
   sleep 1
-  write_codex_rollout "$session_dir/rollout-new-high.jsonl" "$worktree" 900 new-sid
+  write_codex_rollout "$session_dir/rollout-new-low.jsonl" "$worktree" 900 new-sid
   "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
     FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
     "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
@@ -293,6 +339,12 @@ test_stale_pending_retries_without_rotation() {
   mv "$config/watchdog.json.tmp" "$config/watchdog.json"
   make_success_double "$double" "$log"
   write_codex_rollout "$session_dir/rollout-demo.jsonl" "$worktree" 900 same-sid
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial pending-retry watcher pass should arm the session"
 
   "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
     FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
@@ -347,7 +399,7 @@ test_metrics_collection_failure_is_visible_and_throttled() {
   event="$home/fm-state/watchdog.events"
   assert_present "$event" "metrics collection failure should write a watchdog event"
   assert_contains "$(cat "$event")" '"type":"metrics_collect_failed"' "metrics failure event should name collection failure"
-  assert_contains "$(cat "$event")" 'no codex rollout file found for demo' "metrics failure detail should include parser stderr"
+  assert_contains "$(cat "$event")" 'no codex session file found for demo' "metrics failure detail should include scoped session lookup stderr"
 
   cat > "$fakebin/find" <<'SH'
 #!/usr/bin/env bash
@@ -371,6 +423,7 @@ test_failure_retries_three_then_rc4
 test_timeout_bounds_each_attempt
 test_timeout_uses_perl_when_timeout_tools_are_absent
 test_watcher_starts_compact_steer_without_blocking
+test_unarmed_session_is_not_steered_on_first_discovery
 test_rotation_rearms_new_session
 test_stale_pending_retries_without_rotation
 test_metrics_collection_failure_is_visible_and_throttled

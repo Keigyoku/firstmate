@@ -230,6 +230,38 @@ fm_watchdog_task_key() {
   printf '%s' "$1" | tr ':/.' '___'
 }
 
+fm_watchdog_armed_session_path() {
+  local task=$1
+  printf '%s/armed-%s\n' "$(fm_watchdog_metrics_dir)" "$(fm_watchdog_task_key "$task")"
+}
+
+fm_watchdog_arm_session() {
+  local task=$1 harness=$2 file=$3 marker sid sig tmp
+  sid=$(fm_watchdog_session_id_from_file "$harness" "$file") || return $?
+  sig=$(fm_watchdog_file_identity "$file") || return $?
+  marker=$(fm_watchdog_armed_session_path "$task")
+  mkdir -p "$(dirname "$marker")"
+  tmp=$(mktemp "${marker}.tmp.XXXXXX")
+  {
+    printf 'sid=%s\n' "$sid"
+    printf 'sig=%s\n' "$sig"
+    printf 'file=%s\n' "$file"
+    printf 'armed_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$tmp"
+  mv "$tmp" "$marker"
+}
+
+fm_watchdog_session_is_armed() {
+  local task=$1 harness=$2 file=$3 marker sid sig armed_sid armed_sig
+  marker=$(fm_watchdog_armed_session_path "$task")
+  [ -s "$marker" ] || return 1
+  sid=$(fm_watchdog_session_id_from_file "$harness" "$file") || return $?
+  sig=$(fm_watchdog_file_identity "$file") || return $?
+  armed_sid=$(sed -n 's/^sid=//p' "$marker" | head -1)
+  armed_sig=$(sed -n 's/^sig=//p' "$marker" | head -1)
+  [ "$sid" = "$armed_sid" ] && [ "$sig" = "$armed_sig" ]
+}
+
 fm_watchdog_codex_rollout_cache_path() {
   local task=$1
   printf '%s/.codex-rollout-%s\n' "$(fm_watchdog_metrics_dir)" "$(fm_watchdog_task_key "$task")"
@@ -309,12 +341,12 @@ fm_watchdog_session_file() {
   local harness=$1 task=${2:-} worktree
   if [ -n "$task" ]; then
     worktree=$(fm_watchdog_task_worktree "$task" 2>/dev/null || true)
-    if [ -n "$worktree" ]; then
-      case "$harness" in
-        claude) fm_watchdog_latest_claude_jsonl_for_worktree "$worktree"; return $? ;;
-        codex) fm_watchdog_latest_codex_rollout_for_worktree "$worktree" "$task"; return $? ;;
-      esac
-    fi
+    [ -n "$worktree" ] || return 1
+    case "$harness" in
+      claude) fm_watchdog_latest_claude_jsonl_for_worktree "$worktree"; return $? ;;
+      codex) fm_watchdog_latest_codex_rollout_for_worktree "$worktree" "$task"; return $? ;;
+      *) return 1 ;;
+    esac
   fi
   case "$harness" in
     claude) fm_watchdog_latest_claude_jsonl ;;

@@ -154,6 +154,13 @@ test_watch_loop_clear_rotation_starts_successor_and_exits_when_halted() {
     FM_SUCCESSOR_ID=demo-threshold-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
     FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
   status=$?
+  expect_code 124 "$status" "initial clear-threshold watcher pass should arm the session"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$steer_double" FM_STEER_DOUBLE_LOG="$steer_log" \
+    FM_SUCCESSOR_ID=demo-threshold-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
   expect_code 124 "$status" "first clear-threshold watcher pass should keep async steering behavior"
   pending="$home/state/watchdog/.clear-pending-demo"
   for _ in $(seq 1 20); do
@@ -207,6 +214,13 @@ test_steer_rc4_escalates_to_successor() {
   write_codex_rollout "$session_dir/rollout-demo.jsonl" "$worktree" 900 old-sid
   make_steer_failure_double "$steer_double" "$steer_log"
   make_spawn_double "$spawn_double" "$spawn_log" 23
+
+  "$timeout_cmd" 2 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$steer_double" FM_STEER_DOUBLE_LOG="$steer_log" FM_STEER_BACKOFF_SEC=0 \
+    FM_SUCCESSOR_ID=demo-steer-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial rc4 watcher pass should arm the session"
 
   "$timeout_cmd" 2 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
     FM_STEER_BACKEND_CMD="$steer_double" FM_STEER_DOUBLE_LOG="$steer_log" FM_STEER_BACKOFF_SEC=0 \

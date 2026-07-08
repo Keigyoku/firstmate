@@ -198,6 +198,22 @@ test_claude_project_key_matches_cli_normalization() {
   pass "claude project key matches Claude CLI normalization"
 }
 
+test_task_scoped_claude_lookup_requires_worktree() {
+  local home session_dir latest status
+  home="$TMP_ROOT/claude-no-worktree-home"
+  session_dir="$TMP_ROOT/claude-no-worktree-sessions"
+  mkdir -p "$home/state" "$session_dir/some-project"
+  fm_write_meta "$home/state/demo.meta" "harness=claude"
+  printf '{}\n' > "$session_dir/some-project/newest.jsonl"
+
+  latest=$(FM_HOME="$home" FM_WATCHDOG_CLAUDE_SESSION_DIR="$session_dir" \
+    bash -c '. "$1"; fm_watchdog_session_file claude demo' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  status=$?
+  expect_code 1 "$status" "task-scoped claude lookup without worktree should fail"
+  [ -z "$latest" ] || fail "task-scoped claude lookup must not fall back to global latest"
+  pass "task-scoped claude lookup refuses unscoped global fallback"
+}
+
 test_codex_metrics_are_scoped_to_task_worktree() {
   local home session_dir target_wt other_wt out context
   home="$TMP_ROOT/codex-scope-home"
@@ -325,6 +341,7 @@ test_meta_backed_codex_rollout_accepts_root_session_id
 test_codex_rollout_missing_session_is_loud
 test_unknown_harness_is_observe_only_tolerant
 test_claude_project_key_matches_cli_normalization
+test_task_scoped_claude_lookup_requires_worktree
 test_codex_metrics_are_scoped_to_task_worktree
 test_codex_session_lookup_uses_task_cache
 test_threshold_defaults

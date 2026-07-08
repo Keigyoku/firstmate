@@ -260,6 +260,7 @@ watchdog_check_rotation() {  # <task> <harness> <marker-file>
   [ "$sig" != "$old_sig" ] || return 0
   new_sid=$(fm_watchdog_session_id_from_file "$harness" "$file" 2>/dev/null || basename "$file")
   fm_watchdog_event compact_rotated "$task" rearmed "old_sid=$old_sid new_sid=$new_sid file=$file"
+  fm_watchdog_arm_session "$task" "$harness" "$file"
   printf '%s\n%s\n' "$old_sig" "$old_sid" > "$STATE/watchdog/.compact-handled-$(watchdog_marker_key "$task")"
   rm -f "$marker"
 }
@@ -277,6 +278,7 @@ watchdog_check_clear_rotation() {  # <task> <harness> <marker-file>
   [ "$sig" != "$old_sig" ] || return 0
   new_sid=$(fm_watchdog_session_id_from_file "$harness" "$file" 2>/dev/null || basename "$file")
   fm_watchdog_event clear_rotated "$task" successor_takeover "old_sid=$old_sid new_sid=$new_sid file=$file"
+  fm_watchdog_arm_session "$task" "$harness" "$file"
   printf '%s\n%s\n' "$old_sig" "$old_sid" > "$STATE/watchdog/.clear-handled-$(watchdog_marker_key "$task")"
   rm -f "$marker"
   watchdog_start_successor "$task" "${context:-unknown}" "clear_rotated"
@@ -426,6 +428,23 @@ watchdog_threshold_scan() {
     watchdog_steer_inflight "$clear_inflight" && continue
     watchdog_pending_active "$pending" "$task" "$pending_retry" "$key" compact && continue
     watchdog_steer_inflight "$inflight" && continue
+    file=$(fm_watchdog_session_file "$harness" "$task" 2>/dev/null || true)
+    if [ -z "$file" ]; then
+      mkdir -p "$STATE/watchdog"
+      err_file="$STATE/watchdog/.metrics-error-$key"
+      printf 'no %s session file found for %s\n' "$harness" "$task" > "$err_file"
+      watchdog_collect_failure "$task" "$key" "$failure_interval" "$err_file"
+      rm -f "$err_file"
+      continue
+    fi
+    sig=$(fm_watchdog_file_identity "$file" 2>/dev/null || true)
+    [ -n "$sig" ] || continue
+    sid=$(fm_watchdog_session_id_from_file "$harness" "$file" 2>/dev/null || basename "$file")
+    if ! fm_watchdog_session_is_armed "$task" "$harness" "$file"; then
+      fm_watchdog_arm_session "$task" "$harness" "$file"
+      fm_watchdog_event watchdog_session_armed "$task" armed "harness=$harness sid=$sid file=$file"
+      continue
+    fi
     mkdir -p "$STATE/watchdog"
     err_file="$STATE/watchdog/.metrics-error-$key"
     watchdog_collect_failure_recent "$key" "$failure_interval" && continue
@@ -439,11 +458,6 @@ watchdog_threshold_scan() {
     [ -n "$metrics" ] || continue
     context=$(jq -r '.context_pct // empty' "$metrics" 2>/dev/null || true)
     case "$context" in ''|null|*[!0-9.]* ) continue ;; esac
-    file=$(fm_watchdog_session_file "$harness" "$task" 2>/dev/null || true)
-    [ -n "$file" ] || continue
-    sig=$(fm_watchdog_file_identity "$file" 2>/dev/null || true)
-    [ -n "$sig" ] || continue
-    sid=$(fm_watchdog_session_id_from_file "$harness" "$file" 2>/dev/null || basename "$file")
     if [ -n "$successor" ] && awk "BEGIN { exit !($context >= $successor) }"; then
       handled=$(cat "$STATE/watchdog/.clear-handled-$key" 2>/dev/null || true)
       [ "$(printf '%s\n' "$handled" | sed -n '1p')" = "$sig" ] && continue

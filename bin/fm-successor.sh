@@ -35,10 +35,10 @@ write_failure_and_halt() {
   mkdir -p "$(dirname "$artifact")"
   {
     printf '# Watchdog Successor Failure\n\n'
-    printf 'Predecessor: `%s`.\n' "$predecessor"
-    printf 'Handoff: `%s`.\n' "$handoff"
+    printf "Predecessor: \`%s\`.\n" "$predecessor"
+    printf "Handoff: \`%s\`.\n" "$handoff"
     printf 'Reason: %s.\n' "$reason"
-    printf 'Timestamp: `%s`.\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf "Timestamp: \`%s\`.\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } > "$artifact"
   {
     printf 'halted_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -67,8 +67,8 @@ write_successor_brief() {
   mkdir -p "$(dirname "$brief")"
   {
     printf '# Successor Handoff\n\n'
-    printf 'You are a successor session for `%s`.\n' "$predecessor"
-    printf 'Read and continue from this handoff artifact: `%s`.\n' "$handoff"
+    printf "You are a successor session for \`%s\`.\n" "$predecessor"
+    printf "Read and continue from this handoff artifact: \`%s\`.\n" "$handoff"
     printf '\n'
     printf '## Handoff Content\n\n'
     cat "$handoff"
