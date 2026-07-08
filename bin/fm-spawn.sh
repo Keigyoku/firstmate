@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout]
+# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout] [--adopt-worktree]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
@@ -53,6 +53,8 @@
 #   --scout records kind=scout in the task's meta (report deliverable, scratch worktree;
 #   see AGENTS.md task lifecycle); --secondmate records kind=secondmate and launches in a
 #   provisioned firstmate home; the default is kind=ship.
+#   --adopt-worktree is for watchdog successors only: <project-dir> is already the
+#   isolated task worktree to resume, so the spawn skips treehouse get.
 #   Before a secondmate launch, the home is locally fast-forwarded to the primary
 #   default-branch commit when safe; skipped syncs warn and launch unchanged.
 #   Ship/scout spawns refuse to launch unless the resolved task path is a real
@@ -114,6 +116,7 @@ HARNESS_ARG=
 MODEL=
 EFFORT=
 BACKEND_ARG=
+ADOPT_WORKTREE=0
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
@@ -138,6 +141,7 @@ for a in "$@"; do
   case "$a" in
     --scout) KIND=scout ;;
     --secondmate) KIND=secondmate ;;
+    --adopt-worktree) ADOPT_WORKTREE=1 ;;
     --harness) want_value=harness ;;
     --harness=*) HARNESS_ARG=${a#--harness=}; HARNESS_SET=1 ;;
     --model) want_value=model ;;
@@ -280,6 +284,10 @@ ARG3=
 FIRSTMATE_HOME=
 
 if [ "$KIND" = secondmate ]; then
+  if [ "$ADOPT_WORKTREE" -eq 1 ]; then
+    echo "error: --adopt-worktree does not apply to --secondmate spawns" >&2
+    exit 1
+  fi
   case "${POS[1]:-}" in
     ''|claude|codex|opencode|pi|grok|cursor|hermes)
       ARG3=${POS[1]:-}
@@ -754,6 +762,37 @@ validate_spawn_worktree() {  # <source> <inspect-target>
   fi
 }
 
+validate_adopted_worktree() {
+  local wt_real wt_top wt_top_real root_real
+  wt_real=$(cd "$WT" 2>/dev/null && pwd -P) || {
+    echo "error: --adopt-worktree path is not an existing directory: $WT" >&2
+    exit 1
+  }
+  wt_top=$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -z "$wt_top" ] || ! wt_top_real=$(cd "$wt_top" 2>/dev/null && pwd -P); then
+    echo "error: --adopt-worktree path is not a git worktree root: $WT" >&2
+    exit 1
+  fi
+  if [ "$wt_real" != "$wt_top_real" ]; then
+    echo "error: --adopt-worktree path must be the git worktree root: $WT" >&2
+    exit 1
+  fi
+  root_real=$(cd "$FM_ROOT" 2>/dev/null && pwd -P) || root_real=
+  if [ -n "$root_real" ] && [ "$wt_real" = "$root_real" ]; then
+    echo "error: --adopt-worktree cannot launch in the firstmate repo checkout: $WT" >&2
+    exit 1
+  fi
+}
+
+if [ "$ADOPT_WORKTREE" -eq 1 ]; then
+  if [ "$BACKEND" = orca ]; then
+    echo "error: --adopt-worktree is not supported with backend=orca" >&2
+    exit 1
+  fi
+  WT=$PROJ_ABS
+  validate_adopted_worktree
+fi
+
 W="fm-$ID"
 case "$BACKEND" in
   tmux)
@@ -892,7 +931,7 @@ spawn_capture() {  # <target> <lines> -> bounded plain-text pane capture
     cmux) fm_backend_cmux_capture "$1" "$2" ;;
   esac
 }
-if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] && [ "$ADOPT_WORKTREE" -eq 0 ]; then
   spawn_send_text_line "$T" 'treehouse get'
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.

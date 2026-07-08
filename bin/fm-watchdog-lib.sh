@@ -26,7 +26,6 @@ fm_watchdog_default_config() {
   "steer_timeout_sec": 120,
   "compact_pending_retry_sec": 900,
   "metrics_failure_event_interval_sec": 300,
-  "rotate_to": ["codex", "opencode"],
   "parser_version": 1
 }
 JSON

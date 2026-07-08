@@ -84,6 +84,26 @@ run_spawn() {
   fi
 }
 
+successor_meta_matches_worktree() {
+  local successor=$1 worktree=$2 meta
+  meta="$STATE/$successor.meta"
+  [ -f "$meta" ] || return 1
+  [ "$(meta_value "$meta" worktree)" = "$worktree" ] || return 1
+}
+
+carry_x_link() {
+  local predecessor_meta=$1 successor=$2 request request_ts followups
+  request=$(meta_value "$predecessor_meta" x_request)
+  [ -n "$request" ] || return 0
+  request_ts=$(meta_value "$predecessor_meta" x_request_ts)
+  followups=$(meta_value "$predecessor_meta" x_followups)
+  if [ -z "$request_ts" ] || [ -z "$followups" ]; then
+    echo "predecessor X link is incomplete" >&2
+    return 1
+  fi
+  "$SCRIPT_DIR/fm-x-link.sh" "$successor" "$request" --carry-count "$followups" --carry-ts "$request_ts" >/dev/null
+}
+
 retire_predecessor() {
   local predecessor=$1 meta=$2 backend target
   backend=$(meta_value "$meta" backend)
@@ -117,22 +137,21 @@ fi
 
 SUCCESSOR_ID=${FM_SUCCESSOR_ID:-$(make_successor_id "$PREDECESSOR")}
 BRIEF="$DATA/$SUCCESSOR_ID/brief.md"
-PROJECT=$(meta_value "$META" project)
-[ -n "$PROJECT" ] || PROJECT=$(meta_value "$META" worktree)
+WORKTREE=$(meta_value "$META" worktree)
 HARNESS=$(meta_value "$META" harness)
 BACKEND=$(meta_value "$META" backend)
 MODEL=$(meta_value "$META" model)
 EFFORT=$(meta_value "$META" effort)
 
-if [ -z "$PROJECT" ]; then
-  write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "predecessor meta has no project or worktree"
+if [ -z "$WORKTREE" ]; then
+  write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "predecessor meta has no worktree"
   exit 1
 fi
 
 write_successor_brief "$BRIEF" "$PREDECESSOR" "$HANDOFF"
 fm_watchdog_event successor_spawn "$PREDECESSOR" started "successor=$SUCCESSOR_ID handoff=$HANDOFF brief=$BRIEF"
 
-spawn_args=("$SUCCESSOR_ID" "$PROJECT")
+spawn_args=("$SUCCESSOR_ID" "$WORKTREE" --adopt-worktree)
 [ -z "$HARNESS" ] || spawn_args+=(--harness "$HARNESS")
 [ -z "$BACKEND" ] || spawn_args+=(--backend "$BACKEND")
 [ -z "$MODEL" ] || [ "$MODEL" = default ] || spawn_args+=(--model "$MODEL")
@@ -140,6 +159,16 @@ spawn_args=("$SUCCESSOR_ID" "$PROJECT")
 
 if ! spawn_output=$(run_spawn "${spawn_args[@]}" 2>&1); then
   write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "spawn failed: $spawn_output"
+  exit 1
+fi
+
+if [ -z "${FM_SUCCESSOR_SPAWN_CMD:-}" ] && ! successor_meta_matches_worktree "$SUCCESSOR_ID" "$WORKTREE"; then
+  write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "successor did not adopt predecessor worktree $WORKTREE"
+  exit 1
+fi
+
+if ! x_link_output=$(carry_x_link "$META" "$SUCCESSOR_ID" 2>&1); then
+  write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "X link carry failed: $x_link_output"
   exit 1
 fi
 

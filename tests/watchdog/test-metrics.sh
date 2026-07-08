@@ -272,8 +272,8 @@ test_threshold_defaults() {
   out=$(FM_HOME="$TMP_ROOT/no-config-home" bash -c '. "$1"; fm_watchdog_thresholds' _ "$ROOT/bin/fm-watchdog-lib.sh")
   [ "$(printf '%s' "$out" | jq -r '.thresholds.compact_at_context_pct')" = 85 ] \
     || fail "default compact threshold should be 85"
-  [ "$(printf '%s' "$out" | jq -r '.rotate_to | join(",")')" = "codex,opencode" ] \
-    || fail "default rotation should match shipped example"
+  [ "$(printf '%s' "$out" | jq -r 'has("rotate_to")')" = false ] \
+    || fail "default rotation should stay reserved for W4"
   pass "watchdog thresholds fall back to shipped defaults"
 }
 

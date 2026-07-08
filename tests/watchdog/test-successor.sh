@@ -46,6 +46,15 @@ make_spawn_double() {
   cat > "$path" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_SUCCESSOR_SPAWN_LOG"
+if [ "${FM_SUCCESSOR_DOUBLE_CREATE_META:-0}" = 1 ] && [ "${FM_SUCCESSOR_SPAWN_STATUS:-0}" = 0 ]; then
+  mkdir -p "$FM_HOME/state"
+  {
+    printf 'window=%s\n' "fm-$1"
+    printf 'worktree=%s\n' "$2"
+    printf 'project=%s\n' "$2"
+    printf 'harness=%s\n' "codex"
+  } > "$FM_HOME/state/$1.meta"
+fi
 exit "${FM_SUCCESSOR_SPAWN_STATUS:-0}"
 SH
   chmod +x "$path"
@@ -95,7 +104,7 @@ test_successor_spawns_with_handoff_brief_and_retires_predecessor() {
   mkdir -p "$home/state" "$home/fm-state"
   handoff="$home/fm-state/handoff-latest.md"
   printf 'Continue from W3 HANDOFF MARKER.\n' > "$handoff"
-  fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$home" "backend=tmux" "harness=claude" "model=default" "effort=default"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$home" "worktree=$home" "backend=tmux" "harness=claude" "model=default" "effort=default"
   make_spawn_double "$spawn_double" "$spawn_log" 0
   make_retire_double "$retire_double" "$retire_log"
 
@@ -108,12 +117,42 @@ test_successor_spawns_with_handoff_brief_and_retires_predecessor() {
   assert_present "$brief" "successor brief should be generated"
   assert_grep "$handoff" "$brief" "successor brief should include handoff path"
   assert_grep "W3 HANDOFF MARKER" "$brief" "successor brief should include handoff content"
-  assert_grep "demo-next $home --harness claude --backend tmux" "$spawn_log" "spawn double should receive successor args"
+  assert_grep "demo-next $home --adopt-worktree --harness claude --backend tmux" "$spawn_log" "spawn double should receive successor args"
   [ "$(cat "$retire_log")" = "tmux|target-pane" ] || fail "predecessor should be retired through backend target"
   event="$home/fm-state/watchdog.events"
   assert_grep '"type":"successor_spawn","sid":"demo","status":"started"' "$event" "spawn start event should be logged"
   assert_grep '"type":"predecessor_retired","sid":"demo","status":"closed"' "$event" "retire event should be logged"
   pass "successor spawns with handoff brief and retires predecessor"
+}
+
+test_successor_carries_x_followup_link() {
+  local home spawn_log retire_log spawn_double retire_double handoff successor_meta
+  home="$TMP_ROOT/xlink-home"
+  spawn_log="$TMP_ROOT/xlink-spawn.log"
+  retire_log="$TMP_ROOT/xlink-retire.log"
+  spawn_double="$TMP_ROOT/xlink-spawn-double"
+  retire_double="$TMP_ROOT/xlink-retire-double"
+  mkdir -p "$home/state" "$home/fm-state"
+  handoff="$home/fm-state/handoff-x.md"
+  printf 'handoff for X-linked successor\n' > "$handoff"
+  fm_write_meta "$home/state/demo.meta" \
+    "window=target-pane" "project=$home" "worktree=$home" "backend=tmux" "harness=codex" \
+    "x_request=req-123" "x_request_ts=1770000000" "x_followups=2"
+  make_spawn_double "$spawn_double" "$spawn_log" 0
+  make_retire_double "$retire_double" "$retire_log"
+
+  FM_HOME="$home" FM_SUCCESSOR_ID=demo-x-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_SUCCESSOR_DOUBLE_CREATE_META=1 \
+    FM_SUCCESSOR_RETIRE_CMD="$retire_double" FM_SUCCESSOR_RETIRE_LOG="$retire_log" \
+    "$ROOT/bin/fm-successor.sh" demo "$handoff" >/dev/null \
+    || fail "X-linked successor spawn should succeed"
+
+  successor_meta="$home/state/demo-x-next.meta"
+  assert_grep 'x_request=req-123' "$successor_meta" "successor meta should carry X request id"
+  assert_grep 'x_request_ts=1770000000' "$successor_meta" "successor meta should carry original X timestamp"
+  assert_grep 'x_followups=2' "$successor_meta" "successor meta should carry consumed follow-up count"
+  [ "$(cat "$retire_log")" = "tmux|target-pane" ] || fail "X-linked predecessor should retire after relink"
+  pass "successor carries X follow-up link before retiring predecessor"
 }
 
 test_spawn_failure_writes_halt_flag_and_failure_artifact() {
@@ -124,7 +163,7 @@ test_spawn_failure_writes_halt_flag_and_failure_artifact() {
   mkdir -p "$home/state" "$home/fm-state"
   handoff="$home/fm-state/handoff-latest.md"
   printf 'handoff for failing spawn\n' > "$handoff"
-  fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$home" "backend=tmux" "harness=claude"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$home" "worktree=$home" "backend=tmux" "harness=claude"
   make_spawn_double "$spawn_double" "$spawn_log" 23
 
   FM_HOME="$home" FM_SUCCESSOR_ID=demo-fails FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
@@ -285,6 +324,7 @@ test_steer_rc4_escalates_to_successor() {
 }
 
 test_successor_spawns_with_handoff_brief_and_retires_predecessor
+test_successor_carries_x_followup_link
 test_spawn_failure_writes_halt_flag_and_failure_artifact
 test_watch_loop_clear_rotation_starts_successor_and_exits_when_halted
 test_steer_rc4_escalates_to_successor
