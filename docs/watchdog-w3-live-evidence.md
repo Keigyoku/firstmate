@@ -90,7 +90,9 @@ The clear proof still exercised the live predecessor, live `/clear`, rotation de
 ## Successor Spawn
 
 The live successor proof used a forced rc4 steer in the isolated tmux server.
-The watchdog generated `fm-state/handoff-latest.md`, started `fm-successor.sh`, spawned a real Claude successor, and retired the predecessor endpoint.
+The original live excerpt below predates the unique per-trigger handoff fix and honestly preserves the then-current `fm-state/handoff-latest.md` path.
+Current production code writes each trigger to `fm-state/handoffs/handoff-<task>-<timestamp>-<pid>.md`, optionally refreshes `fm-state/handoff-latest.md` as a convenience pointer, and passes the unique handoff path to `fm-successor.sh`.
+Successor spawn must consume the unique per-trigger handoff file, not the shared latest pointer.
 
 ```json
 {"type":"successor_spawn","sid":"w3-successor","status":"started","detail":"successor=w3-successor-next handoff=/var/home/mlight/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/fm-home/fm-state/handoff-latest.md brief=/var/home/mlight/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/fm-home/data/w3-successor-next/brief.md","ts":"2026-07-08T21:10:49Z"}
@@ -99,7 +101,8 @@ The watchdog generated `fm-state/handoff-latest.md`, started `fm-successor.sh`, 
 {"type":"successor_complete","sid":"w3-successor","status":"succeeded","detail":"reason=steer_undeliverable","ts":"2026-07-08T21:10:49Z"}
 ```
 
-The final successor pane showed the handoff content in its first prompt.
+The final successor pane excerpt also predates the unique per-trigger handoff fix, so its path is historical evidence rather than the current handoff contract.
+The prompt still demonstrates that the successor received and read the handoff content in its first turn.
 
 ```text
 You are a successor session for `w3-successor-next`.
