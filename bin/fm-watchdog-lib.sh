@@ -385,6 +385,18 @@ fm_watchdog_file_identity() {
   fi
 }
 
+fm_watchdog_compact_generation() {
+  local harness=$1 file=$2
+  case "$harness" in
+    claude)
+      jq -r 'select(.isCompactSummary == true) | .uuid // empty' "$file" 2>/dev/null | tail -1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 fm_watchdog_write_metrics() {
   local path=$1 json=$2 tmp
   mkdir -p "$(dirname "$path")"

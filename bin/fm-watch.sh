@@ -249,17 +249,22 @@ watchdog_marker_key() {
 }
 
 watchdog_check_rotation() {  # <task> <harness> <marker-file>
-  local task=$1 harness=$2 marker=$3 old_sig old_sid file sig new_sid
+  local task=$1 harness=$2 marker=$3 old_sig old_sid old_generation file sig new_sid generation
   [ -s "$marker" ] || return 0
   old_sig=$(sed -n '1p' "$marker")
   old_sid=$(sed -n '2p' "$marker")
+  old_generation=$(sed -n '3p' "$marker")
   file=$(fm_watchdog_session_file "$harness" "$task" 2>/dev/null || true)
   [ -n "$file" ] || return 0
   sig=$(fm_watchdog_file_identity "$file" 2>/dev/null || true)
   [ -n "$sig" ] || return 0
-  [ "$sig" != "$old_sig" ] || return 0
+  generation=$(fm_watchdog_compact_generation "$harness" "$file" 2>/dev/null || true)
+  if [ "$sig" = "$old_sig" ]; then
+    [ -n "$generation" ] || return 0
+    [ "$generation" != "$old_generation" ] || return 0
+  fi
   new_sid=$(fm_watchdog_session_id_from_file "$harness" "$file" 2>/dev/null || basename "$file")
-  fm_watchdog_event compact_rotated "$task" rearmed "old_sid=$old_sid new_sid=$new_sid file=$file"
+  fm_watchdog_event compact_rotated "$task" rearmed "old_sid=$old_sid new_sid=$new_sid file=$file compact_generation=$generation"
   fm_watchdog_arm_session "$task" "$harness" "$file"
   printf '%s\n%s\n' "$old_sig" "$old_sid" > "$STATE/watchdog/.compact-handled-$(watchdog_marker_key "$task")"
   rm -f "$marker"
@@ -336,11 +341,11 @@ watchdog_collect_failure_recent() {
 }
 
 watchdog_start_compact_steer() {
-  local task=$1 context=$2 compact=$3 sig=$4 sid=$5 key=$6 pending=$7 inflight=$8 pid
+  local task=$1 context=$2 compact=$3 sig=$4 sid=$5 key=$6 pending=$7 inflight=$8 generation=$9 pid
   (
     local rc
     if "$SCRIPT_DIR/fm-steer.sh" "$task" "/compact complete current task, then /compact"; then
-      printf '%s\n%s\n' "$sig" "$sid" > "$pending"
+      printf '%s\n%s\n%s\n' "$sig" "$sid" "$generation" > "$pending"
     else
       rc=$?
       fm_watchdog_event compact_steer_failed "$task" "rc=$rc" "context_pct=$context threshold=$compact"
@@ -411,7 +416,7 @@ watchdog_start_successor() {
 }
 
 watchdog_threshold_scan() {
-  local config compact successor pending_retry failure_interval meta task harness metrics context file sig sid key handled pending inflight clear_pending clear_inflight err_file
+  local config compact successor pending_retry failure_interval meta task harness metrics context file sig sid generation key handled pending inflight clear_pending clear_inflight err_file
   watchdog_halted && exit 0
   config=$(fm_watchdog_thresholds 2>/dev/null) || return 0
   compact=$(printf '%s' "$config" | jq -r '.thresholds.compact_at_context_pct // empty' 2>/dev/null || true)
@@ -451,6 +456,7 @@ watchdog_threshold_scan() {
     sig=$(fm_watchdog_file_identity "$file" 2>/dev/null || true)
     [ -n "$sig" ] || continue
     sid=$(fm_watchdog_session_id_from_file "$harness" "$file" 2>/dev/null || basename "$file")
+    generation=$(fm_watchdog_compact_generation "$harness" "$file" 2>/dev/null || true)
     if ! fm_watchdog_session_is_armed "$task" "$harness" "$file"; then
       fm_watchdog_arm_session "$task" "$harness" "$file"
       fm_watchdog_event watchdog_session_armed "$task" armed "harness=$harness sid=$sid file=$file"
@@ -481,7 +487,7 @@ watchdog_threshold_scan() {
     handled=$(cat "$STATE/watchdog/.compact-handled-$key" 2>/dev/null || true)
     [ "$(printf '%s\n' "$handled" | sed -n '1p')" = "$sig" ] && continue
     fm_watchdog_event compact_threshold "$task" triggered "context_pct=$context threshold=$compact sid=$sid"
-    watchdog_start_compact_steer "$task" "$context" "$compact" "$sig" "$sid" "$key" "$pending" "$inflight"
+    watchdog_start_compact_steer "$task" "$context" "$compact" "$sig" "$sid" "$key" "$pending" "$inflight" "$generation"
   done
 }
 

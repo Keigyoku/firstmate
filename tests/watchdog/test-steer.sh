@@ -28,6 +28,23 @@ write_codex_rollout() {
     '{type:"event_msg",payload:{type:"token_count",info:{last_token_usage:{total_tokens:$total},model_context_window:1000},rate_limits:{primary:{used_percent:11},secondary:{used_percent:22}}}}' >> "$path"
 }
 
+write_claude_jsonl() {
+  local path=$1 session_id=$2 compact_uuid=${3:-}
+  mkdir -p "$(dirname "$path")"
+  jq -cn --arg sid "$session_id" '{type:"user",sessionId:$sid,message:{role:"user",content:"fixture"}}' > "$path"
+  if [ -n "$compact_uuid" ]; then
+    jq -cn --arg sid "$session_id" --arg uuid "$compact_uuid" \
+      '{type:"assistant",sessionId:$sid,isCompactSummary:true,uuid:$uuid,message:{role:"assistant",content:[]}}' >> "$path"
+  fi
+}
+
+write_claude_checkpoint() {
+  local dir=$1 session_id=$2 pct=${3:-50}
+  mkdir -p "$dir"
+  jq -cn --arg sid "$session_id" --argjson pct "$pct" \
+    '{version:1,session_id:$sid,fill_pct:$pct,quality:{tool_calls:2}}' > "$dir/$session_id.json"
+}
+
 make_success_double() {
   local path=$1 log=$2
   cat > "$path" <<'SH'
@@ -360,6 +377,62 @@ test_rotation_rearms_new_session() {
   pass "watcher re-arms compact threshold after transcript rotation"
 }
 
+test_same_file_claude_compact_summary_rearms_session() {
+  local home config session_dir checkpoint_dir worktree project_dir session_file double log pending handled status event timeout_cmd project_key
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping same-file compact rotation coverage"
+    return
+  fi
+  home="$TMP_ROOT/claude-same-file-home"
+  config="$TMP_ROOT/claude-same-file-config"
+  session_dir="$TMP_ROOT/claude-same-file-sessions"
+  checkpoint_dir="$TMP_ROOT/claude-same-file-checkpoints"
+  worktree="$TMP_ROOT/claude-same-file-worktree"
+  double="$TMP_ROOT/claude-same-file-double"
+  log="$TMP_ROOT/claude-same-file.log"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=claude"
+  write_fast_threshold_config "$config"
+  project_key=$(bash -c '. "$1"; fm_watchdog_claude_project_key "$2"' _ "$ROOT/bin/fm-watchdog-lib.sh" "$worktree")
+  project_dir="$session_dir/$project_key"
+  session_file="$project_dir/claude-sid.jsonl"
+  write_claude_jsonl "$session_file" claude-sid compact-before
+  write_claude_checkpoint "$checkpoint_dir" claude-sid 50
+  make_success_double "$double" "$log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CLAUDE_SESSION_DIR="$session_dir" \
+    FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR="$checkpoint_dir" FM_STEER_BACKEND_CMD="$double" \
+    FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial same-file watcher pass should arm the Claude session"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CLAUDE_SESSION_DIR="$session_dir" \
+    FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR="$checkpoint_dir" FM_STEER_BACKEND_CMD="$double" \
+    FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "same-file watcher pass should steer compact"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  assert_present "$pending" "successful compact steer should leave pending marker with compact generation"
+  assert_contains "$(cat "$pending")" "compact-before" "pending marker should record the pre-compact summary generation"
+
+  write_claude_jsonl "$session_file" claude-sid compact-after
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CLAUDE_SESSION_DIR="$session_dir" \
+    FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR="$checkpoint_dir" FM_STEER_BACKEND_CMD="$double" \
+    FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "same-file compact summary should be detected on the next pass"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"type":"compact_rotated"' "same-file compact summary should log compact_rotated"
+  assert_contains "$(cat "$event")" 'compact_generation=compact-after' "rotation event should name the new compact generation"
+  handled="$home/state/watchdog/.compact-handled-demo"
+  assert_present "$handled" "same-file compact rotation should write handled marker"
+  pass "watcher re-arms after same-file Claude compact summary"
+}
+
 test_stale_pending_retries_without_rotation() {
   local home config session_dir worktree double log pending status event threshold_count send_count timeout_cmd
   if command -v timeout >/dev/null 2>&1; then
@@ -470,6 +543,7 @@ test_timeout_uses_perl_when_timeout_tools_are_absent
 test_watcher_starts_compact_steer_without_blocking
 test_unarmed_session_is_not_steered_on_first_discovery
 test_rotation_rearms_new_session
+test_same_file_claude_compact_summary_rearms_session
 test_stale_pending_retries_without_rotation
 test_metrics_collection_failure_is_visible_and_throttled
 
