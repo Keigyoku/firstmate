@@ -266,8 +266,17 @@ watchdog_check_rotation() {  # <task> <harness> <marker-file>
   new_sid=$(fm_watchdog_session_id_from_file "$harness" "$file" 2>/dev/null || basename "$file")
   fm_watchdog_event compact_rotated "$task" rearmed "old_sid=$old_sid new_sid=$new_sid file=$file compact_generation=$generation"
   fm_watchdog_arm_session "$task" "$harness" "$file"
-  printf '%s\n%s\n' "$old_sig" "$old_sid" > "$STATE/watchdog/.compact-handled-$(watchdog_marker_key "$task")"
+  printf '%s\n%s\n%s\n' "$old_sig" "$old_sid" "$generation" > "$STATE/watchdog/.compact-handled-$(watchdog_marker_key "$task")"
   rm -f "$marker"
+}
+
+watchdog_compact_handled() {
+  local handled=$1 sig=$2 generation=$3 handled_sig handled_generation
+  handled_sig=$(printf '%s\n' "$handled" | sed -n '1p')
+  [ "$handled_sig" = "$sig" ] || return 1
+  [ -n "$generation" ] || return 0
+  handled_generation=$(printf '%s\n' "$handled" | sed -n '3p')
+  [ "$handled_generation" = "$generation" ]
 }
 
 watchdog_check_clear_rotation() {  # <task> <harness> <marker-file>
@@ -393,19 +402,19 @@ watchdog_halted() {
 }
 
 watchdog_start_successor() {
-  local task=$1 context=$2 reason=$3 rc=${4:-} handoff
+  local task=$1 context=$2 reason=$3 rc=${4:-} handoff tmp
   handoff="$FM_HOME/fm-state/handoff-latest.md"
-  if [ ! -s "$handoff" ]; then
-    mkdir -p "$(dirname "$handoff")"
-    {
-      printf '# Watchdog Handoff\n\n'
-      printf "Predecessor: \`%s\`.\n" "$task"
-      printf 'Reason: %s.\n' "$reason"
-      printf 'Context percent: %s.\n' "$context"
-      [ -z "$rc" ] || printf 'Steer rc: %s.\n' "$rc"
-      printf "Created: \`%s\`.\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    } > "$handoff"
-  fi
+  mkdir -p "$(dirname "$handoff")"
+  tmp=$(mktemp "${handoff}.tmp.XXXXXX")
+  {
+    printf '# Watchdog Handoff\n\n'
+    printf "Predecessor: \`%s\`.\n" "$task"
+    printf 'Reason: %s.\n' "$reason"
+    printf 'Context percent: %s.\n' "$context"
+    [ -z "$rc" ] || printf 'Steer rc: %s.\n' "$rc"
+    printf "Created: \`%s\`.\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$tmp"
+  mv "$tmp" "$handoff"
   fm_watchdog_event successor_threshold "$task" triggered "context_pct=$context reason=$reason handoff=$handoff rc=$rc"
   if "$SCRIPT_DIR/fm-successor.sh" "$task" "$handoff"; then
     fm_watchdog_event successor_complete "$task" succeeded "reason=$reason"
@@ -433,6 +442,10 @@ watchdog_threshold_scan() {
     task=${task%.meta}
     harness=$(fm_meta_get "$meta" harness)
     [ -n "$harness" ] || continue
+    case "$harness" in
+      claude|codex) ;;
+      *) continue ;;
+    esac
     key=$(watchdog_marker_key "$task")
     pending="$STATE/watchdog/.compact-pending-$key"
     inflight="$STATE/watchdog/.compact-steering-$key"
@@ -485,7 +498,7 @@ watchdog_threshold_scan() {
     [ -n "$compact" ] || continue
     awk "BEGIN { exit !($context >= $compact) }" || continue
     handled=$(cat "$STATE/watchdog/.compact-handled-$key" 2>/dev/null || true)
-    [ "$(printf '%s\n' "$handled" | sed -n '1p')" = "$sig" ] && continue
+    watchdog_compact_handled "$handled" "$sig" "$generation" && continue
     fm_watchdog_event compact_threshold "$task" triggered "context_pct=$context threshold=$compact sid=$sid"
     watchdog_start_compact_steer "$task" "$context" "$compact" "$sig" "$sid" "$key" "$pending" "$inflight" "$generation"
   done

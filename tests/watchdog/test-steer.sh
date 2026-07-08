@@ -378,7 +378,7 @@ test_rotation_rearms_new_session() {
 }
 
 test_same_file_claude_compact_summary_rearms_session() {
-  local home config session_dir checkpoint_dir worktree project_dir session_file double log pending handled status event timeout_cmd project_key
+  local home config session_dir checkpoint_dir worktree project_dir session_file double log pending handled status event timeout_cmd project_key threshold_count send_count
   if command -v timeout >/dev/null 2>&1; then
     timeout_cmd=timeout
   elif command -v gtimeout >/dev/null 2>&1; then
@@ -430,6 +430,24 @@ test_same_file_claude_compact_summary_rearms_session() {
   assert_contains "$(cat "$event")" 'compact_generation=compact-after' "rotation event should name the new compact generation"
   handled="$home/state/watchdog/.compact-handled-demo"
   assert_present "$handled" "same-file compact rotation should write handled marker"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CLAUDE_SESSION_DIR="$session_dir" \
+    FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR="$checkpoint_dir" FM_STEER_BACKEND_CMD="$double" \
+    FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "same generation watcher pass should be stopped by test timeout"
+  send_count=$(wc -l < "$log" | tr -d '[:space:]')
+  [ "$send_count" = 1 ] || fail "handled same-file compact generation should not steer again, got $send_count sends"
+
+  write_claude_jsonl "$session_file" claude-sid compact-next
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CLAUDE_SESSION_DIR="$session_dir" \
+    FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR="$checkpoint_dir" FM_STEER_BACKEND_CMD="$double" \
+    FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "new same-file compact generation should be stopped by test timeout"
+  threshold_count=$(grep -c '"type":"compact_threshold"' "$event")
+  [ "$threshold_count" = 2 ] || fail "new compact summary generation should trigger another threshold, got $threshold_count"
+  send_count=$(wc -l < "$log" | tr -d '[:space:]')
+  [ "$send_count" = 2 ] || fail "new compact summary generation should steer again, got $send_count sends"
   pass "watcher re-arms after same-file Claude compact summary"
 }
 
@@ -535,6 +553,34 @@ SH
   pass "watcher reports metrics collection failures with throttling"
 }
 
+test_unsupported_harness_skips_watchdog_metrics() {
+  local home config worktree status event timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping unsupported harness coverage"
+    return
+  fi
+  home="$TMP_ROOT/unsupported-harness-home"
+  config="$TMP_ROOT/unsupported-harness-config"
+  worktree="$TMP_ROOT/unsupported-harness-worktree"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=opencode"
+  write_fast_threshold_config "$config"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "unsupported harness watcher run should be stopped by test timeout"
+  event="$home/fm-state/watchdog.events"
+  if [ -e "$event" ] && grep -q '"type":"metrics_collect_failed"' "$event"; then
+    fail "unsupported harness should not emit metrics collection failures"
+  fi
+  pass "watcher skips unsupported harness metrics"
+}
+
 test_success_delivers_exact_text_and_event
 test_require_target_exists_blocks_delivery
 test_failure_retries_three_then_rc4
@@ -546,5 +592,6 @@ test_rotation_rearms_new_session
 test_same_file_claude_compact_summary_rearms_session
 test_stale_pending_retries_without_rotation
 test_metrics_collection_failure_is_visible_and_throttled
+test_unsupported_harness_skips_watchdog_metrics
 
 echo "# all watchdog steer tests passed"

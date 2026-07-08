@@ -185,6 +185,10 @@ test_watch_loop_clear_rotation_starts_successor_and_exits_when_halted() {
   assert_grep '"type":"clear_steer_started","sid":"demo"' "$event" "clear steer start event should be logged"
   assert_grep '"type":"clear_rotated","sid":"demo","status":"successor_takeover"' "$event" "clear rotation should be logged"
   assert_grep '"type":"successor_spawn_failed","sid":"demo","status":"halted"' "$event" "spawn failure should halt through watch loop"
+  assert_contains "$(cat "$handoff")" "Reason: clear_rotated." "successor handoff should be refreshed for the current trigger"
+  if grep -q 'threshold handoff' "$handoff"; then
+    fail "successor handoff should not reuse stale content"
+  fi
   pass "watch loop clear rotation starts successor and exits when halted"
 }
 
@@ -208,6 +212,7 @@ test_steer_rc4_escalates_to_successor() {
   spawn_double="$TMP_ROOT/steer-successor-spawn-double"
   mkdir -p "$home/state" "$home/fm-state" "$worktree"
   handoff="$home/fm-state/handoff-latest.md"
+  printf 'stale successor handoff\n' > "$handoff"
   fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$worktree" "worktree=$worktree" "backend=tmux" "harness=codex"
   write_successor_config "$config" 85 99
   write_codex_rollout "$session_dir/rollout-demo.jsonl" "$worktree" 900 old-sid
@@ -236,6 +241,9 @@ test_steer_rc4_escalates_to_successor() {
   assert_grep 'reason=steer_undeliverable' "$event" "successor event should record steer-undeliverable reason"
   assert_present "$handoff" "rc4 successor path should create a handoff artifact"
   assert_contains "$(cat "$handoff")" "Reason: steer_undeliverable." "generated handoff should name the successor reason"
+  if grep -q 'stale successor handoff' "$handoff"; then
+    fail "rc4 successor path should not reuse stale handoff content"
+  fi
   assert_present "$home/fm-state/watchdog.halt" "rc4 successor failure should halt the watcher"
   "$timeout_cmd" 2 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
     FM_STEER_BACKEND_CMD="$steer_double" FM_STEER_DOUBLE_LOG="$steer_log" FM_STEER_BACKOFF_SEC=0 \
