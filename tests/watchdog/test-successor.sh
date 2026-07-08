@@ -46,29 +46,39 @@ make_spawn_double() {
   cat > "$path" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_SUCCESSOR_SPAWN_LOG"
-if [ "${FM_SUCCESSOR_DOUBLE_CREATE_META:-0}" = 1 ] && [ "${FM_SUCCESSOR_SPAWN_STATUS:-0}" = 0 ]; then
-  mkdir -p "$FM_HOME/state"
-  id=$1
-  project=$2
-  worktree=$2
-  mode=no-mistakes
-  yolo=off
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --adopt-worktree-path) shift; worktree=$1 ;;
-      --mode) shift; mode=$1 ;;
-      --yolo) shift; yolo=$1 ;;
-    esac
-    shift
+  if [ "${FM_SUCCESSOR_DOUBLE_CREATE_META:-0}" = 1 ] && [ "${FM_SUCCESSOR_SPAWN_STATUS:-0}" = 0 ]; then
+    mkdir -p "$FM_HOME/state"
+    id=$1
+    project=$2
+    worktree=$2
+    mode=no-mistakes
+    yolo=off
+    kind=ship
+    backend=tmux
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --adopt-worktree-path) shift; worktree=$1 ;;
+        --backend) shift; backend=$1 ;;
+        --scout) kind=scout ;;
+        --mode) shift; mode=$1 ;;
+        --yolo) shift; yolo=$1 ;;
+      esac
+      shift
   done
   {
     printf 'window=%s\n' "fm-$id"
     printf 'worktree=%s\n' "$worktree"
     printf 'project=%s\n' "$project"
     printf 'harness=%s\n' "codex"
+    printf 'kind=%s\n' "$kind"
     printf 'mode=%s\n' "$mode"
     printf 'yolo=%s\n' "$yolo"
+    [ "$backend" = tmux ] || printf 'backend=%s\n' "$backend"
   } > "$FM_HOME/state/$id.meta"
+  case "${FM_SUCCESSOR_DOUBLE_READY:-}" in
+    status) printf 'working: accepted successor handoff\n' > "$FM_HOME/state/$id.status" ;;
+    turn) : > "$FM_HOME/state/$id.turn-ended" ;;
+  esac
 fi
 exit "${FM_SUCCESSOR_SPAWN_STATUS:-0}"
 SH
@@ -127,7 +137,8 @@ test_successor_spawns_with_handoff_brief_and_retires_predecessor() {
   make_retire_double "$retire_double" "$retire_log"
 
   FM_HOME="$home" FM_SUCCESSOR_ID=demo-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
-    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_SUCCESSOR_RETIRE_CMD="$retire_double" \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_SUCCESSOR_DOUBLE_CREATE_META=1 FM_SUCCESSOR_DOUBLE_READY=status \
+    FM_SUCCESSOR_RETIRE_CMD="$retire_double" \
     FM_SUCCESSOR_RETIRE_LOG="$retire_log" "$ROOT/bin/fm-successor.sh" demo "$handoff" >/dev/null \
     || fail "successor spawn should succeed"
 
@@ -143,8 +154,75 @@ test_successor_spawns_with_handoff_brief_and_retires_predecessor() {
   [ "$(cat "$retire_log")" = "tmux|target-pane" ] || fail "predecessor should be retired through backend target"
   event="$home/fm-state/watchdog.events"
   assert_grep '"type":"successor_spawn","sid":"demo","status":"started"' "$event" "spawn start event should be logged"
+  assert_grep 'readiness=status' "$event" "spawn success event should record readiness proof"
   assert_grep '"type":"predecessor_retired","sid":"demo","status":"closed"' "$event" "retire event should be logged"
   pass "successor spawns with handoff brief and retires predecessor"
+}
+
+test_successor_preserves_scout_and_pr_metadata() {
+  local home project worktree spawn_log retire_log spawn_double retire_double handoff successor_meta
+  home="$TMP_ROOT/metadata-home"
+  project="$home/project"
+  worktree="$home/worktree"
+  spawn_log="$TMP_ROOT/metadata-spawn.log"
+  retire_log="$TMP_ROOT/metadata-retire.log"
+  spawn_double="$TMP_ROOT/metadata-spawn-double"
+  retire_double="$TMP_ROOT/metadata-retire-double"
+  mkdir -p "$home/state" "$home/fm-state" "$project" "$worktree"
+  handoff="$home/fm-state/handoff-metadata.md"
+  printf 'handoff for metadata successor\n' > "$handoff"
+  fm_write_meta "$home/state/demo.meta" \
+    "window=target-pane" "project=$project" "worktree=$worktree" "backend=tmux" "harness=codex" \
+    "kind=scout" "mode=no-mistakes" "yolo=off" "pr=https://github.com/o/r/pull/42" \
+    "pr_head=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+  make_spawn_double "$spawn_double" "$spawn_log" 0
+  make_retire_double "$retire_double" "$retire_log"
+
+  FM_HOME="$home" FM_SUCCESSOR_ID=demo-metadata-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_SUCCESSOR_DOUBLE_CREATE_META=1 FM_SUCCESSOR_DOUBLE_READY=turn \
+    FM_SUCCESSOR_RETIRE_CMD="$retire_double" FM_SUCCESSOR_RETIRE_LOG="$retire_log" \
+    "$ROOT/bin/fm-successor.sh" demo "$handoff" >/dev/null \
+    || fail "metadata successor spawn should succeed"
+
+  assert_grep "--scout" "$spawn_log" "scout predecessor should spawn scout successor"
+  successor_meta="$home/state/demo-metadata-next.meta"
+  assert_grep 'kind=scout' "$successor_meta" "successor meta should preserve scout kind"
+  assert_grep 'pr=https://github.com/o/r/pull/42' "$successor_meta" "successor meta should carry pr"
+  assert_grep 'pr_head=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' "$successor_meta" "successor meta should carry pr_head"
+  [ "$(cat "$retire_log")" = "tmux|target-pane" ] || fail "metadata predecessor should retire after readiness"
+  pass "successor preserves scout and PR metadata"
+}
+
+test_successor_halts_without_readiness_and_keeps_predecessor_active() {
+  local home project worktree spawn_log retire_log spawn_double retire_double handoff status halt artifact
+  home="$TMP_ROOT/not-ready-home"
+  project="$home/project"
+  worktree="$home/worktree"
+  spawn_log="$TMP_ROOT/not-ready-spawn.log"
+  retire_log="$TMP_ROOT/not-ready-retire.log"
+  spawn_double="$TMP_ROOT/not-ready-spawn-double"
+  retire_double="$TMP_ROOT/not-ready-retire-double"
+  mkdir -p "$home/state" "$home/fm-state" "$project" "$worktree"
+  handoff="$home/fm-state/handoff-not-ready.md"
+  printf 'handoff for not-ready successor\n' > "$handoff"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$project" "worktree=$worktree" "backend=tmux" "harness=codex" "mode=no-mistakes" "yolo=off"
+  make_spawn_double "$spawn_double" "$spawn_log" 0
+  make_retire_double "$retire_double" "$retire_log"
+
+  FM_HOME="$home" FM_SUCCESSOR_ID=demo-not-ready-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_SUCCESSOR_DOUBLE_CREATE_META=1 FM_SUCCESSOR_READY_TIMEOUT=0 \
+    FM_SUCCESSOR_RETIRE_CMD="$retire_double" FM_SUCCESSOR_RETIRE_LOG="$retire_log" \
+    "$ROOT/bin/fm-successor.sh" demo "$handoff" >/dev/null 2>&1
+  status=$?
+  expect_code 1 "$status" "successor without readiness should exit 1"
+  assert_present "$home/state/demo.meta" "predecessor meta should remain active when readiness is unproven"
+  assert_no_grep 'tmux|target-pane' "$retire_log" "predecessor should not retire without readiness"
+  assert_absent "$home/state/demo-not-ready-next.meta" "unready successor meta should be cleaned up"
+  halt="$home/fm-state/watchdog.halt"
+  assert_present "$halt" "unready successor should set halt flag"
+  artifact=$(sed -n 's/^artifact=//p' "$halt")
+  assert_grep "successor readiness could not be proven" "$artifact" "failure artifact should explain missing readiness"
+  pass "successor halts without readiness and keeps predecessor active"
 }
 
 test_successor_carries_x_followup_link() {
@@ -167,6 +245,7 @@ test_successor_carries_x_followup_link() {
 
   FM_HOME="$home" FM_SUCCESSOR_ID=demo-x-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
     FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_SUCCESSOR_DOUBLE_CREATE_META=1 \
+    FM_SUCCESSOR_DOUBLE_READY=status \
     FM_SUCCESSOR_RETIRE_CMD="$retire_double" FM_SUCCESSOR_RETIRE_LOG="$retire_log" \
     "$ROOT/bin/fm-successor.sh" demo "$handoff" >/dev/null \
     || fail "X-linked successor spawn should succeed"
@@ -380,6 +459,8 @@ test_steer_rc4_escalates_to_successor() {
 }
 
 test_successor_spawns_with_handoff_brief_and_retires_predecessor
+test_successor_preserves_scout_and_pr_metadata
+test_successor_halts_without_readiness_and_keeps_predecessor_active
 test_successor_carries_x_followup_link
 test_spawn_failure_writes_halt_flag_and_failure_artifact
 test_invalid_x_link_halts_before_spawn

@@ -91,6 +91,75 @@ successor_meta_matches_worktree() {
   [ "$(meta_value "$meta" worktree)" = "$worktree" ] || return 1
 }
 
+successor_readiness_signal() {
+  local successor=$1 worktree=$2 meta backend target alive
+  meta="$STATE/$successor.meta"
+  [ -f "$meta" ] || return 1
+  [ "$(meta_value "$meta" worktree)" = "$worktree" ] || return 1
+  backend=$(meta_value "$meta" backend)
+  [ -n "$backend" ] || backend=tmux
+  target=$(fm_backend_resolve_selector "$successor" "$STATE" 2>/dev/null || meta_value "$meta" window)
+  if [ -n "$target" ]; then
+    alive=$(fm_backend_agent_alive "$backend" "$target" 2>/dev/null || printf 'unknown')
+    if [ "$alive" = alive ]; then
+      printf 'agent_alive'
+      return 0
+    fi
+  fi
+  if [ -s "$STATE/$successor.status" ]; then
+    printf 'status'
+    return 0
+  fi
+  if [ -e "$STATE/$successor.turn-ended" ]; then
+    printf 'turn-ended'
+    return 0
+  fi
+  return 1
+}
+
+wait_successor_ready() {
+  local successor=$1 worktree=$2 timeout=${FM_SUCCESSOR_READY_TIMEOUT:-30} waited=0 signal
+  case "$timeout" in ''|*[!0-9]*) timeout=30 ;; esac
+  while [ "$waited" -le "$timeout" ]; do
+    if signal=$(successor_readiness_signal "$successor" "$worktree"); then
+      printf '%s' "$signal"
+      return 0
+    fi
+    [ "$waited" -lt "$timeout" ] || break
+    sleep 1
+    waited=$((waited + 1))
+  done
+  return 1
+}
+
+carry_task_metadata() {
+  local predecessor_meta=$1 successor=$2 successor_meta key value tmp
+  successor_meta="$STATE/$successor.meta"
+  [ -f "$successor_meta" ] || return 1
+  for key in pr pr_head; do
+    value=$(meta_value "$predecessor_meta" "$key")
+    [ -n "$value" ] || continue
+    tmp=$(mktemp "$successor_meta.carry.XXXXXX")
+    awk -v k="$key" -v v="$value" '
+      BEGIN { written = 0 }
+      index($0, k "=") == 1 {
+        if (!written) {
+          print k "=" v
+          written = 1
+        }
+        next
+      }
+      { print }
+      END {
+        if (!written) {
+          print k "=" v
+        }
+      }
+    ' "$successor_meta" > "$tmp"
+    mv "$tmp" "$successor_meta"
+  done
+}
+
 carry_x_link() {
   local predecessor_meta=$1 successor=$2 request request_ts followups
   request=$(meta_value "$predecessor_meta" x_request)
@@ -196,6 +265,8 @@ MODEL=$(meta_value "$META" model)
 EFFORT=$(meta_value "$META" effort)
 MODE=$(meta_value "$META" mode)
 YOLO=$(meta_value "$META" yolo)
+KIND=$(meta_value "$META" kind)
+[ -n "$KIND" ] || KIND=ship
 
 if [ -z "$WORKTREE" ]; then
   write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "predecessor meta has no worktree"
@@ -209,11 +280,19 @@ if ! x_link_output=$(validate_x_link "$META" 2>&1); then
   write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "predecessor X link invalid: $x_link_output"
   exit 1
 fi
+case "$KIND" in
+  ship|scout) ;;
+  *)
+    write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "unsupported predecessor kind $KIND"
+    exit 1
+    ;;
+esac
 
 write_successor_brief "$BRIEF" "$PREDECESSOR" "$HANDOFF"
 fm_watchdog_event successor_spawn "$PREDECESSOR" started "successor=$SUCCESSOR_ID handoff=$HANDOFF brief=$BRIEF"
 
 spawn_args=("$SUCCESSOR_ID" "$PROJECT" --adopt-worktree --adopt-worktree-path "$WORKTREE")
+[ "$KIND" != scout ] || spawn_args+=(--scout)
 [ -z "$HARNESS" ] || spawn_args+=(--harness "$HARNESS")
 spawn_args+=(--backend "$BACKEND")
 [ -z "$MODEL" ] || [ "$MODEL" = default ] || spawn_args+=(--model "$MODEL")
@@ -226,9 +305,15 @@ if ! spawn_output=$(run_spawn "${spawn_args[@]}" 2>&1); then
   exit 1
 fi
 
-if [ -z "${FM_SUCCESSOR_SPAWN_CMD:-}" ] && ! successor_meta_matches_worktree "$SUCCESSOR_ID" "$WORKTREE"; then
+if ! successor_meta_matches_worktree "$SUCCESSOR_ID" "$WORKTREE"; then
   cleanup_successor_after_failure "$SUCCESSOR_ID"
   write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "successor did not adopt predecessor worktree $WORKTREE"
+  exit 1
+fi
+
+if ! metadata_output=$(carry_task_metadata "$META" "$SUCCESSOR_ID" 2>&1); then
+  cleanup_successor_after_failure "$SUCCESSOR_ID"
+  write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "metadata carry failed: $metadata_output"
   exit 1
 fi
 
@@ -238,7 +323,13 @@ if ! x_link_output=$(carry_x_link "$META" "$SUCCESSOR_ID" 2>&1); then
   exit 1
 fi
 
-fm_watchdog_event successor_spawn "$PREDECESSOR" succeeded "successor=$SUCCESSOR_ID handoff=$HANDOFF"
+if ! ready_signal=$(wait_successor_ready "$SUCCESSOR_ID" "$WORKTREE"); then
+  cleanup_successor_after_failure "$SUCCESSOR_ID"
+  write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "successor readiness could not be proven for worktree $WORKTREE"
+  exit 1
+fi
+
+fm_watchdog_event successor_spawn "$PREDECESSOR" succeeded "successor=$SUCCESSOR_ID handoff=$HANDOFF readiness=$ready_signal"
 retire_predecessor "$PREDECESSOR" "$META"
 mark_predecessor_retired "$PREDECESSOR" "$META" "$SUCCESSOR_ID" "$HANDOFF"
 fm_watchdog_event predecessor_retired "$PREDECESSOR" closed "successor=$SUCCESSOR_ID"
