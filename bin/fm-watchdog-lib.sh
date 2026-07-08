@@ -34,7 +34,9 @@ fm_watchdog_thresholds() {
   local config_dir=${FM_CONFIG_OVERRIDE:-$FM_HOME/config} config
   config=${FM_WATCHDOG_CONFIG:-$config_dir/watchdog.json}
   if [ -f "$config" ]; then
-    jq -c . "$config"
+    jq -c . "$config" 2>/dev/null && return 0
+    fm_watchdog_event watchdog_config "$config" invalid "malformed JSON; using defaults"
+    fm_watchdog_default_config | jq -c .
   else
     fm_watchdog_default_config | jq -c .
   fi

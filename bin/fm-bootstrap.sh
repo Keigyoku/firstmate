@@ -545,6 +545,20 @@ crew_dispatch_validate() {
   ' "$file"
 }
 
+watchdog_config_validate() {
+  local file
+  file="$CONFIG/watchdog.json"
+  [ -f "$file" ] || return 0
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "MISSING: jq (install: $(install_cmd jq))"
+    return 0
+  fi
+  if ! jq -e . "$file" >/dev/null 2>&1; then
+    echo "WATCHDOG: invalid config/watchdog.json - malformed JSON; using defaults"
+    return 0
+  fi
+}
+
 if [ "${1:-}" = "install" ]; then
   shift
   [ $# -gt 0 ] || { echo "usage: fm-bootstrap.sh install <tool>..." >&2; exit 1; }
@@ -590,6 +604,7 @@ crew=
 [ -f "$CONFIG/crew-harness" ] && crew=$(tr -d '[:space:]' < "$CONFIG/crew-harness" || true)
 [ -n "$crew" ] && [ "$crew" != "default" ] && echo "CREW_HARNESS_OVERRIDE: $crew"
 crew_dispatch_validate
+watchdog_config_validate
 if ! fm_backlog_backend_manual "$CONFIG" && fm_tasks_axi_compatible; then
   echo "TASKS_AXI: available"
 fi

@@ -155,6 +155,7 @@ See [`docs/examples/watchdog.json`](examples/watchdog.json) for a starting point
 When it is absent, `bin/fm-watchdog-lib.sh` uses the same defaults as the example file.
 Set `FM_WATCHDOG_CONFIG` to point at a different JSON file, `FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR` to override Claude checkpoint discovery, or `FM_WATCHDOG_CODEX_SESSION_DIR` to override Codex rollout discovery.
 Current metrics parsing is observe-only and supports Claude token-optimizer checkpoints, Codex rollout files, and an unknown-harness fallback record.
+When it is malformed, bootstrap reports `WATCHDOG: invalid config/watchdog.json - malformed JSON; using defaults`, and the watcher records a `watchdog_config` event before falling back to defaults.
 Metrics snapshots are written under `state/watchdog/metrics-<session-id>.json`, keeping watchdog artifacts inside firstmate's existing runtime-signal directory without mixing them into the watcher's own dotfile internals.
 
 ## Toolchain

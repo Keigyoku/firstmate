@@ -185,6 +185,22 @@ test_threshold_config_override() {
   pass "watchdog thresholds honor FM_CONFIG_OVERRIDE"
 }
 
+test_malformed_threshold_config_falls_back_loudly() {
+  local home config out event
+  home="$TMP_ROOT/malformed-home"
+  config="$TMP_ROOT/malformed-config"
+  mkdir -p "$home" "$config"
+  printf '{\n' > "$config/watchdog.json"
+  out=$(FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" \
+    bash -c '. "$1"; fm_watchdog_thresholds' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  [ "$(printf '%s' "$out" | jq -r '.thresholds.compact_at_context_pct')" = 85 ] \
+    || fail "malformed config should fall back to default compact threshold"
+  event="$home/fm-state/watchdog.events"
+  assert_present "$event" "malformed config should write a visible watchdog event"
+  assert_contains "$(cat "$event")" '"type":"watchdog_config"' "malformed config event should name the config failure"
+  pass "malformed watchdog config falls back loudly"
+}
+
 test_claude_checkpoint_metrics
 test_claude_checkpoint_selection_matches_session
 test_claude_checkpoint_missing_session_is_loud
@@ -195,5 +211,6 @@ test_unknown_harness_is_observe_only_tolerant
 test_codex_metrics_are_scoped_to_task_worktree
 test_threshold_defaults
 test_threshold_config_override
+test_malformed_threshold_config_falls_back_loudly
 
 echo "# all watchdog metrics tests passed"

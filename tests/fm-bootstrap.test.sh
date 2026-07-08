@@ -486,6 +486,23 @@ ROWS
   pass "bootstrap validates crew-dispatch.json and reports malformed or unverified configs"
 }
 
+test_watchdog_config_validation() {
+  local case_dir fakebin out
+  case_dir="$TMP_ROOT/watchdog-config"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  printf '{\n' > "$case_dir/home/config/watchdog.json"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_real_jq "$fakebin"
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+
+  [ "$out" = "WATCHDOG: invalid config/watchdog.json - malformed JSON; using defaults" ] \
+    || fail "malformed watchdog config should be reported exactly, got: $out"
+  pass "bootstrap reports malformed watchdog config"
+}
+
 test_bootstrap_reporting
 test_no_mistakes_min_version
 test_orca_backend_gates_orca_tool_only_when_selected
@@ -497,3 +514,4 @@ test_fleet_sync_timeout_empty_override_uses_default
 test_fleet_sync_timeout_is_computed_before_launch
 test_crew_dispatch_active_rules_are_surfaced
 test_crew_dispatch_validation
+test_watchdog_config_validation
