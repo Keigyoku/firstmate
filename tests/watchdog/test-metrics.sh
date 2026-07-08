@@ -201,6 +201,32 @@ test_malformed_threshold_config_falls_back_loudly() {
   pass "malformed watchdog config falls back loudly"
 }
 
+test_watchdog_events_remain_jsonl_under_concurrency() {
+  local home event detail pids pid count
+  home="$TMP_ROOT/concurrent-events-home"
+  event="$home/fm-state/watchdog.events"
+  mkdir -p "$home/state"
+  detail=$(printf 'payload-%06000d' 1)
+  pids=
+  for worker in 1 2 3 4; do
+    FM_HOME="$home" DETAIL="$detail" bash -c '
+      . "$1"
+      for i in 1 2 3 4 5; do
+        fm_watchdog_event concurrent "worker-$2" ok "$DETAIL-$i"
+      done
+    ' _ "$ROOT/bin/fm-watchdog-lib.sh" "$worker" &
+    pids="$pids $!"
+  done
+  for pid in $pids; do
+    wait "$pid" || fail "concurrent watchdog event writer failed"
+  done
+  count=$(wc -l < "$event" | tr -d '[:space:]')
+  [ "$count" = 20 ] || fail "concurrent event log should contain 20 JSONL records, got $count"
+  jq -e 'select(.type == "concurrent" and .status == "ok")' "$event" >/dev/null \
+    || fail "concurrent event log should remain parseable JSONL"
+  pass "watchdog events remain JSONL under concurrent writers"
+}
+
 test_claude_checkpoint_metrics
 test_claude_checkpoint_selection_matches_session
 test_claude_checkpoint_missing_session_is_loud
@@ -212,5 +238,6 @@ test_codex_metrics_are_scoped_to_task_worktree
 test_threshold_defaults
 test_threshold_config_override
 test_malformed_threshold_config_falls_back_loudly
+test_watchdog_events_remain_jsonl_under_concurrency
 
 echo "# all watchdog metrics tests passed"

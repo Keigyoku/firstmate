@@ -51,16 +51,29 @@ fm_watchdog_events_path() {
 }
 
 fm_watchdog_event() {
-  local type=$1 sid=$2 status=${3:-} detail=${4:-} path
+  local type=$1 sid=$2 status=${3:-} detail=${4:-} path dir tmp rc lock
   path=$(fm_watchdog_events_path)
-  mkdir -p "$(dirname "$path")"
+  dir=$(dirname "$path")
+  mkdir -p "$dir"
+  tmp=$(mktemp "$dir/.watchdog-event.XXXXXX")
   jq -cn \
     --arg type "$type" \
     --arg sid "$sid" \
     --arg status "$status" \
     --arg detail "$detail" \
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{type:$type,sid:$sid,status:$status,detail:$detail,ts:$ts}' >> "$path"
+    '{type:$type,sid:$sid,status:$status,detail:$detail,ts:$ts}' > "$tmp" || {
+      rc=$?
+      rm -f "$tmp"
+      return "$rc"
+    }
+  lock="$STATE/.watchdog-events.lock"
+  fm_lock_acquire_wait "$lock"
+  rc=0
+  cat "$tmp" >> "$path" || rc=$?
+  fm_lock_release "$lock"
+  rm -f "$tmp"
+  return "$rc"
 }
 
 fm_watchdog_metrics_path() {
