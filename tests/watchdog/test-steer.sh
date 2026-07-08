@@ -21,10 +21,11 @@ write_fast_threshold_config() {
 }
 
 write_codex_rollout() {
-  local path=$1 cwd=$2
+  local path=$1 cwd=$2 total=${3:-900} session_id=${4:-watcher-sid}
   mkdir -p "$(dirname "$path")"
-  jq -cn --arg cwd "$cwd" '{type:"session_meta",payload:{session_id:"watcher-sid",cwd:$cwd}}' > "$path"
-  jq -cn '{type:"event_msg",payload:{type:"token_count",info:{last_token_usage:{total_tokens:900},model_context_window:1000},rate_limits:{primary:{used_percent:11},secondary:{used_percent:22}}}}' >> "$path"
+  jq -cn --arg cwd "$cwd" --arg session_id "$session_id" '{type:"session_meta",payload:{session_id:$session_id,cwd:$cwd}}' > "$path"
+  jq -cn --argjson total "$total" \
+    '{type:"event_msg",payload:{type:"token_count",info:{last_token_usage:{total_tokens:$total},model_context_window:1000},rate_limits:{primary:{used_percent:11},secondary:{used_percent:22}}}}' >> "$path"
 }
 
 make_success_double() {
@@ -173,9 +174,71 @@ test_watcher_starts_compact_steer_without_blocking() {
   pass "watcher starts compact steer asynchronously"
 }
 
+test_rotation_rearms_new_session() {
+  local home config session_dir worktree double log pending handled new_sig status event threshold_count timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping watcher rotation coverage"
+    return
+  fi
+  home="$TMP_ROOT/rotation-home"
+  config="$TMP_ROOT/rotation-config"
+  session_dir="$TMP_ROOT/rotation-sessions"
+  worktree="$TMP_ROOT/rotation-worktree"
+  double="$TMP_ROOT/rotation-double"
+  log="$TMP_ROOT/rotation.log"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  make_success_double "$double" "$log"
+  write_codex_rollout "$session_dir/rollout-old.jsonl" "$worktree" 900 old-sid
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial watcher run should be stopped by test timeout"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  assert_present "$pending" "successful compact steer should leave a pending old-session marker"
+  [ "$(sed -n '2p' "$pending")" = old-sid ] || fail "pending marker should record the old session id"
+
+  sleep 1
+  write_codex_rollout "$session_dir/rollout-new-low.jsonl" "$worktree" 0 new-sid
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "rotation watcher run should be stopped by test timeout"
+  handled="$home/state/watchdog/.compact-handled-demo"
+  assert_present "$handled" "rotation should move the old session into handled markers"
+  [ "$(sed -n '2p' "$handled")" = old-sid ] || fail "handled marker should preserve the old session id"
+  new_sig=$(FM_HOME="$home" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    bash -c '. "$1"; file=$(fm_watchdog_session_file codex demo); fm_watchdog_file_identity "$file"' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  [ "$(sed -n '1p' "$handled")" != "$new_sig" ] || fail "rotation must not mark the new session as handled"
+  [ ! -e "$pending" ] || fail "rotation should clear the old pending marker"
+
+  sleep 1
+  write_codex_rollout "$session_dir/rollout-new-high.jsonl" "$worktree" 900 new-sid
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "rearmed watcher run should be stopped by test timeout"
+  event="$home/fm-state/watchdog.events"
+  threshold_count=$(grep -c '"type":"compact_threshold"' "$event")
+  [ "$threshold_count" = 2 ] || fail "new session should trigger its own compact threshold, got $threshold_count"
+  [ "$(tail -n 1 "$log")" = "tmux|target-pane|/compact complete current task, then /compact" ] \
+    || fail "new session threshold should deliver a second compact steer"
+  pass "watcher re-arms compact threshold after transcript rotation"
+}
+
 test_success_delivers_exact_text_and_event
 test_failure_retries_three_then_rc4
 test_timeout_bounds_each_attempt
 test_watcher_starts_compact_steer_without_blocking
+test_rotation_rearms_new_session
 
 echo "# all watchdog steer tests passed"

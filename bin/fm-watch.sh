@@ -256,7 +256,7 @@ watchdog_check_rotation() {  # <task> <harness> <marker-file>
   [ "$sig" != "$old_sig" ] || return 0
   new_sid=$(fm_watchdog_session_id_from_file "$harness" "$file" 2>/dev/null || basename "$file")
   fm_watchdog_event compact_rotated "$task" rearmed "old_sid=$old_sid new_sid=$new_sid file=$file"
-  printf '%s\n%s\n' "$sig" "$new_sid" > "$STATE/watchdog/.compact-handled-$(watchdog_marker_key "$task")"
+  printf '%s\n%s\n' "$old_sig" "$old_sid" > "$STATE/watchdog/.compact-handled-$(watchdog_marker_key "$task")"
   rm -f "$marker"
 }
 
