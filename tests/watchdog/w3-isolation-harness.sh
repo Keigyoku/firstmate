@@ -93,11 +93,23 @@ copy_isolated_claude_auth() {
   [ -f "$SOURCE_CLAUDE_APP_STATE" ] \
     || fail "missing source Claude app-state file: $SOURCE_CLAUDE_APP_STATE"
   install -m 600 "$SOURCE_CLAUDE_CONFIG/.credentials.json" "$CLAUDE_CONFIG/.credentials.json"
-  jq '{
-        oauthAccount,
-        hasCompletedOnboarding: true,
-        autoCompactEnabled: false
-      }' "$SOURCE_CLAUDE_APP_STATE" > "$CLAUDE_CONFIG/.claude.json"
+  jq 'del(
+        .projects,
+        .githubRepoPaths,
+        .agentLastUsed,
+        .announcementImpressions,
+        .closedIssuesLastChecked,
+        .promptQueueUseCount,
+        .routineFiredWatermark,
+        .seenNotifications,
+        .skillUsage,
+        .tipLifetimeShownCounts,
+        .tipsHistory,
+        .transcriptShareDismissed
+      )
+      | .hasCompletedOnboarding = true
+      | .autoCompactEnabled = false
+      | .autoCompactWindowsCache = {}' "$SOURCE_CLAUDE_APP_STATE" > "$CLAUDE_CONFIG/.claude.json"
   chmod 600 "$CLAUDE_CONFIG/.claude.json"
 }
 
