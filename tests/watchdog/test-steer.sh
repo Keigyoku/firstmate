@@ -7,6 +7,24 @@ set -u
 
 TMP_ROOT=$(fm_test_tmproot fm-watchdog-steer-tests)
 
+make_live_tmux_fakebin() {
+  local dir=$1 fakebin
+  fakebin=$(fm_fakebin "$dir")
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  "display-message -p -t target-pane #{pane_id}") printf '%%1\n'; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/tmux"
+  printf '%s\n' "$fakebin"
+}
+
+LIVE_TMUX_FAKEBIN=$(make_live_tmux_fakebin "$TMP_ROOT/live-tmux")
+PATH="$LIVE_TMUX_FAKEBIN:$PATH"
+export PATH
+
 write_config() {
   local dir=$1 retries=$2
   mkdir -p "$dir"
@@ -589,6 +607,42 @@ test_unsupported_harness_skips_watchdog_metrics() {
   pass "watcher skips unsupported harness metrics"
 }
 
+test_stale_meta_skips_watchdog_threshold_scan() {
+  local home config session_dir worktree fakebin status event timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping stale-meta coverage"
+    return
+  fi
+  home="$TMP_ROOT/stale-meta-home"
+  config="$TMP_ROOT/stale-meta-config"
+  session_dir="$TMP_ROOT/stale-meta-sessions"
+  worktree="$TMP_ROOT/stale-meta-worktree"
+  fakebin=$(fm_fakebin "$TMP_ROOT/stale-meta-fakebin")
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  chmod +x "$fakebin/tmux"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=retired-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  write_codex_rollout "$session_dir/rollout-demo.jsonl" "$worktree" 900 same-sid
+
+  PATH="$fakebin:$PATH" "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "stale-meta watcher run should be stopped by test timeout"
+  event="$home/fm-state/watchdog.events"
+  if [ -e "$event" ] && grep -Eq '"type":"(watchdog_session_armed|compact_threshold|clear_threshold|metrics_collect_failed)"' "$event"; then
+    fail "stale meta with a missing backend target should not reach metrics threshold processing"
+  fi
+  pass "watcher skips stale meta records with missing backend targets"
+}
+
 test_success_delivers_exact_text_and_event
 test_require_target_exists_blocks_delivery
 test_failure_retries_three_then_rc4
@@ -601,5 +655,6 @@ test_same_file_claude_compact_summary_rearms_session
 test_stale_pending_retries_without_rotation
 test_metrics_collection_failure_is_visible_and_throttled
 test_unsupported_harness_skips_watchdog_metrics
+test_stale_meta_skips_watchdog_threshold_scan
 
 echo "# all watchdog steer tests passed"

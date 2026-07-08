@@ -7,6 +7,24 @@ set -u
 
 TMP_ROOT=$(fm_test_tmproot fm-watchdog-successor-tests)
 
+make_live_tmux_fakebin() {
+  local dir=$1 fakebin
+  fakebin=$(fm_fakebin "$dir")
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  "display-message -p -t target-pane #{pane_id}") printf '%%1\n'; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/tmux"
+  printf '%s\n' "$fakebin"
+}
+
+LIVE_TMUX_FAKEBIN=$(make_live_tmux_fakebin "$TMP_ROOT/live-tmux")
+PATH="$LIVE_TMUX_FAKEBIN:$PATH"
+export PATH
+
 write_successor_config() {
   local dir=$1 compact=${2:-90} successor=${3:-95}
   mkdir -p "$dir"

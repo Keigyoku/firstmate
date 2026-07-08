@@ -428,6 +428,14 @@ watchdog_start_successor() {
   fi
 }
 
+watchdog_meta_target_exists() {
+  local meta=$1 task=$2 backend target
+  backend=$(fm_backend_of_meta "$meta")
+  target=$(fm_backend_target_of_meta "$meta")
+  [ -n "$target" ] || return 1
+  fm_backend_target_exists "$backend" "$target" "fm-$task"
+}
+
 watchdog_threshold_scan() {
   local config compact successor pending_retry failure_interval meta task harness metrics context file sig sid generation key handled pending inflight clear_pending clear_inflight err_file
   watchdog_halted && exit 0
@@ -450,6 +458,7 @@ watchdog_threshold_scan() {
       claude|codex) ;;
       *) continue ;;
     esac
+    watchdog_meta_target_exists "$meta" "$task" || continue
     key=$(watchdog_marker_key "$task")
     pending="$STATE/watchdog/.compact-pending-$key"
     inflight="$STATE/watchdog/.compact-steering-$key"
