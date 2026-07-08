@@ -208,7 +208,6 @@ test_steer_rc4_escalates_to_successor() {
   spawn_double="$TMP_ROOT/steer-successor-spawn-double"
   mkdir -p "$home/state" "$home/fm-state" "$worktree"
   handoff="$home/fm-state/handoff-latest.md"
-  printf 'steer failure handoff\n' > "$handoff"
   fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$worktree" "worktree=$worktree" "backend=tmux" "harness=codex"
   write_successor_config "$config" 85 99
   write_codex_rollout "$session_dir/rollout-demo.jsonl" "$worktree" 900 old-sid
@@ -235,6 +234,8 @@ test_steer_rc4_escalates_to_successor() {
   event="$home/fm-state/watchdog.events"
   assert_grep '"type":"compact_steer_failed","sid":"demo","status":"rc=4"' "$event" "rc4 steer failure should be logged"
   assert_grep 'reason=steer_undeliverable' "$event" "successor event should record steer-undeliverable reason"
+  assert_present "$handoff" "rc4 successor path should create a handoff artifact"
+  assert_contains "$(cat "$handoff")" "Reason: steer_undeliverable." "generated handoff should name the successor reason"
   assert_present "$home/fm-state/watchdog.halt" "rc4 successor failure should halt the watcher"
   "$timeout_cmd" 2 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
     FM_STEER_BACKEND_CMD="$steer_double" FM_STEER_DOUBLE_LOG="$steer_log" FM_STEER_BACKOFF_SEC=0 \

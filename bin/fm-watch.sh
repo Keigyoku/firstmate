@@ -390,6 +390,17 @@ watchdog_halted() {
 watchdog_start_successor() {
   local task=$1 context=$2 reason=$3 rc=${4:-} handoff
   handoff="$FM_HOME/fm-state/handoff-latest.md"
+  if [ ! -s "$handoff" ]; then
+    mkdir -p "$(dirname "$handoff")"
+    {
+      printf '# Watchdog Handoff\n\n'
+      printf "Predecessor: \`%s\`.\n" "$task"
+      printf 'Reason: %s.\n' "$reason"
+      printf 'Context percent: %s.\n' "$context"
+      [ -z "$rc" ] || printf 'Steer rc: %s.\n' "$rc"
+      printf "Created: \`%s\`.\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "$handoff"
+  fi
   fm_watchdog_event successor_threshold "$task" triggered "context_pct=$context reason=$reason handoff=$handoff rc=$rc"
   if "$SCRIPT_DIR/fm-successor.sh" "$task" "$handoff"; then
     fm_watchdog_event successor_complete "$task" succeeded "reason=$reason"
