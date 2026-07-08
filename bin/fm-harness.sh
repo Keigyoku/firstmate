@@ -26,6 +26,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+# shellcheck source=bin/fm-watchdog-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-watchdog-lib.sh"
 
 detect_own() {
   # Layer 1: environment markers for verified harnesses.
@@ -83,7 +85,10 @@ detect_own() {
 resolve_crew() {
   local crew=
   [ -f "$CONFIG/crew-harness" ] && crew=$(tr -d '[:space:]' < "$CONFIG/crew-harness" || true)
-  if [ -z "$crew" ] || [ "$crew" = "default" ]; then detect_own; else echo "$crew"; fi
+  if [ -z "$crew" ] || [ "$crew" = "default" ]; then
+    crew=$(detect_own)
+  fi
+  fm_watchdog_rotate_harness "$crew"
 }
 
 # Print the first non-empty, non-comment line of config/secondmate-harness

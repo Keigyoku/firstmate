@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout] [--adopt-worktree [--adopt-worktree-path <path>] [--mode <mode>] [--yolo <on|off>]]
-#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
+# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout] [--dry-run] [--adopt-worktree [--adopt-worktree-path <path>] [--mode <mode>] [--yolo <on|off>]]
+#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--dry-run] --secondmate
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
@@ -53,6 +53,9 @@
 #   --scout records kind=scout in the task's meta (report deliverable, scratch worktree;
 #   see AGENTS.md task lifecycle); --secondmate records kind=secondmate and launches in a
 #   provisioned firstmate home; the default is kind=ship.
+#   --dry-run resolves the entry harness and exits before creating windows or
+#   worktrees; it still enforces the embargo gate and returns rc 7 when the
+#   resolved harness is embargoed.
 #   --adopt-worktree is for watchdog successors only: the spawn skips treehouse get
 #   and resumes an existing isolated task worktree.
 #   When paired with --adopt-worktree-path, <project-dir> remains the original
@@ -110,6 +113,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-config-inherit-lib.sh"
 # shellcheck source=bin/fm-backend.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-watchdog-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-watchdog-lib.sh"
 # Skip the watcher guard when re-exec'd for one pair of a batch (FM_SPAWN_NO_GUARD is
 # set by the batch loop below), so the guard runs once for the batch, not once per pair.
 [ -n "${FM_SPAWN_NO_GUARD:-}" ] || "$FM_ROOT/bin/fm-guard.sh" || true
@@ -120,6 +125,7 @@ EFFORT=
 BACKEND_ARG=
 ADOPT_WORKTREE=0
 ADOPT_WORKTREE_PATH=
+DRY_RUN=0
 MODE_OVERRIDE=
 YOLO_OVERRIDE=
 HARNESS_SET=0
@@ -150,6 +156,7 @@ for a in "$@"; do
     --scout) KIND=scout ;;
     --secondmate) KIND=secondmate ;;
     --adopt-worktree) ADOPT_WORKTREE=1 ;;
+    --dry-run) DRY_RUN=1 ;;
     --harness) want_value=harness ;;
     --harness=*) HARNESS_ARG=${a#--harness=}; HARNESS_SET=1 ;;
     --model) want_value=model ;;
@@ -449,6 +456,15 @@ if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
       esac
     fi
   fi
+fi
+
+if fm_watchdog_harness_embargoed "$HARNESS"; then
+  echo "error: harness '$HARNESS' is under watchdog budget embargo; spawn refused at entry" >&2
+  exit 7
+fi
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo "dry-run: spawn $ID harness=$HARNESS kind=$KIND backend=$BACKEND"
+  exit 0
 fi
 
 secondmate_registry_value() {

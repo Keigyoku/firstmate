@@ -272,12 +272,14 @@ test_threshold_defaults() {
   out=$(FM_HOME="$TMP_ROOT/no-config-home" bash -c '. "$1"; fm_watchdog_thresholds' _ "$ROOT/bin/fm-watchdog-lib.sh")
   [ "$(printf '%s' "$out" | jq -r '.thresholds.compact_at_context_pct')" = 85 ] \
     || fail "default compact threshold should be 85"
-  [ "$(printf '%s' "$out" | jq -r 'has("rotate_to")')" = false ] \
-    || fail "default rotation should stay reserved for W4"
-  [ "$(printf '%s' "$out" | jq -r '.thresholds | has("embargo_at_5hr_pct")')" = false ] \
-    || fail "default embargo thresholds should stay reserved for W4"
-  [ "$(printf '%s' "$out" | jq -r '.reserved_w4.embargo_at_5hr_pct')" = 85 ] \
-    || fail "reserved W4 embargo default should be preserved"
+  [ "$(printf '%s' "$out" | jq -r '.rotate_to[0]')" = codex ] \
+    || fail "default rotation should begin with codex"
+  [ "$(printf '%s' "$out" | jq -r '.rotate_to[1]')" = opencode ] \
+    || fail "default rotation should fall back to opencode"
+  [ "$(printf '%s' "$out" | jq -r '.thresholds.embargo_at_5hr_pct')" = 85 ] \
+    || fail "default five-hour embargo threshold should be 85"
+  [ "$(printf '%s' "$out" | jq -r '.thresholds.embargo_at_7d_pct')" = 85 ] \
+    || fail "default seven-day embargo threshold should be 85"
   pass "watchdog thresholds fall back to shipped defaults"
 }
 
