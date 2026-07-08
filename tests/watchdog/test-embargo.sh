@@ -110,7 +110,62 @@ test_budget_embargo_auto_lifts_at_reset_boundary() {
   pass "budget embargo auto-lifts at the provider reset boundary"
 }
 
+test_budget_embargo_auto_lift_waits_for_triggering_bucket() {
+  local home flag metrics future event
+  home="$TMP_ROOT/auto-lift-trigger-home"
+  mkdir -p "$home/state" "$home/config" "$home/state/watchdog"
+  future=$(($(date -u +%s) + 3600))
+  metrics="$home/state/watchdog/metrics-demo.json"
+  FM_HOME="$home" bash -c '. "$1"; fm_watchdog_write_embargo codex demo 22 86 1 "$2" "seven_day_pct>=85"' _ "$ROOT/bin/fm-watchdog-lib.sh" "$future"
+  flag="$home/fm-state/watchdog/embargo-codex"
+  jq -cn --argjson future "$future" '{five_hr_pct:22,seven_day_pct:86,five_hr_reset_at:1,seven_day_reset_at:$future}' > "$metrics"
+  FM_HOME="$home" bash -c '. "$1"; fm_watchdog_embargo_auto_lift codex demo "$2"' _ "$ROOT/bin/fm-watchdog-lib.sh" "$metrics"
+  assert_present "$flag" "auto-lift should not use the unrelated crossed five-hour reset for a seven-day embargo"
+
+  jq -cn '{five_hr_pct:22,seven_day_pct:86,five_hr_reset_at:1,seven_day_reset_at:1}' > "$metrics"
+  FM_HOME="$home" bash -c '. "$1"; fm_watchdog_embargo_auto_lift codex demo "$2"' _ "$ROOT/bin/fm-watchdog-lib.sh" "$metrics"
+  assert_absent "$flag" "auto-lift should remove the embargo once the triggering seven-day reset crosses"
+  event="$home/fm-state/watchdog.events"
+  assert_grep '"type":"embargo","sid":"demo","status":"lifted"' "$event" "trigger-bucket lift transition should be logged"
+  pass "budget embargo auto-lift waits for the triggering reset bucket"
+}
+
+test_budget_embargo_does_not_raise_from_crossed_reset_metrics() {
+  local home config session_dir worktree status flag timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping crossed reset raise coverage"
+    return
+  fi
+  home="$TMP_ROOT/crossed-reset-home"
+  config="$TMP_ROOT/crossed-reset-config"
+  session_dir="$TMP_ROOT/crossed-reset-sessions"
+  worktree="$TMP_ROOT/crossed-reset-worktree"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_embargo_config "$config"
+  write_codex_rollout "$session_dir/rollout-demo.jsonl" "$worktree" 86 22 1
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial crossed-reset watcher pass should arm the session"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "crossed-reset watcher pass should be stopped by test timeout"
+  flag="$home/fm-state/watchdog/embargo-codex"
+  assert_absent "$flag" "watchdog should not raise an embargo from already-reset quota metrics"
+  pass "budget embargo ignores stale quota readings after provider reset"
+}
+
 test_budget_embargo_gate_rotation_and_lift
 test_budget_embargo_auto_lifts_at_reset_boundary
+test_budget_embargo_auto_lift_waits_for_triggering_bucket
+test_budget_embargo_does_not_raise_from_crossed_reset_metrics
 
 echo "# all watchdog embargo tests passed"

@@ -549,13 +549,13 @@ watchdog_threshold_scan() {
     if [ -n "$embargo_5hr" ]; then
       case "$five" in
         ''|null|*[!0-9.]* ) : ;;
-        *) awk "BEGIN { exit !($five >= $embargo_5hr) }" && embargo_reason="five_hr_pct>=$embargo_5hr" ;;
+        *) awk "BEGIN { exit !($five >= $embargo_5hr) }" && ! fm_watchdog_reset_crossed "$five_reset" && embargo_reason="five_hr_pct>=$embargo_5hr" ;;
       esac
     fi
     if [ -z "$embargo_reason" ] && [ -n "$embargo_7d" ]; then
       case "$seven" in
         ''|null|*[!0-9.]* ) : ;;
-        *) awk "BEGIN { exit !($seven >= $embargo_7d) }" && embargo_reason="seven_day_pct>=$embargo_7d" ;;
+        *) awk "BEGIN { exit !($seven >= $embargo_7d) }" && ! fm_watchdog_reset_crossed "$seven_reset" && embargo_reason="seven_day_pct>=$embargo_7d" ;;
       esac
     fi
     [ -z "$embargo_reason" ] || fm_watchdog_write_embargo "$harness" "$task" "$five" "$seven" "$five_reset" "$seven_reset" "$embargo_reason"

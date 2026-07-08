@@ -152,21 +152,85 @@ fm_watchdog_reset_epoch() {
   esac
 }
 
+fm_watchdog_reset_crossed() {
+  local value=$1 now=${2:-}
+  case "$now" in ''|*[!0-9]*) now=$(date -u +%s) ;; esac
+  local reset
+  reset=$(fm_watchdog_reset_epoch "$value" 2>/dev/null) || return 1
+  [ "$now" -ge "$reset" ]
+}
+
+fm_watchdog_embargo_reset_value() {
+  local bucket=$1 flag=$2 metrics=${3:-} value
+  if [ -n "$metrics" ] && [ -f "$metrics" ]; then
+    case "$bucket" in
+      five_hr) value=$(jq -r '.five_hr_reset_at // empty' "$metrics" 2>/dev/null || true) ;;
+      seven_day) value=$(jq -r '.seven_day_reset_at // empty' "$metrics" 2>/dev/null || true) ;;
+      *) return 1 ;;
+    esac
+    [ -n "$value" ] && [ "$value" != null ] && { printf '%s\n' "$value"; return 0; }
+  fi
+  case "$bucket" in
+    five_hr) sed -n 's/^five_hr_reset_at=//p' "$flag" | head -1 ;;
+    seven_day) sed -n 's/^seven_day_reset_at=//p' "$flag" | head -1 ;;
+    *) return 1 ;;
+  esac
+}
+
+fm_watchdog_metric_bucket_blocks_embargo() {
+  local metrics=$1 bucket=$2 threshold=$3 now=$4 pct reset
+  [ -n "$metrics" ] && [ -f "$metrics" ] || return 1
+  case "$threshold" in ''|null|*[!0-9.]* ) return 1 ;; esac
+  case "$bucket" in
+    five_hr)
+      pct=$(jq -r '.five_hr_pct // empty' "$metrics" 2>/dev/null || true)
+      reset=$(jq -r '.five_hr_reset_at // empty' "$metrics" 2>/dev/null || true)
+      ;;
+    seven_day)
+      pct=$(jq -r '.seven_day_pct // empty' "$metrics" 2>/dev/null || true)
+      reset=$(jq -r '.seven_day_reset_at // empty' "$metrics" 2>/dev/null || true)
+      ;;
+    *) return 1 ;;
+  esac
+  case "$pct" in ''|null|*[!0-9.]* ) return 1 ;; esac
+  awk "BEGIN { exit !($pct >= $threshold) }" || return 1
+  fm_watchdog_reset_crossed "$reset" "$now" && return 1
+  return 0
+}
+
 fm_watchdog_embargo_auto_lift() {
-  local harness=$1 sid=$2 metrics=$3 path now reset
+  local harness=$1 sid=$2 metrics=$3 path now reason config embargo_5hr embargo_7d bucket reset has_reason_bucket=1
   path=$(fm_watchdog_embargo_path "$harness") || return 1
   [ -e "$path" ] || return 0
   now=$(date -u +%s)
-  reset=$(sed -n 's/^five_hr_reset_at=//p; s/^seven_day_reset_at=//p' "$path" | while IFS= read -r value; do
-    fm_watchdog_reset_epoch "$value" 2>/dev/null || true
-  done | sort -n | head -1)
-  if [ -z "$reset" ] && [ -n "$metrics" ] && [ -f "$metrics" ]; then
-    reset=$(jq -r '.five_hr_reset_at // empty, .seven_day_reset_at // empty' "$metrics" 2>/dev/null | while IFS= read -r value; do
-      fm_watchdog_reset_epoch "$value" 2>/dev/null || true
-    done | sort -n | head -1)
+  config=$(fm_watchdog_thresholds 2>/dev/null || true)
+  embargo_5hr=$(printf '%s' "$config" | jq -r '.thresholds.embargo_at_5hr_pct // empty' 2>/dev/null || true)
+  embargo_7d=$(printf '%s' "$config" | jq -r '.thresholds.embargo_at_7d_pct // empty' 2>/dev/null || true)
+  if fm_watchdog_metric_bucket_blocks_embargo "$metrics" five_hr "$embargo_5hr" "$now" \
+    || fm_watchdog_metric_bucket_blocks_embargo "$metrics" seven_day "$embargo_7d" "$now"; then
+    return 0
   fi
-  [ -n "$reset" ] || return 0
-  [ "$now" -lt "$reset" ] || fm_watchdog_lift_embargo "$harness" "$sid" "provider_reset"
+  reason=$(sed -n 's/^reason=//p' "$path" | head -1)
+  case "$reason" in *five_hr_pct*) has_reason_bucket=0 ;; esac
+  case "$reason" in *seven_day_pct*) has_reason_bucket=0 ;; esac
+  if [ "$has_reason_bucket" -eq 0 ]; then
+    for bucket in five_hr seven_day; do
+      case "$bucket:$reason" in
+        five_hr:*five_hr_pct*|seven_day:*seven_day_pct*)
+          reset=$(fm_watchdog_embargo_reset_value "$bucket" "$path" "$metrics" 2>/dev/null || true)
+          fm_watchdog_reset_crossed "$reset" "$now" || return 0
+          ;;
+      esac
+    done
+    fm_watchdog_lift_embargo "$harness" "$sid" "provider_reset"
+    return 0
+  fi
+  if [ -n "$metrics" ] && [ -f "$metrics" ]; then
+    for bucket in five_hr seven_day; do
+      reset=$(fm_watchdog_embargo_reset_value "$bucket" "$path" "$metrics" 2>/dev/null || true)
+      fm_watchdog_reset_crossed "$reset" "$now" && { fm_watchdog_lift_embargo "$harness" "$sid" "provider_reset"; return 0; }
+    done
+  fi
 }
 
 fm_watchdog_rotate_harness() {
