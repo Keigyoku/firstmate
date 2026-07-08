@@ -45,6 +45,16 @@ snapshot_global_claude_projects() {  # <output>
   fi
 }
 
+snapshot_global_claude_project_paths() {  # <output>
+  local out=$1
+  mkdir -p "$(dirname "$out")"
+  if [ -d "$GLOBAL_CLAUDE_PROJECTS" ]; then
+    find "$GLOBAL_CLAUDE_PROJECTS" -type f -printf '%P\n' 2>/dev/null | sort > "$out"
+  else
+    : > "$out"
+  fi
+}
+
 snapshot_default_tmux() {  # <prefix>
   local prefix=$1
   {
@@ -144,6 +154,7 @@ prepare() {
   mkdir -p "$SCRATCH" "$FM_SCRATCH_HOME/state" "$FM_SCRATCH_HOME/data" "$FM_SCRATCH_HOME/fm-state"
   snapshot_default_tmux "$SCRATCH/default-tmux-before"
   snapshot_global_claude_projects "$SCRATCH/global-claude-projects.before"
+  snapshot_global_claude_project_paths "$SCRATCH/global-claude-project-paths.before"
   "$REAL_TMUX" -L "$SOCKET" kill-server >/dev/null 2>&1 || true
   "$REAL_TMUX" -L "$SOCKET" new-session -d -s fm-w3-isolation-probe -c "$ROOT"
   "$REAL_TMUX" -L "$SOCKET" ls > "$SCRATCH/private-tmux-ls.txt"
@@ -154,8 +165,11 @@ prepare() {
   write_env_file
   snapshot_default_tmux "$SCRATCH/default-tmux-after-prepare"
   snapshot_global_claude_projects "$SCRATCH/global-claude-projects.after-prepare"
-  cmp -s "$SCRATCH/global-claude-projects.before" "$SCRATCH/global-claude-projects.after-prepare" \
-    || fail "global Claude projects changed during isolation prepare"
+  snapshot_global_claude_project_paths "$SCRATCH/global-claude-project-paths.after-prepare"
+  comm -13 "$SCRATCH/global-claude-project-paths.before" "$SCRATCH/global-claude-project-paths.after-prepare" \
+    > "$SCRATCH/global-claude-project-paths.added-prepare"
+  [ ! -s "$SCRATCH/global-claude-project-paths.added-prepare" ] \
+    || fail "global Claude projects gained new files during isolation prepare"
   cmp -s "$SCRATCH/default-tmux-before.sessions" "$SCRATCH/default-tmux-after-prepare.sessions" \
     || fail "default tmux sessions changed during isolation prepare"
   printf 'prepared W3 isolation harness at %s\n' "$SCRATCH"
@@ -167,8 +181,11 @@ assert_after_live() {
   [ -f "$SCRATCH/global-claude-projects.before" ] || fail "missing before snapshot; run prepare first"
   snapshot_default_tmux "$SCRATCH/default-tmux-after-live"
   snapshot_global_claude_projects "$SCRATCH/global-claude-projects.after-live"
-  cmp -s "$SCRATCH/global-claude-projects.before" "$SCRATCH/global-claude-projects.after-live" \
-    || fail "global Claude projects changed during live proof"
+  snapshot_global_claude_project_paths "$SCRATCH/global-claude-project-paths.after-live"
+  comm -13 "$SCRATCH/global-claude-project-paths.before" "$SCRATCH/global-claude-project-paths.after-live" \
+    > "$SCRATCH/global-claude-project-paths.added-live"
+  [ ! -s "$SCRATCH/global-claude-project-paths.added-live" ] \
+    || fail "global Claude projects gained new files during live proof"
   "$REAL_TMUX" -L "$SOCKET" ls > "$SCRATCH/private-tmux-after-live.txt"
   printf 'isolation assertions passed for %s\n' "$SCRATCH"
 }
