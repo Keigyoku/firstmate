@@ -782,7 +782,7 @@ validate_spawn_worktree() {  # <source> <inspect-target>
 }
 
 validate_adopted_worktree() {
-  local wt_real wt_top wt_top_real root_real
+  local wt_real wt_top wt_top_real root_real proj_real
   wt_real=$(cd "$WT" 2>/dev/null && pwd -P) || {
     echo "error: --adopt-worktree path is not an existing directory: $WT" >&2
     exit 1
@@ -794,6 +794,11 @@ validate_adopted_worktree() {
   fi
   if [ "$wt_real" != "$wt_top_real" ]; then
     echo "error: --adopt-worktree path must be the git worktree root: $WT" >&2
+    exit 1
+  fi
+  proj_real=$PROJ_ABS_REAL
+  if [ -n "$proj_real" ] && [ "$wt_real" = "$proj_real" ]; then
+    echo "error: --adopt-worktree cannot launch in the primary project checkout: $WT" >&2
     exit 1
   fi
   root_real=$(cd "$FM_ROOT" 2>/dev/null && pwd -P) || root_real=

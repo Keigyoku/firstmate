@@ -175,6 +175,7 @@ WORKTREE=$(meta_value "$META" worktree)
 PROJECT=$(meta_value "$META" project)
 HARNESS=$(meta_value "$META" harness)
 BACKEND=$(meta_value "$META" backend)
+[ -n "$BACKEND" ] || BACKEND=tmux
 MODEL=$(meta_value "$META" model)
 EFFORT=$(meta_value "$META" effort)
 MODE=$(meta_value "$META" mode)
@@ -198,7 +199,7 @@ fm_watchdog_event successor_spawn "$PREDECESSOR" started "successor=$SUCCESSOR_I
 
 spawn_args=("$SUCCESSOR_ID" "$PROJECT" --adopt-worktree --adopt-worktree-path "$WORKTREE")
 [ -z "$HARNESS" ] || spawn_args+=(--harness "$HARNESS")
-[ -z "$BACKEND" ] || spawn_args+=(--backend "$BACKEND")
+spawn_args+=(--backend "$BACKEND")
 [ -z "$MODEL" ] || [ "$MODEL" = default ] || spawn_args+=(--model "$MODEL")
 [ -z "$EFFORT" ] || [ "$EFFORT" = default ] || spawn_args+=(--effort "$EFFORT")
 [ -z "$MODE" ] || spawn_args+=(--mode "$MODE")

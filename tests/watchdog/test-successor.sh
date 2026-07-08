@@ -121,7 +121,7 @@ test_successor_spawns_with_handoff_brief_and_retires_predecessor() {
   mkdir -p "$home/state" "$home/fm-state" "$project" "$worktree"
   handoff="$home/fm-state/handoff-latest.md"
   printf 'Continue from W3 HANDOFF MARKER.\n' > "$handoff"
-  fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$project" "worktree=$worktree" "backend=tmux" "harness=claude" "model=default" "effort=default" "mode=local-only" "yolo=on"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$project" "worktree=$worktree" "harness=claude" "model=default" "effort=default" "mode=local-only" "yolo=on"
   make_spawn_double "$spawn_double" "$spawn_log" 0
   make_retire_double "$retire_double" "$retire_log"
 

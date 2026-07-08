@@ -1088,6 +1088,34 @@ test_spawn_autodetect_nesting_resolves_tmux_silently() {
   pass "fm-spawn.sh: auto-detect resolves nested tmux-in-herdr to tmux and stays silent end to end"
 }
 
+test_spawn_adopt_worktree_refuses_primary_project_checkout() {
+  local proj data id state config out status
+  proj="$TMP_ROOT/adopt-primary-project"
+  data="$TMP_ROOT/adopt-primary-data"
+  id="adoptprimaryz6"
+  mkdir -p "$proj"
+  git -C "$proj" init -q
+  git -C "$proj" config user.email fmtest@example.invalid
+  git -C "$proj" config user.name fmtest
+  printf 'initial\n' > "$proj/README.md"
+  git -C "$proj" add README.md
+  git -C "$proj" commit -q -m initial
+  mkdir -p "$data/$id"; printf 'brief\n' > "$data/$id/brief.md"
+  state="$TMP_ROOT/adopt-primary-state"; config="$TMP_ROOT/adopt-primary-config"
+  mkdir -p "$state" "$config"
+
+  out=$(FM_ROOT_OVERRIDE="$ROOT" \
+    FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
+    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --backend tmux --adopt-worktree --adopt-worktree-path "$proj" 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "fm-spawn --adopt-worktree should refuse the primary project checkout"
+  assert_contains "$out" "cannot launch in the primary project checkout" \
+    "fm-spawn did not name the primary project checkout adoption refusal"
+  [ ! -f "$state/$id.meta" ] || fail "refused adopted primary project checkout should not write task meta"
+  pass "fm-spawn.sh: --adopt-worktree refuses the primary project checkout"
+}
+
 test_backend_name_precedence
 test_backend_detect_precedence
 test_backend_detect_cmux_fallback_bundle_id
@@ -1116,3 +1144,4 @@ test_spawn_refuses_unknown_fm_backend_env
 test_spawn_default_backend_writes_no_meta_field
 test_spawn_explicit_backend_flag_beats_autodetect_herdr_env
 test_spawn_autodetect_nesting_resolves_tmux_silently
+test_spawn_adopt_worktree_refuses_primary_project_checkout
