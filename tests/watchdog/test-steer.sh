@@ -73,6 +73,23 @@ make_no_timeout_toolbin() {
   printf '%s\n' "$toolbin"
 }
 
+make_missing_tmux_toolbin() {
+  local dir=$1 toolbin=$1/missing-tmux-bin real tool
+  mkdir -p "$toolbin"
+  cat > "$toolbin/tmux" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${FM_STEER_TMUX_LOG:?}"
+exit 1
+SH
+  chmod +x "$toolbin/tmux"
+  for tool in bash env dirname pwd jq grep sed cut tail cat date mktemp mkdir rm readlink rmdir sleep basename uname stat ln; do
+    real=$(command -v "$tool" || true)
+    [ -n "$real" ] || fail "missing tool for target-exists path: $tool"
+    ln -s "$real" "$toolbin/$tool"
+  done
+  printf '%s\n' "$toolbin"
+}
+
 test_success_delivers_exact_text_and_event() {
   local home config double log event
   home="$TMP_ROOT/success-home"
@@ -96,6 +113,33 @@ test_success_delivers_exact_text_and_event() {
   [ "$(jq -r '.sid' "$event")" = demo ] || fail "event sid should be demo"
   [ "$(jq -r '.status' "$event")" = delivered ] || fail "event status should be delivered"
   pass "steer delivers exact text and writes an append-only event"
+}
+
+test_require_target_exists_blocks_delivery() {
+  local home config double log tmux_log toolbin status event
+  home="$TMP_ROOT/missing-target-home"
+  config="$TMP_ROOT/missing-target-config"
+  double="$TMP_ROOT/missing-target-double"
+  log="$TMP_ROOT/missing-target.log"
+  tmux_log="$TMP_ROOT/missing-target-tmux.log"
+  mkdir -p "$home/state"
+  fm_write_meta "$home/state/demo.meta" "window=missing-pane" "backend=tmux" "harness=claude"
+  write_config "$config" 1
+  make_success_double "$double" "$log"
+  : > "$tmux_log"
+  toolbin=$(make_missing_tmux_toolbin "$TMP_ROOT/missing-target-tools")
+
+  PATH="$toolbin" FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_STEER_BACKEND_CMD="$double" \
+    FM_STEER_DOUBLE_LOG="$log" FM_STEER_TMUX_LOG="$tmux_log" FM_STEER_REQUIRE_TARGET_EXISTS=1 \
+    "$ROOT/bin/fm-steer.sh" demo 'must not send' >/dev/null 2>&1
+  status=$?
+  expect_code 4 "$status" "missing scoped target should exit rc 4"
+  [ ! -s "$log" ] || fail "delivery double must not run when the target-exists guard fails"
+  assert_contains "$(cat "$tmux_log")" 'display-message -p -t missing-pane #{pane_id}' "guard should probe the resolved pane before delivery"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"status":"undeliverable"' "missing target should write an undeliverable steer event"
+  assert_contains "$(cat "$event")" 'target_missing=missing-pane' "missing target event should name the target"
+  pass "steer target-exists guard blocks delivery before send"
 }
 
 test_failure_retries_three_then_rc4() {
@@ -419,6 +463,7 @@ SH
 }
 
 test_success_delivers_exact_text_and_event
+test_require_target_exists_blocks_delivery
 test_failure_retries_three_then_rc4
 test_timeout_bounds_each_attempt
 test_timeout_uses_perl_when_timeout_tools_are_absent
