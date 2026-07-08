@@ -9,6 +9,14 @@ TMP_ROOT=$(fm_test_tmproot fm-watchdog-metrics-tests)
 FIXTURE_DIR="$ROOT/tests/watchdog/fixtures"
 CLAUDE_FIXTURE="$FIXTURE_DIR/token-optimizer-checkpoint.json"
 
+write_codex_rollout() {
+  local path=$1 cwd=$2 total=$3 limit=$4
+  mkdir -p "$(dirname "$path")"
+  jq -cn --arg cwd "$cwd" '{type:"session_meta",payload:{session_id:"sid-" + ($cwd | gsub("[^A-Za-z0-9]"; "-")),cwd:$cwd}}' > "$path"
+  jq -cn --argjson total "$total" --argjson limit "$limit" \
+    '{type:"event_msg",payload:{type:"token_count",info:{last_token_usage:{total_tokens:$total},model_context_window:$limit},rate_limits:{primary:{used_percent:11},secondary:{used_percent:22}}}}' >> "$path"
+}
+
 test_claude_checkpoint_metrics() {
   local out context expected session
   session=$(jq -r '.session_id' "$CLAUDE_FIXTURE")
@@ -134,6 +142,27 @@ test_unknown_harness_is_observe_only_tolerant() {
   pass "unknown harness writes tolerant null metrics"
 }
 
+test_codex_metrics_are_scoped_to_task_worktree() {
+  local home session_dir target_wt other_wt out context
+  home="$TMP_ROOT/codex-scope-home"
+  session_dir="$TMP_ROOT/codex-sessions"
+  target_wt="$TMP_ROOT/worktrees/target"
+  other_wt="$TMP_ROOT/worktrees/other"
+  mkdir -p "$home/state" "$target_wt" "$other_wt"
+  fm_write_meta "$home/state/demo.meta" "worktree=$target_wt" "harness=codex"
+  write_codex_rollout "$session_dir/2026/07/08/rollout-target.jsonl" "$target_wt" 100 1000
+  write_codex_rollout "$session_dir/2026/07/08/rollout-other.jsonl" "$other_wt" 950 1000
+  touch "$session_dir/2026/07/08/rollout-target.jsonl"
+  sleep 1
+  touch "$session_dir/2026/07/08/rollout-other.jsonl"
+
+  out=$(FM_HOME="$home" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    bash -c '. "$1"; fm_watchdog_collect_metrics codex demo' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  context=$(jq -r '.context_pct' "$out")
+  [ "$context" = 10 ] || fail "codex metrics should use the task worktree rollout, got context_pct=$context"
+  pass "codex metrics are scoped to the task worktree"
+}
+
 test_threshold_defaults() {
   local out
   out=$(FM_HOME="$TMP_ROOT/no-config-home" bash -c '. "$1"; fm_watchdog_thresholds' _ "$ROOT/bin/fm-watchdog-lib.sh")
@@ -163,6 +192,7 @@ test_corrupt_claude_checkpoint_is_loud
 test_codex_rollout_selection_matches_session
 test_codex_rollout_missing_session_is_loud
 test_unknown_harness_is_observe_only_tolerant
+test_codex_metrics_are_scoped_to_task_worktree
 test_threshold_defaults
 test_threshold_config_override
 

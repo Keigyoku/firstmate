@@ -93,6 +93,26 @@ fm_watchdog_latest_claude_checkpoint() {
   fm_watchdog_latest_file "$dir" '*.json'
 }
 
+fm_watchdog_claude_checkpoint_for_session() {
+  local session_id=$1 dir=${FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR:-$HOME/.claude/token-optimizer/checkpoints}
+  local file mtime best_file='' best_mtime=-1 found_sid
+  [ -d "$dir" ] || return 1
+  while IFS= read -r -d '' file; do
+    found_sid=$(jq -r '.session_id // empty' "$file" 2>/dev/null || true)
+    [ "$found_sid" = "$session_id" ] || continue
+    mtime=$(fm_path_mtime "$file") || continue
+    case "$mtime" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    if [ "$mtime" -gt "$best_mtime" ]; then
+      best_mtime=$mtime
+      best_file=$file
+    fi
+  done < <(find "$dir" -type f -name '*.json' -print0 2>/dev/null)
+  [ -n "$best_file" ] || return 1
+  printf '%s\n' "$best_file"
+}
+
 fm_watchdog_latest_codex_rollout() {
   local dir=${FM_WATCHDOG_CODEX_SESSION_DIR:-$HOME/.codex/sessions}
   fm_watchdog_latest_file "$dir" 'rollout-*.jsonl'
@@ -156,10 +176,104 @@ fm_watchdog_latest_claude_jsonl() {
   fm_watchdog_latest_file "$dir" '*.jsonl'
 }
 
+fm_watchdog_canonical_path() {
+  local path=$1 dir base
+  if [ -d "$path" ]; then
+    (cd "$path" 2>/dev/null && pwd -P) || printf '%s\n' "$path"
+    return 0
+  fi
+  dir=$(dirname "$path")
+  base=$(basename "$path")
+  (cd "$dir" 2>/dev/null && printf '%s/%s\n' "$(pwd -P)" "$base") || printf '%s\n' "$path"
+}
+
+fm_watchdog_paths_match() {
+  local left=$1 right=$2 left_real right_real
+  [ "$left" = "$right" ] && return 0
+  left_real=$(fm_watchdog_canonical_path "$left")
+  right_real=$(fm_watchdog_canonical_path "$right")
+  [ "$left_real" = "$right_real" ]
+}
+
+fm_watchdog_claude_project_key() {
+  fm_watchdog_canonical_path "$1" | sed 's#/#-#g'
+}
+
+fm_watchdog_latest_claude_jsonl_for_worktree() {
+  local worktree=$1 base=${FM_WATCHDOG_CLAUDE_SESSION_DIR:-$HOME/.claude/projects} dir
+  dir="$base/$(fm_watchdog_claude_project_key "$worktree")"
+  fm_watchdog_latest_file "$dir" '*.jsonl'
+}
+
+fm_watchdog_codex_rollout_cwd() {
+  jq -r 'select(.type == "session_meta") | .payload.cwd // empty' "$1" 2>/dev/null | head -n 1
+}
+
+fm_watchdog_latest_codex_rollout_for_worktree() {
+  local worktree=$1 dir=${FM_WATCHDOG_CODEX_SESSION_DIR:-$HOME/.codex/sessions}
+  local file cwd mtime best_file='' best_mtime=-1
+  [ -d "$dir" ] || return 1
+  while IFS= read -r -d '' file; do
+    cwd=$(fm_watchdog_codex_rollout_cwd "$file")
+    [ -n "$cwd" ] || continue
+    fm_watchdog_paths_match "$cwd" "$worktree" || continue
+    mtime=$(fm_path_mtime "$file") || continue
+    case "$mtime" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    if [ "$mtime" -gt "$best_mtime" ]; then
+      best_mtime=$mtime
+      best_file=$file
+    fi
+  done < <(find "$dir" -type f -name 'rollout-*.jsonl' -print0 2>/dev/null)
+  [ -n "$best_file" ] || return 1
+  printf '%s\n' "$best_file"
+}
+
+fm_watchdog_task_worktree() {
+  local task=$1 meta worktree
+  meta="$STATE/$task.meta"
+  [ -f "$meta" ] || return 1
+  worktree=$(grep '^worktree=' "$meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+  [ -n "$worktree" ] || return 1
+  printf '%s\n' "$worktree"
+}
+
 fm_watchdog_session_file() {
-  case "$1" in
+  local harness=$1 task=${2:-} worktree
+  if [ -n "$task" ]; then
+    worktree=$(fm_watchdog_task_worktree "$task" 2>/dev/null || true)
+    if [ -n "$worktree" ]; then
+      case "$harness" in
+        claude) fm_watchdog_latest_claude_jsonl_for_worktree "$worktree"; return $? ;;
+        codex) fm_watchdog_latest_codex_rollout_for_worktree "$worktree"; return $? ;;
+      esac
+    fi
+  fi
+  case "$harness" in
     claude) fm_watchdog_latest_claude_jsonl ;;
     codex) fm_watchdog_latest_codex_rollout ;;
+    *) return 1 ;;
+  esac
+}
+
+fm_watchdog_session_id_from_file() {
+  local harness=$1 file=$2 sid
+  case "$harness" in
+    claude)
+      sid=$(basename "$file")
+      printf '%s\n' "${sid%.jsonl}"
+      ;;
+    codex)
+      sid=$(jq -r 'select(.type == "session_meta") | .payload.session_id // .payload.id // empty' "$file" 2>/dev/null | head -n 1)
+      if [ -n "$sid" ]; then
+        printf '%s\n' "$sid"
+      else
+        sid=$(basename "$file")
+        sid=${sid%.jsonl}
+        printf '%s\n' "${sid#rollout-}"
+      fi
+      ;;
     *) return 1 ;;
   esac
 }
@@ -274,18 +388,27 @@ fm_watchdog_unknown_metrics_json() {
 }
 
 fm_watchdog_collect_metrics() {
-  local harness=$1 session_id=$2 path metrics source
-  path=$(fm_watchdog_metrics_path "$session_id")
+  local harness=$1 task=$2 path metrics source session_file session_id meta
+  path=$(fm_watchdog_metrics_path "$task")
+  meta="$STATE/$task.meta"
   case "$harness" in
     claude)
-      source=$(fm_watchdog_latest_claude_checkpoint_for_session "$session_id") \
-        || { fm_watchdog_parser_mismatch "no claude token-optimizer checkpoint found for session: $session_id"; return $?; }
-      metrics=$(fm_watchdog_claude_metrics_json "$harness" "$session_id" "$source") || return $?
+      session_file=$(fm_watchdog_session_file "$harness" "$task" 2>/dev/null || true)
+      if [ -f "$meta" ]; then
+        [ -n "$session_file" ] || { fm_watchdog_parser_mismatch "no claude transcript found for $task"; return $?; }
+        session_id=$(fm_watchdog_session_id_from_file "$harness" "$session_file") || return $?
+        source=$(fm_watchdog_claude_checkpoint_for_session "$session_id") \
+          || { fm_watchdog_parser_mismatch "no claude token-optimizer checkpoint found for $session_id"; return $?; }
+      else
+        source=$(fm_watchdog_latest_claude_checkpoint) \
+          || { fm_watchdog_parser_mismatch "no claude token-optimizer checkpoint found"; return $?; }
+      fi
+      metrics=$(fm_watchdog_claude_metrics_json "$harness" "$task" "$source") || return $?
       ;;
     codex)
-      source=$(fm_watchdog_latest_codex_rollout_for_session "$session_id") \
-        || { fm_watchdog_parser_mismatch "no codex rollout file found for session: $session_id"; return $?; }
-      metrics=$(fm_watchdog_codex_metrics_json "$harness" "$session_id" "$source") || return $?
+      source=$(fm_watchdog_session_file "$harness" "$task") \
+        || { fm_watchdog_parser_mismatch "no codex rollout file found for $task"; return $?; }
+      metrics=$(fm_watchdog_codex_metrics_json "$harness" "$task" "$source") || return $?
       ;;
     *)
       metrics=$(fm_watchdog_unknown_metrics_json "$harness")

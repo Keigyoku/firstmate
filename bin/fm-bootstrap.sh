@@ -45,7 +45,7 @@
 #          the expected Orca developer CLI commands in `orca --help`.
 #          no-mistakes is also MISSING when its installed version is older than
 #          1.31.2.
-#          tasks-axi and quota-axi are required bootstrap tools (same class as
+#          tasks-axi, quota-axi, and jq are required bootstrap tools (same class as
 #          lavish-axi). tasks-axi is also version-gated (0.1.1+); an installed
 #          but incompatible build reports MISSING like no-mistakes. When
 #          config/backlog-backend is not manual and tasks-axi is compatible,
@@ -322,8 +322,8 @@ install_cmd() {
 
 BACKEND=$(fm_backend_name)
 case "$BACKEND" in
-  orca) TOOLS="orca node gh no-mistakes gh-axi chrome-devtools-axi lavish-axi tasks-axi quota-axi" ;;
-  *) TOOLS="tmux node gh treehouse no-mistakes gh-axi chrome-devtools-axi lavish-axi tasks-axi quota-axi" ;;
+  orca) TOOLS="orca node gh jq no-mistakes gh-axi chrome-devtools-axi lavish-axi tasks-axi quota-axi" ;;
+  *) TOOLS="tmux node gh jq treehouse no-mistakes gh-axi chrome-devtools-axi lavish-axi tasks-axi quota-axi" ;;
 esac
 NO_MISTAKES_MIN_MAJOR=1
 NO_MISTAKES_MIN_MINOR=31

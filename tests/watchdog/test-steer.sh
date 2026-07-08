@@ -13,6 +13,20 @@ write_config() {
   jq --argjson retries "$retries" '.steer_retries = $retries' "$ROOT/docs/examples/watchdog.json" > "$dir/watchdog.json"
 }
 
+write_fast_threshold_config() {
+  local dir=$1
+  mkdir -p "$dir"
+  jq '.thresholds.compact_at_context_pct = 1 | .steer_retries = 1 | .steer_timeout_sec = 5 | .poll_interval_sec = 30' \
+    "$ROOT/docs/examples/watchdog.json" > "$dir/watchdog.json"
+}
+
+write_codex_rollout() {
+  local path=$1 cwd=$2
+  mkdir -p "$(dirname "$path")"
+  jq -cn --arg cwd "$cwd" '{type:"session_meta",payload:{session_id:"watcher-sid",cwd:$cwd}}' > "$path"
+  jq -cn '{type:"event_msg",payload:{type:"token_count",info:{last_token_usage:{total_tokens:900},model_context_window:1000},rate_limits:{primary:{used_percent:11},secondary:{used_percent:22}}}}' >> "$path"
+}
+
 make_success_double() {
   local path=$1 log=$2
   cat > "$path" <<'SH'
@@ -126,8 +140,42 @@ test_timeout_bounds_each_attempt() {
   pass "steer timeout bounds a stuck backend attempt"
 }
 
+test_watcher_starts_compact_steer_without_blocking() {
+  local home config session_dir worktree double log status event timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping watcher async steer coverage"
+    return
+  fi
+  home="$TMP_ROOT/watch-home"
+  config="$TMP_ROOT/watch-config"
+  session_dir="$TMP_ROOT/watch-sessions"
+  worktree="$TMP_ROOT/watch-worktree"
+  double="$TMP_ROOT/watch-sleep-double"
+  log="$TMP_ROOT/watch-sleep.log"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  write_codex_rollout "$session_dir/rollout-demo.jsonl" "$worktree"
+  make_sleep_double "$double" "$log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "watcher should still be sleeping its normal poll when the test timeout stops it"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"type":"compact_steer_started"' "watcher should record async steer start before the backend send completes"
+  sleep 5
+  pass "watcher starts compact steer asynchronously"
+}
+
 test_success_delivers_exact_text_and_event
 test_failure_retries_three_then_rc4
 test_timeout_bounds_each_attempt
+test_watcher_starts_compact_steer_without_blocking
 
 echo "# all watchdog steer tests passed"
