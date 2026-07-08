@@ -142,7 +142,7 @@ fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
   fi
   # Just a bare prompt glyph = empty composer (idle).
   case "$stripped" in
-    '>'|'❯'|'$'|'%'|'#') printf 'empty'; return 0 ;;
+    '>'|'❯'|'›'|'$'|'%'|'#') printf 'empty'; return 0 ;;
   esac
   # A busy footer landing on the cursor line is not pending input.
   if printf '%s' "$stripped" | grep -qiE "${FM_BUSY_REGEX:-$FM_TMUX_BUSY_REGEX_DEFAULT}"; then
