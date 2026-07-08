@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Observe-only session metrics collection for the firstmate watchdog.
+# Session metrics, config, transcript, and event helpers for the firstmate watchdog.
 #
-# fm_watchdog_collect_metrics <harness> <session_id> writes one metrics snapshot
-# to $STATE/watchdog/metrics-<session_id>.json.
+# fm_watchdog_collect_metrics <harness> <task-id> writes one metrics snapshot
+# to $STATE/watchdog/metrics-<task-id>.json.
 # The path is under state/watchdog so watchdog artifacts stay with firstmate's
 # existing runtime signals without mixing into the watcher's own dotfile internals.
 

@@ -2,6 +2,9 @@
 # Firstmate watcher.
 # Classifies supervision wakes in bash. In normal mode it absorbs benign wakes
 # and keeps blocking; it queues and exits only for actionable wakes.
+# Before each normal wake scan it also runs the session-metrics watchdog, which
+# can steer a non-secondmate Claude/Codex task into an unmanned compact cycle
+# when configured context thresholds are crossed.
 # The no-verb signal and stale path is absorb-only-when-provably-working: a wake
 # is absorbed only when the crew shows POSITIVE evidence it is still working (an
 # actively-running no-mistakes step, or a backend busy signal), and surfaced

@@ -27,6 +27,10 @@ For herdr, that pane fallback trusts a native `busy` verdict outright, but corro
 For whole-fleet read-only review, `bin/fm-fleet-snapshot.sh --json` emits schema `fm-fleet-snapshot.v1` from the backlog, task metadata, current crew state, endpoint probes, PR/report pointers, scout reports, and secondmate return-channel guidance.
 `bin/fm-fleet-view.sh` renders that snapshot as Markdown for humans, so bearings and manual fleet reviews consume one structured contract instead of reparsing raw fleet files.
 The script header owns the exact JSON schema.
+The same watcher also runs a local session-metrics watchdog before normal wake scanning.
+It reads optional `config/watchdog.json` thresholds, collects Claude token-optimizer checkpoint metrics and Codex rollout token-count metrics where available, writes snapshots under `state/watchdog/`, and records JSONL events under `fm-state/watchdog.events`.
+When a non-secondmate task's `context_pct` reaches `thresholds.compact_at_context_pct`, the watcher starts one bounded backend-aware `fm-steer.sh` delivery that asks the task to complete the current unit and compact, then waits for a new Claude or Codex transcript identity before considering the compact handled.
+Pending compact steers are rate-limited by `compact_pending_retry_sec`, metrics-parser failures are throttled by `metrics_failure_event_interval_sec`, and malformed watchdog config falls back to defaults after a bootstrap `WATCHDOG:` diagnostic.
 Optional X mode rides the same check path: the locked session-start bootstrap step drops a local `state/x-watch.check.sh` shim only after the user opts in with `FMX_PAIRING_TOKEN`, and non-X homes keep the default watcher behavior.
 
 Routine re-arms go through `bin/fm-watch-arm.sh`, which forks the watcher as a tracked child, verifies it is genuinely alive with a fresh liveness beacon, and prints exactly one honest status line (`started` / `healthy` / `FAILED`, the last exiting non-zero) - never a false `already running` off a dying process.

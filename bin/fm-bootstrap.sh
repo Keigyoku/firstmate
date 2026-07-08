@@ -7,6 +7,7 @@
 #                 "CREW_HARNESS_OVERRIDE: <name>",
 #                 "CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>",
 #                 "CREW_DISPATCH: active config/crew-dispatch.json" plus indented rules,
+#                 "WATCHDOG: invalid config/watchdog.json - malformed JSON; using defaults",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
 #                 "TASKS_AXI: available", "TANGLE: <remediation>",
 #                 "SECONDMATE_SYNC: secondmate <id>: skipped: <reason>",
@@ -46,7 +47,9 @@
 #          no-mistakes is also MISSING when its installed version is older than
 #          1.31.2.
 #          tasks-axi, quota-axi, and jq are required bootstrap tools (same class as
-#          lavish-axi). tasks-axi is also version-gated (0.1.1+); an installed
+#          lavish-axi). jq backs dispatch-profile validation, watchdog config
+#          validation, X-mode clients, watchdog metrics parsing, and JSON-speaking
+#          backends. tasks-axi is also version-gated (0.1.1+); an installed
 #          but incompatible build reports MISSING like no-mistakes. When
 #          config/backlog-backend is not manual and tasks-axi is compatible,
 #          bootstrap prints TASKS_AXI: available. quota-axi is required because

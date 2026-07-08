@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Backend-aware watchdog steer.
-# Usage: fm-steer.sh <session-id> <text>
+# Usage: fm-steer.sh <task-id-or-selector> <text>
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,7 +14,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-watchdog-lib.sh"
 
 if [ "$#" -lt 2 ]; then
-  echo "usage: fm-steer.sh <session-id> <text>" >&2
+  echo "usage: fm-steer.sh <task-id-or-selector> <text>" >&2
   exit 2
 fi
 
