@@ -554,14 +554,17 @@ fm_backend_herdr_current_path() {  # <target>
     | jq -r '.result.pane.foreground_cwd // empty' 2>/dev/null
 }
 
-# fm_backend_herdr_send_text_line: send one line of TEXT then submit,
-# ATOMICALLY - mirrors tmux's `send-keys -t T text Enter`. Used for the fixed
-# spawn-time commands (treehouse get, the GOTMPDIR export). `pane run` types
-# the command and submits it in one call (verified).
+# fm_backend_herdr_send_text_line: send one line of TEXT then submit. Used for
+# the fixed spawn-time commands (treehouse get, the GOTMPDIR export). `pane
+# run` was verified on 0.7.1, but 0.7.3 can report success without executing
+# on restored panes, so use the same primitive pair as interactive sends. A
+# just-created or just-restored herdr pane can answer `pane get` before its
+# shell is ready to accept input, so settle briefly before typing.
 fm_backend_herdr_send_text_line() {  # <target> <text>
   fm_backend_herdr_target_ready "$1" || return 1
-  sleep "$FM_BACKEND_HERDR_INPUT_SETTLE"
-  fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane run "$FM_BACKEND_HERDR_PANE" "$2" >/dev/null 2>&1
+  sleep "${FM_BACKEND_HERDR_SEND_LINE_SETTLE:-0.5}"
+  fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane send-text "$FM_BACKEND_HERDR_PANE" "$2" >/dev/null 2>&1 || return 1
+  fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane send-keys "$FM_BACKEND_HERDR_PANE" enter >/dev/null 2>&1
 }
 
 # fm_backend_herdr_send_literal: send TEXT as literal, UNSUBMITTED input - the
