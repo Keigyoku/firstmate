@@ -49,8 +49,9 @@
 #          tasks-axi, quota-axi, and jq are required bootstrap tools (same class as
 #          lavish-axi). jq backs dispatch-profile validation, watchdog config
 #          validation, X-mode clients, watchdog metrics parsing, and JSON-speaking
-#          backends. tasks-axi is also version-gated (0.1.1+); an installed
-#          but incompatible build reports MISSING like no-mistakes. When
+#          backends. tasks-axi is also version and feature gated (0.1.1+
+#          with update --archive-body); an installed but incompatible build
+#          reports MISSING like no-mistakes. When
 #          config/backlog-backend is not manual and tasks-axi is compatible,
 #          bootstrap prints TASKS_AXI: available. quota-axi is required because
 #          crew-dispatch quota-balanced may call it; fm-dispatch-select.sh still
