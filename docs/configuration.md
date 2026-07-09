@@ -119,11 +119,11 @@ The verified adapter knowledge - busy signatures, interrupt and exit commands, s
 Launch mechanics, including the verified command templates, live in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh).
 Primary-session turn-end guard integrations for verified harnesses are tracked as repo-level hook files and documented in [`docs/turnend-guard.md`](turnend-guard.md).
 `config/crew-harness` is a local, gitignored file containing one adapter name for crewmate and scout launches.
-When it is absent or contains `default`, crewmates mirror the firstmate's own harness.
+When it is absent or contains `default`, crewmates start from the firstmate's own harness, then watchdog rotation can move them to the first non-embargoed `rotate_to` entry.
 `config/secondmate-harness` is a separate local, gitignored file containing the adapter the primary uses to launch secondmate agents, optionally followed by model and effort tokens on the same line.
 The first non-empty, non-comment line is parsed as `<harness> [<model>] [<effort>]`.
 A bare `<harness>` preserves the previous behavior: harness only, with no model or effort launch flag.
-When the harness token is absent or `default`, secondmate launch falls back through `config/crew-harness` and then the primary's own harness, and no model or effort is read from that file.
+When the harness token is absent or `default`, secondmate launch falls back through the active crew harness, including watchdog rotation, and no model or effort is read from that file.
 `fm-harness.sh secondmate-model` and `fm-harness.sh secondmate-effort` expose only the optional tokens from `config/secondmate-harness`; `config/crew-harness` remains a bare adapter-name file.
 An explicit harness argument to `fm-spawn.sh` still overrides either config file for that spawn only.
 An explicit `--model` or `--effort` overrides the matching token from `config/secondmate-harness`; an explicit harness or raw launch command starts with clean model and effort defaults unless those flags are also passed.
@@ -144,7 +144,7 @@ See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a star
 When the file exists, bootstrap validates it with `jq`.
 Valid files produce a `CREW_DISPATCH: active config/crew-dispatch.json` block that lists each rule and prints `default:` when present.
 Malformed JSON, an unverified harness, a malformed array profile, an unknown `select`, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`; missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
-If no dispatch rule fits, firstmate uses the dispatch profile `default` when present, then falls back to `config/crew-harness`.
+If no dispatch rule fits, firstmate uses the dispatch profile `default` when present, then falls back through `fm-harness.sh crew`, including watchdog rotation.
 Because the spawn backstop is gated by file presence, any fallback path after a missing match, validation error, or missing `jq` still passes a resolved harness explicitly until the file is fixed or removed.
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
 
@@ -318,6 +318,7 @@ FM_STEER_SEND_SETTLE=0  # fm-send settle delay used by fm-steer delivery; defaul
 FM_SUCCESSOR_ID=        # test/diagnostic override for the watchdog successor task id; normally generated from the predecessor id and UTC time
 FM_SUCCESSOR_READY_TIMEOUT=30      # seconds fm-successor waits for readiness proof before halting the watchdog
 FM_SUCCESSOR_SPAWN_CMD= # test/diagnostic override for the fm-successor spawn command; receives the fm-spawn-compatible argument vector
+FM_SUCCESSOR_RETIRE_CMD= # test/diagnostic override for fm-successor's predecessor endpoint retirement command
 GROK_HOME=              # optional Grok config home for firstmate's global grok turn-end hook; defaults to ~/.grok
 FM_SEND_RETRIES=3       # fm-send Enter-retry attempts after typing the line once
 FM_SEND_SLEEP=0.4       # seconds between fm-send submit checks

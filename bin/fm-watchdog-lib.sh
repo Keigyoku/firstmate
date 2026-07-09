@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Session metrics, config, transcript, and event helpers for the firstmate watchdog.
+# Session metrics, config, transcript, embargo, and event helpers for the firstmate watchdog.
 #
 # fm_watchdog_collect_metrics <harness> <task-id> writes one metrics snapshot
 # to $STATE/watchdog/metrics-<task-id>.json.
 # The path is under state/watchdog so watchdog artifacts stay with firstmate's
 # existing runtime signals without mixing into the watcher's own dotfile internals.
+# Budget embargo flags live under $FM_HOME/fm-state/watchdog because they are
+# persistent provider-state gates owned by the spawner, not per-task runtime signals.
 
 FM_WATCHDOG_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_WATCHDOG_DEFAULT_ROOT="$(cd "$FM_WATCHDOG_LIB_DIR/.." && pwd)"

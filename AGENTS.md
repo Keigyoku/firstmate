@@ -76,7 +76,7 @@ bin/                 helper scripts, committed; read each script's header before
 .env                 optional X-mode pairing token; LOCAL, gitignored; presence-gates section 14
 config/crew-harness  crewmate harness override; LOCAL, gitignored; absent or "default" = same as firstmate. Inherited as the literal file: a concrete primary adapter value also controls a secondmate home's own crewmates (section 4)
 config/crew-dispatch.json  optional crewmate dispatch profiles; LOCAL, gitignored; firstmate-maintained but human-editable natural-language rules that choose a per-task harness/model/effort profile (section 4). Inherited by secondmate homes
-config/secondmate-harness  harness the PRIMARY uses to launch SECONDMATE agents, optionally followed by a model and effort token on the same line ("<harness> [<model>] [<effort>]"; section 4); LOCAL, gitignored; absent or "default" harness falls back to config/crew-harness then firstmate's own. The primary's own setting; NOT inherited into secondmate homes (secondmates do not spawn secondmates)
+config/secondmate-harness  harness the PRIMARY uses to launch SECONDMATE agents, optionally followed by a model and effort token on the same line ("<harness> [<model>] [<effort>]"; section 4); LOCAL, gitignored; absent or "default" harness falls back through the active crew harness. The primary's own setting; NOT inherited into secondmate homes (secondmates do not spawn secondmates)
 config/backlog-backend  backlog backend override; LOCAL, gitignored; absent or "tasks-axi" = default tasks-axi backend, "manual" = force hand-editing; inherited by secondmate homes (section 10)
 config/backend  runtime session-provider backend override for new tasks; LOCAL, gitignored; absent = falls through to runtime auto-detection (the runtime firstmate itself is executing inside), then tmux; tmux is the verified reference backend (docs/tmux-backend.md), while herdr, zellij, orca, and cmux are experimental spawn backends (docs/herdr-backend.md, docs/zellij-backend.md, docs/orca-backend.md, docs/cmux-backend.md) - herdr and cmux can also be selected by runtime auto-detection, zellij and orca never are (always explicit), and codex-app is not accepted; see docs/codex-app-backend.md; not inherited into secondmate homes
 config/watchdog.json  optional session-metrics watchdog thresholds; LOCAL, gitignored; malformed JSON reports WATCHDOG and falls back to defaults (section 8; docs/configuration.md "Watchdog metrics")
@@ -218,7 +218,7 @@ If the captain expresses a standing dispatch preference such as "use grok for ne
 
 Crewmates default to the same harness you are running on.
 The captain may override the static default at any time, typically at bootstrap: record the choice in `config/crew-harness` (a single adapter name; absent or `default` means mirror your own harness).
-Resolve `default` with `bin/fm-harness.sh`; resolve the active static crewmate harness with `bin/fm-harness.sh crew`.
+Resolve `default` with `bin/fm-harness.sh`; resolve the active crewmate harness with `bin/fm-harness.sh crew`, including watchdog `rotate_to` fallback away from embargoed harnesses.
 Verified adapter names are `claude`, `codex`, `opencode`, `pi`, `grok`, `cursor`, and `hermes`.
 
 ### Crew dispatch profiles
@@ -266,7 +266,7 @@ For a chosen rule with a single-object `use`, or an array `use` with no `select`
 For a chosen rule with `select: "quota-balanced"`, pipe the full rule JSON to `bin/fm-dispatch-select.sh` and use the compact JSON profile it prints.
 Extract that chosen concrete profile `(harness, model, effort)` and pass it to `bin/fm-spawn.sh` with explicit `--harness`, `--model`, and `--effort` flags for the axes that are set.
 If no rule fits, use `default`.
-If `default` is absent, fall back to `config/crew-harness` through `bin/fm-harness.sh crew`, exactly as the static path did before dispatch profiles, but still pass that resolved harness explicitly.
+If `default` is absent, fall back to the active crew harness through `bin/fm-harness.sh crew`, including watchdog rotation, but still pass that resolved harness explicitly.
 This is enforced: when `config/crew-dispatch.json` exists, `bin/fm-spawn.sh` refuses crewmate and scout launches that do not include an explicit harness (`--harness <name>`, a positional adapter name, or a raw launch command).
 That refusal is the consultation backstop, so the rules are never silently skipped.
 The requirement is gated only on the file's presence; when the file is absent, `fm-spawn.sh` keeps resolving the crewmate harness from `config/crew-harness` as before.
@@ -305,8 +305,8 @@ If the selected profile asks for an effort value the selected harness does not a
 Bootstrap reports this as a `CREW_DISPATCH` diagnostic when it can see the invalid harness/effort pair in `config/crew-dispatch.json`.
 
 Secondmates can run on a different harness than crewmates.
-`config/secondmate-harness` (local, gitignored) is the harness the primary uses to launch SECONDMATE agents; resolve it with `bin/fm-harness.sh secondmate`, which follows the fallback chain `config/secondmate-harness` -> `config/crew-harness` -> your own harness.
-So an absent or `default` `config/secondmate-harness` behaves exactly as before this knob existed - secondmates launch on the crew harness - and setting it splits the two: e.g. primary `config/crew-harness=codex` with `config/secondmate-harness=claude` runs the secondmate AGENTS on claude while all crewmates (the primary's and the secondmates' own) run on codex.
+`config/secondmate-harness` (local, gitignored) is the harness the primary uses to launch SECONDMATE agents; resolve it with `bin/fm-harness.sh secondmate`, which reads `config/secondmate-harness` first and otherwise falls through the active crew harness.
+So an absent or `default` `config/secondmate-harness` behaves exactly as before this knob existed - secondmates launch on the crew harness, including watchdog rotation - and setting it splits the two: e.g. primary `config/crew-harness=codex` with `config/secondmate-harness=claude` runs the secondmate AGENTS on claude while all crewmates (the primary's and the secondmates' own) run on codex.
 `bin/fm-spawn.sh` resolves a `--secondmate` launch through `secondmate` mode and a crewmate/scout launch through `crew` mode; an explicit per-spawn `--harness` flag or positional harness arg still overrides either kind.
 The split is durable: every secondmate respawn (recovery, `/updatefirstmate`, restart) re-resolves from `config/secondmate-harness`, so it survives restarts without being recorded per-task.
 
