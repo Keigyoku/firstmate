@@ -7,10 +7,19 @@
 # existing runtime signals without mixing into the watcher's own dotfile internals.
 
 FM_WATCHDOG_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=bin/fm-wake-lib.sh disable=SC1091
-. "$FM_WATCHDOG_LIB_DIR/fm-wake-lib.sh"
+FM_WATCHDOG_DEFAULT_ROOT="$(cd "$FM_WATCHDOG_LIB_DIR/.." && pwd)"
+FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_WATCHDOG_DEFAULT_ROOT}}"
+FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"
 
 FM_WATCHDOG_PARSER_VERSION=1
+
+fm_watchdog_wake_lib_source() {
+  [ -n "${_FM_WATCHDOG_WAKE_LIB_SOURCED:-}" ] && return 0
+  # shellcheck source=bin/fm-wake-lib.sh disable=SC1091
+  . "$FM_WATCHDOG_LIB_DIR/fm-wake-lib.sh"
+  _FM_WATCHDOG_WAKE_LIB_SOURCED=1
+}
 
 fm_watchdog_default_config() {
   cat <<'JSON'
@@ -97,6 +106,7 @@ fm_watchdog_event() {
       return "$rc"
     }
   lock="$state_dir/.watchdog-events.lock"
+  fm_watchdog_wake_lib_source
   fm_lock_acquire_wait "$lock"
   rc=0
   cat "$tmp" >> "$path" || rc=$?
@@ -280,6 +290,7 @@ fm_watchdog_parser_mismatch() {
 fm_watchdog_latest_file() {
   local dir=$1 pattern=$2 file mtime best_file='' best_mtime=-1
   [ -d "$dir" ] || return 1
+  fm_watchdog_wake_lib_source
   while IFS= read -r -d '' file; do
     mtime=$(fm_path_mtime "$file") || continue
     case "$mtime" in
@@ -303,6 +314,7 @@ fm_watchdog_claude_checkpoint_for_session() {
   local session_id=$1 dir=${FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR:-$HOME/.claude/token-optimizer/checkpoints}
   local file mtime best_file='' best_mtime=-1 found_sid
   [ -d "$dir" ] || return 1
+  fm_watchdog_wake_lib_source
   while IFS= read -r -d '' file; do
     found_sid=$(jq -r '.session_id // .sessionId // empty' "$file" 2>/dev/null || true)
     [ "$found_sid" = "$session_id" ] || continue
@@ -478,6 +490,7 @@ fm_watchdog_latest_codex_rollout_for_worktree() {
   local worktree=$1 task=${2:-} dir=${FM_WATCHDOG_CODEX_SESSION_DIR:-$HOME/.codex/sessions}
   local cache='' cached='' file cwd mtime best_file='' best_mtime=-1 search_dir seen_dirs=''
   [ -d "$dir" ] || return 1
+  fm_watchdog_wake_lib_source
   if [ -n "$task" ]; then
     cache=$(fm_watchdog_codex_rollout_cache_path "$task")
     cached=$(fm_watchdog_codex_cached_rollout "$cache" "$worktree" 2>/dev/null || true)
