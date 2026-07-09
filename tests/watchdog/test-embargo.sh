@@ -95,6 +95,23 @@ test_budget_embargo_gate_rotation_and_lift() {
   pass "budget embargo gates new spawns, rotates harnesses, and lifts manually"
 }
 
+test_budget_embargo_rotation_survives_malformed_config() {
+  local home config flag out
+  home="$TMP_ROOT/malformed-rotation-home"
+  config="$TMP_ROOT/malformed-rotation-config"
+  mkdir -p "$home/state" "$home/config" "$config"
+  printf 'codex\n' > "$home/config/crew-harness"
+  printf '{not json\n' > "$config/watchdog.json"
+  flag="$home/fm-state/watchdog/embargo-codex"
+  mkdir -p "$(dirname "$flag")"
+  : > "$flag"
+
+  out=$(FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" "$ROOT/bin/fm-harness.sh" crew)
+  [ "$out" = opencode ] || fail "malformed watchdog config should rotate to default opencode, got $out"
+  assert_grep '"type":"watchdog_config","sid":"'"$config/watchdog.json"'","status":"invalid"' "$home/fm-state/watchdog.events" "malformed config fallback should be logged without requiring caller STATE"
+  pass "budget embargo rotation survives malformed watchdog config"
+}
+
 test_budget_embargo_auto_lifts_at_reset_boundary() {
   local home flag event
   home="$TMP_ROOT/auto-lift-home"
@@ -179,6 +196,7 @@ test_budget_embargo_does_not_raise_from_crossed_reset_metrics() {
 }
 
 test_budget_embargo_gate_rotation_and_lift
+test_budget_embargo_rotation_survives_malformed_config
 test_budget_embargo_auto_lifts_at_reset_boundary
 test_budget_embargo_auto_lift_waits_for_triggering_bucket
 test_budget_embargo_reset_parser_is_portable

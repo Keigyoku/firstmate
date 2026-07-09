@@ -78,10 +78,12 @@ fm_watchdog_harness_embargoed() {
 }
 
 fm_watchdog_event() {
-  local type=$1 sid=$2 status=${3:-} detail=${4:-} path dir tmp rc lock
+  local type=$1 sid=$2 status=${3:-} detail=${4:-} path dir tmp rc lock state_dir
   path=$(fm_watchdog_events_path)
   dir=$(dirname "$path")
   mkdir -p "$dir"
+  state_dir=${STATE:-${FM_STATE_OVERRIDE:-$FM_HOME/state}}
+  mkdir -p "$state_dir"
   tmp=$(mktemp "$dir/.watchdog-event.XXXXXX")
   jq -cn \
     --arg type "$type" \
@@ -94,7 +96,7 @@ fm_watchdog_event() {
       rm -f "$tmp"
       return "$rc"
     }
-  lock="$STATE/.watchdog-events.lock"
+  lock="$state_dir/.watchdog-events.lock"
   fm_lock_acquire_wait "$lock"
   rc=0
   cat "$tmp" >> "$path" || rc=$?

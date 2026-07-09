@@ -1018,9 +1018,33 @@ exclude_path() {
   mkdir -p "$(dirname "$EXCL")"
   grep -qxF "$rel" "$EXCL" 2>/dev/null || echo "$rel" >> "$EXCL"
 }
+TURNEND_BACKUP_DIR=
+adopt_hook_backup() {
+  local rel=$1 target backup
+  [ "$ADOPT_WORKTREE" -eq 1 ] || return 0
+  case "$rel" in
+    /*|*'..'*) return 1 ;;
+  esac
+  if [ -z "$TURNEND_BACKUP_DIR" ]; then
+    TURNEND_BACKUP_DIR="$STATE/watchdog/adopt-hook-backups/$ID"
+    rm -rf "$TURNEND_BACKUP_DIR"
+    mkdir -p "$TURNEND_BACKUP_DIR/files"
+    printf '%s\n' "$WT" > "$TURNEND_BACKUP_DIR/worktree"
+  fi
+  target="$WT/$rel"
+  backup="$TURNEND_BACKUP_DIR/files/$rel"
+  if [ -e "$target" ]; then
+    mkdir -p "$(dirname "$backup")"
+    cp -p "$target" "$backup"
+    printf 'file\t%s\n' "$rel" >> "$TURNEND_BACKUP_DIR/manifest"
+  else
+    printf 'absent\t%s\n' "$rel" >> "$TURNEND_BACKUP_DIR/manifest"
+  fi
+}
 if [ "$KIND" != secondmate ]; then
   case "$HARNESS" in
     claude*)
+      adopt_hook_backup '.claude/settings.local.json'
       mkdir -p "$WT/.claude"
       cat > "$WT/.claude/settings.local.json" <<EOF
 {"hooks":{"Stop":[{"hooks":[{"type":"command","command":"touch '$TURNEND'"}]}]}}
@@ -1028,6 +1052,7 @@ EOF
       exclude_path '.claude/settings.local.json'
       ;;
     opencode*)
+      adopt_hook_backup '.opencode/plugins/fm-turn-end.js'
       mkdir -p "$WT/.opencode/plugins"
       cat > "$WT/.opencode/plugins/fm-turn-end.js" <<EOF
 export const FmTurnEnd = async ({ \$ }) => ({
@@ -1102,6 +1127,7 @@ EOF
       chmod +x "$GROK_HOOKS_DIR/fm-turn-end.sh"
       hook_command=$(json_escape "bash $(shell_quote "$GROK_HOOKS_DIR/fm-turn-end.sh")")
       printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"%s"}]}]}}\n' "$hook_command" > "$GROK_HOOKS_DIR/fm-turn-end.json"
+      adopt_hook_backup '.fm-grok-turnend'
       printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-grok-turnend"
       exclude_path '.fm-grok-turnend'
       ;;
