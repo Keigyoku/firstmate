@@ -459,22 +459,30 @@ fm_watchdog_collect_metrics() {
   meta="$STATE/$task.meta"
   case "$harness" in
     claude)
-      session_file=$(fm_watchdog_session_file "$harness" "$task" 2>/dev/null || true)
       if [ -f "$meta" ]; then
+        session_file=$(fm_watchdog_session_file "$harness" "$task" 2>/dev/null || true)
         [ -n "$session_file" ] || { fm_watchdog_parser_mismatch "no claude transcript found for $task"; return $?; }
         session_id=$(fm_watchdog_session_id_from_file "$harness" "$session_file") || return $?
         source=$(fm_watchdog_claude_checkpoint_for_session "$session_id") \
           || { fm_watchdog_parser_mismatch "no claude token-optimizer checkpoint found for $session_id"; return $?; }
       else
-        source=$(fm_watchdog_latest_claude_checkpoint) \
-          || { fm_watchdog_parser_mismatch "no claude token-optimizer checkpoint found"; return $?; }
+        source=$(fm_watchdog_latest_claude_checkpoint_for_session "$task") \
+          || { fm_watchdog_parser_mismatch "no claude token-optimizer checkpoint found for session: $task"; return $?; }
+        session_id=$task
       fi
-      metrics=$(fm_watchdog_claude_metrics_json "$harness" "$task" "$source") || return $?
+      metrics=$(fm_watchdog_claude_metrics_json "$harness" "$session_id" "$source") || return $?
       ;;
     codex)
-      source=$(fm_watchdog_session_file "$harness" "$task") \
-        || { fm_watchdog_parser_mismatch "no codex rollout file found for $task"; return $?; }
-      metrics=$(fm_watchdog_codex_metrics_json "$harness" "$task" "$source") || return $?
+      if [ -f "$meta" ]; then
+        source=$(fm_watchdog_session_file "$harness" "$task") \
+          || { fm_watchdog_parser_mismatch "no codex rollout file found for $task"; return $?; }
+        session_id=$(fm_watchdog_session_id_from_file "$harness" "$source") || return $?
+      else
+        source=$(fm_watchdog_latest_codex_rollout_for_session "$task") \
+          || { fm_watchdog_parser_mismatch "no codex rollout file found for session: $task"; return $?; }
+        session_id=$task
+      fi
+      metrics=$(fm_watchdog_codex_metrics_json "$harness" "$session_id" "$source") || return $?
       ;;
     *)
       metrics=$(fm_watchdog_unknown_metrics_json "$harness")

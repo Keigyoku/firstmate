@@ -9,14 +9,6 @@ TMP_ROOT=$(fm_test_tmproot fm-watchdog-metrics-tests)
 FIXTURE_DIR="$ROOT/tests/watchdog/fixtures"
 CLAUDE_FIXTURE="$FIXTURE_DIR/token-optimizer-checkpoint.json"
 
-write_codex_rollout() {
-  local path=$1 cwd=$2 total=$3 limit=$4
-  mkdir -p "$(dirname "$path")"
-  jq -cn --arg cwd "$cwd" '{type:"session_meta",payload:{session_id:"sid-" + ($cwd | gsub("[^A-Za-z0-9]"; "-")),cwd:$cwd}}' > "$path"
-  jq -cn --argjson total "$total" --argjson limit "$limit" \
-    '{type:"event_msg",payload:{type:"token_count",info:{last_token_usage:{total_tokens:$total},model_context_window:$limit},rate_limits:{primary:{used_percent:11},secondary:{used_percent:22}}}}' >> "$path"
-}
-
 test_claude_checkpoint_metrics() {
   local out context expected session
   session=$(jq -r '.session_id' "$CLAUDE_FIXTURE")
@@ -93,6 +85,14 @@ test_corrupt_claude_checkpoint_is_loud() {
   pass "corrupt checkpoint cannot silently produce metrics"
 }
 
+write_codex_rollout_for_cwd() {
+  local path=$1 cwd=$2 total=$3 limit=$4
+  mkdir -p "$(dirname "$path")"
+  jq -cn --arg cwd "$cwd" '{type:"session_meta",payload:{session_id:"sid-" + ($cwd | gsub("[^A-Za-z0-9]"; "-")),cwd:$cwd}}' > "$path"
+  jq -cn --argjson total "$total" --argjson limit "$limit" \
+    '{type:"event_msg",payload:{type:"token_count",info:{last_token_usage:{total_tokens:$total},model_context_window:$limit},rate_limits:{primary:{used_percent:11},secondary:{used_percent:22}}}}' >> "$path"
+}
+
 write_codex_rollout() {
   local file=$1 session=$2 total=$3 primary=$4 secondary=$5
   printf '%s\n' \
@@ -150,8 +150,8 @@ test_codex_metrics_are_scoped_to_task_worktree() {
   other_wt="$TMP_ROOT/worktrees/other"
   mkdir -p "$home/state" "$target_wt" "$other_wt"
   fm_write_meta "$home/state/demo.meta" "worktree=$target_wt" "harness=codex"
-  write_codex_rollout "$session_dir/2026/07/08/rollout-target.jsonl" "$target_wt" 100 1000
-  write_codex_rollout "$session_dir/2026/07/08/rollout-other.jsonl" "$other_wt" 950 1000
+  write_codex_rollout_for_cwd "$session_dir/2026/07/08/rollout-target.jsonl" "$target_wt" 100 1000
+  write_codex_rollout_for_cwd "$session_dir/2026/07/08/rollout-other.jsonl" "$other_wt" 950 1000
   touch "$session_dir/2026/07/08/rollout-target.jsonl"
   sleep 1
   touch "$session_dir/2026/07/08/rollout-other.jsonl"
@@ -172,9 +172,9 @@ test_codex_session_lookup_uses_task_cache() {
   fakebin="$TMP_ROOT/codex-cache-fakebin"
   mkdir -p "$home/state" "$target_wt" "$other_wt" "$fakebin"
   fm_write_meta "$home/state/demo.meta" "worktree=$target_wt" "harness=codex"
-  write_codex_rollout "$session_dir/2026/07/07/rollout-target.jsonl" "$target_wt" 100 1000
+  write_codex_rollout_for_cwd "$session_dir/2026/07/07/rollout-target.jsonl" "$target_wt" 100 1000
   for n in 1 2 3 4 5; do
-    write_codex_rollout "$session_dir/2026/07/07/rollout-other-$n.jsonl" "$other_wt" 950 1000
+    write_codex_rollout_for_cwd "$session_dir/2026/07/07/rollout-other-$n.jsonl" "$other_wt" 950 1000
   done
 
   out=$(FM_HOME="$home" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
