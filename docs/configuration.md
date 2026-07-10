@@ -154,9 +154,9 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 See [`docs/examples/watchdog.json`](examples/watchdog.json) for a starting point to copy into local `config/watchdog.json`.
 When it is absent, `bin/fm-watchdog-lib.sh` uses the same defaults as the example file.
 Set `FM_WATCHDOG_CONFIG` to point at a different JSON file, `FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR` to override Claude checkpoint discovery, or `FM_WATCHDOG_CODEX_SESSION_DIR` to override Codex rollout discovery.
-Current metrics parsing is observe-only and supports Claude token-optimizer checkpoints, Codex rollout files, and an unknown-harness fallback record.
+Metrics parsing supports Claude token-optimizer checkpoints, Codex rollout files, and an unknown-harness fallback record.
 When it is malformed, bootstrap reports `WATCHDOG: invalid config/watchdog.json - malformed JSON; using defaults`, and the watcher records a `watchdog_config` event before falling back to defaults.
-The active fields are `poll_interval_sec`, `thresholds.compact_at_context_pct`, `thresholds.successor_at_context_pct`, `thresholds.embargo_at_5hr_pct`, `thresholds.embargo_at_7d_pct`, `steer_retries`, `steer_timeout_sec`, `compact_pending_retry_sec`, `metrics_failure_event_interval_sec`, `rotate_to`, and `parser_version`.
+The recognized fields are `poll_interval_sec`, `thresholds.compact_at_context_pct`, `thresholds.successor_at_context_pct`, `thresholds.embargo_at_5hr_pct`, `thresholds.embargo_at_7d_pct`, `steer_retries`, `steer_timeout_sec`, `compact_pending_retry_sec`, `metrics_failure_event_interval_sec`, `rotate_to`, and `parser_version`.
 `poll_interval_sec` becomes the watcher's default poll cadence when `FM_POLL` is unset.
 When a non-secondmate Claude or Codex task reaches `thresholds.compact_at_context_pct`, `fm-watch.sh` records a `compact_threshold` event and starts `fm-steer.sh` to ask the task to complete its current unit and run `/compact`.
 The steer is retried up to `steer_retries`, each delivery is bounded by `steer_timeout_sec`, and a pending compact is retried only after `compact_pending_retry_sec` unless Claude/Codex transcript rotation proves a new session has taken over.
