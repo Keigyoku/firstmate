@@ -56,6 +56,11 @@ meta_value() {
   fm_meta_get "$meta" "$key"
 }
 
+shell_quote() {
+  local s=$1
+  printf "'%s'" "$(printf '%s' "$s" | sed "s/'/'\\\\''/g")"
+}
+
 make_successor_id() {
   local predecessor=$1 suffix
   suffix=$(date -u +%H%M%S)
@@ -219,21 +224,66 @@ mark_predecessor_retired() {
   rm -f "$meta"
 }
 
+restore_predecessor_turnend_hook() {
+  local predecessor=$1 meta=$2 worktree=$3 harness state_real turnend token
+  [ -d "$worktree" ] || return 0
+  harness=$(meta_value "$meta" harness)
+  mkdir -p "$STATE"
+  state_real=$(cd "$STATE" && pwd -P)
+  turnend="$state_real/$predecessor.turn-ended"
+  case "$harness" in
+    claude*)
+      mkdir -p "$worktree/.claude"
+      printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"touch %s"}]}]}}\n' "$(shell_quote "$turnend")" > "$worktree/.claude/settings.local.json"
+      ;;
+    opencode*)
+      mkdir -p "$worktree/.opencode/plugins"
+      cat > "$worktree/.opencode/plugins/fm-turn-end.js" <<EOF
+export const FmTurnEnd = async ({ \$ }) => ({
+  event: async ({ event }) => {
+    if (event.type === "session.idle") await \$\`touch $turnend\`
+  },
+})
+EOF
+      ;;
+    grok*)
+      token=$(cat "$STATE/$predecessor.grok-turnend-token" 2>/dev/null || true)
+      case "$token" in
+        fm.????????????) printf 'token=%s\n' "$token" > "$worktree/.fm-grok-turnend" ;;
+      esac
+      ;;
+  esac
+}
+
+remove_grok_turnend_auth() {
+  local id=$1 token hooks_dir
+  token=$(cat "$STATE/$id.grok-turnend-token" 2>/dev/null || true)
+  case "$token" in ''|*[!A-Za-z0-9._-]*) return 0 ;; esac
+  hooks_dir="${GROK_HOME:-$HOME/.grok}/hooks/fm-turn-end.d"
+  rm -f "$hooks_dir/$token"
+}
+
 cleanup_successor_after_failure() {
-  local successor=$1 meta backend target
+  local successor=$1 predecessor_meta=${2:-} predecessor=${3:-} worktree=${4:-} meta backend target
   meta="$STATE/$successor.meta"
-  [ -f "$meta" ] || return 0
-  backend=$(meta_value "$meta" backend)
-  [ -n "$backend" ] || backend=tmux
-  target=$(fm_backend_resolve_selector "$successor" "$STATE" 2>/dev/null || meta_value "$meta" window)
-  if [ -n "$target" ]; then
-    if [ -n "${FM_SUCCESSOR_RETIRE_CMD:-}" ]; then
-      "$FM_SUCCESSOR_RETIRE_CMD" "$backend" "$target" || true
-    else
-      fm_backend_kill "$backend" "$target" || true
+  if [ -f "$meta" ]; then
+    backend=$(meta_value "$meta" backend)
+    [ -n "$backend" ] || backend=tmux
+    target=$(fm_backend_resolve_selector "$successor" "$STATE" 2>/dev/null || meta_value "$meta" window)
+    if [ -n "$target" ]; then
+      if [ -n "${FM_SUCCESSOR_RETIRE_CMD:-}" ]; then
+        "$FM_SUCCESSOR_RETIRE_CMD" "$backend" "$target" || true
+      else
+        fm_backend_kill "$backend" "$target" || true
+      fi
     fi
+    rm -f "$meta"
   fi
-  rm -f "$meta"
+  remove_grok_turnend_auth "$successor"
+  rm -f "$STATE/$successor.status" "$STATE/$successor.turn-ended" "$STATE/$successor.check.sh" "$STATE/$successor.pi-ext.ts" "$STATE/$successor.grok-turnend-token"
+  if [ -n "$predecessor_meta" ] && [ -n "$predecessor" ] && [ -n "$worktree" ]; then
+    restore_predecessor_turnend_hook "$predecessor" "$predecessor_meta" "$worktree" || true
+  fi
 }
 
 if [ "$#" -ne 2 ]; then
@@ -306,32 +356,32 @@ if ! spawn_output=$(run_spawn "${spawn_args[@]}" 2>&1); then
 fi
 
 if ! successor_meta_matches_worktree "$SUCCESSOR_ID" "$WORKTREE"; then
-  cleanup_successor_after_failure "$SUCCESSOR_ID"
+  cleanup_successor_after_failure "$SUCCESSOR_ID" "$META" "$PREDECESSOR" "$WORKTREE"
   write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "successor did not adopt predecessor worktree $WORKTREE"
   exit 1
 fi
 
 if ! metadata_output=$(carry_task_metadata "$META" "$SUCCESSOR_ID" 2>&1); then
-  cleanup_successor_after_failure "$SUCCESSOR_ID"
+  cleanup_successor_after_failure "$SUCCESSOR_ID" "$META" "$PREDECESSOR" "$WORKTREE"
   write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "metadata carry failed: $metadata_output"
   exit 1
 fi
 
 if ! x_link_output=$(carry_x_link "$META" "$SUCCESSOR_ID" 2>&1); then
-  cleanup_successor_after_failure "$SUCCESSOR_ID"
+  cleanup_successor_after_failure "$SUCCESSOR_ID" "$META" "$PREDECESSOR" "$WORKTREE"
   write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "X link carry failed: $x_link_output"
   exit 1
 fi
 
 if ! ready_signal=$(wait_successor_ready "$SUCCESSOR_ID" "$WORKTREE"); then
-  cleanup_successor_after_failure "$SUCCESSOR_ID"
+  cleanup_successor_after_failure "$SUCCESSOR_ID" "$META" "$PREDECESSOR" "$WORKTREE"
   write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "successor readiness could not be proven for worktree $WORKTREE"
   exit 1
 fi
 
 fm_watchdog_event successor_spawn "$PREDECESSOR" succeeded "successor=$SUCCESSOR_ID handoff=$HANDOFF readiness=$ready_signal"
 if ! retire_output=$(retire_predecessor "$PREDECESSOR" "$META" 2>&1); then
-  cleanup_successor_after_failure "$SUCCESSOR_ID"
+  cleanup_successor_after_failure "$SUCCESSOR_ID" "$META" "$PREDECESSOR" "$WORKTREE"
   write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "predecessor retirement failed: $retire_output"
   exit 1
 fi

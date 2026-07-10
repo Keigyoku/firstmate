@@ -86,35 +86,51 @@ make_spawn_double() {
   cat > "$path" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_SUCCESSOR_SPAWN_LOG"
-  if [ "${FM_SUCCESSOR_DOUBLE_CREATE_META:-0}" = 1 ] && [ "${FM_SUCCESSOR_SPAWN_STATUS:-0}" = 0 ]; then
-    mkdir -p "$FM_HOME/state"
-    id=$1
-    project=$2
-    worktree=$2
-    mode=no-mistakes
-    yolo=off
-    kind=ship
-    backend=tmux
-    while [ "$#" -gt 0 ]; do
-      case "$1" in
-        --adopt-worktree-path) shift; worktree=$1 ;;
-        --backend) shift; backend=$1 ;;
-        --scout) kind=scout ;;
-        --mode) shift; mode=$1 ;;
-        --yolo) shift; yolo=$1 ;;
-      esac
-      shift
+if [ "${FM_SUCCESSOR_DOUBLE_CREATE_META:-0}" = 1 ] && [ "${FM_SUCCESSOR_SPAWN_STATUS:-0}" = 0 ]; then
+  mkdir -p "$FM_HOME/state"
+  id=$1
+  project=$2
+  worktree=$2
+  mode=no-mistakes
+  yolo=off
+  kind=ship
+  backend=tmux
+  harness=codex
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --adopt-worktree-path) shift; worktree=$1 ;;
+      --backend) shift; backend=$1 ;;
+      --harness) shift; harness=$1 ;;
+      --scout) kind=scout ;;
+      --mode) shift; mode=$1 ;;
+      --yolo) shift; yolo=$1 ;;
+    esac
+    shift
   done
   {
     printf 'window=%s\n' "fm-$id"
     printf 'worktree=%s\n' "$worktree"
     printf 'project=%s\n' "$project"
-    printf 'harness=%s\n' "codex"
+    printf 'harness=%s\n' "$harness"
     printf 'kind=%s\n' "$kind"
     printf 'mode=%s\n' "$mode"
     printf 'yolo=%s\n' "$yolo"
     [ "$backend" = tmux ] || printf 'backend=%s\n' "$backend"
   } > "$FM_HOME/state/$id.meta"
+  if [ "${FM_SUCCESSOR_DOUBLE_WRITE_HOOKS:-0}" = 1 ]; then
+    state_real=$(cd "$FM_HOME/state" && pwd -P)
+    turnend="$state_real/$id.turn-ended"
+    case "$harness" in
+      claude*)
+        mkdir -p "$worktree/.claude"
+        printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"touch '\''%s'\''"}]}]}}\n' "$turnend" > "$worktree/.claude/settings.local.json"
+        ;;
+      grok*)
+        printf '%s\n' "fm.bbbbbbbbbbbb" > "$FM_HOME/state/$id.grok-turnend-token"
+        printf 'token=%s\n' "fm.bbbbbbbbbbbb" > "$worktree/.fm-grok-turnend"
+        ;;
+    esac
+  fi
   case "${FM_SUCCESSOR_DOUBLE_READY:-}" in
     status) printf 'working: accepted successor handoff\n' > "$FM_HOME/state/$id.status" ;;
     turn) : > "$FM_HOME/state/$id.turn-ended" ;;
@@ -355,6 +371,67 @@ test_successor_halts_without_readiness_and_keeps_predecessor_active() {
   artifact=$(sed -n 's/^artifact=//p' "$halt")
   assert_grep "successor readiness could not be proven" "$artifact" "failure artifact should explain missing readiness"
   pass "successor halts without readiness and keeps predecessor active"
+}
+
+test_successor_failure_restores_claude_predecessor_hook() {
+  local home project worktree spawn_log retire_log spawn_double retire_double handoff status settings
+  home="$TMP_ROOT/restore-claude-home"
+  project="$home/project"
+  worktree="$home/worktree"
+  spawn_log="$TMP_ROOT/restore-claude-spawn.log"
+  retire_log="$TMP_ROOT/restore-claude-retire.log"
+  spawn_double="$TMP_ROOT/restore-claude-spawn-double"
+  retire_double="$TMP_ROOT/restore-claude-retire-double"
+  mkdir -p "$home/state" "$home/fm-state" "$project" "$worktree/.claude"
+  handoff="$home/fm-state/handoff-restore-claude.md"
+  printf 'handoff for Claude hook restore\n' > "$handoff"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$project" "worktree=$worktree" "backend=tmux" "harness=claude" "mode=no-mistakes" "yolo=off"
+  settings="$worktree/.claude/settings.local.json"
+  printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"touch '\''%s'\''"}]}]}}\n' "$home/state/demo.turn-ended" > "$settings"
+  make_spawn_double "$spawn_double" "$spawn_log" 0
+  make_retire_double "$retire_double" "$retire_log"
+
+  FM_HOME="$home" FM_SUCCESSOR_ID=demo-restore-claude-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_SUCCESSOR_DOUBLE_CREATE_META=1 FM_SUCCESSOR_DOUBLE_WRITE_HOOKS=1 \
+    FM_SUCCESSOR_READY_TIMEOUT=0 FM_SUCCESSOR_RETIRE_CMD="$retire_double" FM_SUCCESSOR_RETIRE_LOG="$retire_log" \
+    "$ROOT/bin/fm-successor.sh" demo "$handoff" >/dev/null 2>&1
+  status=$?
+  expect_code 1 "$status" "unready Claude successor should exit 1"
+  assert_present "$home/state/demo.meta" "predecessor meta should remain active after Claude successor failure"
+  assert_grep '/demo.turn-ended' "$settings" "Claude hook should be restored to predecessor turn-end file"
+  assert_no_grep '/demo-restore-claude-next.turn-ended' "$settings" "Claude hook should not remain targeted at failed successor"
+  pass "successor failure restores Claude predecessor hook"
+}
+
+test_successor_failure_restores_grok_predecessor_pointer() {
+  local home project worktree spawn_log retire_log spawn_double retire_double handoff status pointer
+  home="$TMP_ROOT/restore-grok-home"
+  project="$home/project"
+  worktree="$home/worktree"
+  spawn_log="$TMP_ROOT/restore-grok-spawn.log"
+  retire_log="$TMP_ROOT/restore-grok-retire.log"
+  spawn_double="$TMP_ROOT/restore-grok-spawn-double"
+  retire_double="$TMP_ROOT/restore-grok-retire-double"
+  mkdir -p "$home/state" "$home/fm-state" "$project" "$worktree"
+  handoff="$home/fm-state/handoff-restore-grok.md"
+  printf 'handoff for Grok hook restore\n' > "$handoff"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$project" "worktree=$worktree" "backend=tmux" "harness=grok" "mode=no-mistakes" "yolo=off"
+  printf '%s\n' "fm.aaaaaaaaaaaa" > "$home/state/demo.grok-turnend-token"
+  pointer="$worktree/.fm-grok-turnend"
+  printf 'token=%s\n' "fm.aaaaaaaaaaaa" > "$pointer"
+  make_spawn_double "$spawn_double" "$spawn_log" 0
+  make_retire_double "$retire_double" "$retire_log"
+
+  HOME="$home/fake-home" FM_HOME="$home" FM_SUCCESSOR_ID=demo-restore-grok-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_SUCCESSOR_DOUBLE_CREATE_META=1 FM_SUCCESSOR_DOUBLE_WRITE_HOOKS=1 \
+    FM_SUCCESSOR_READY_TIMEOUT=0 FM_SUCCESSOR_RETIRE_CMD="$retire_double" FM_SUCCESSOR_RETIRE_LOG="$retire_log" \
+    "$ROOT/bin/fm-successor.sh" demo "$handoff" >/dev/null 2>&1
+  status=$?
+  expect_code 1 "$status" "unready Grok successor should exit 1"
+  assert_present "$home/state/demo.meta" "predecessor meta should remain active after Grok successor failure"
+  [ "$(cat "$pointer")" = "token=fm.aaaaaaaaaaaa" ] || fail "Grok pointer should be restored to predecessor token"
+  assert_absent "$home/state/demo-restore-grok-next.grok-turnend-token" "failed successor Grok token should be cleaned from state"
+  pass "successor failure restores Grok predecessor pointer"
 }
 
 test_successor_carries_x_followup_link() {
@@ -701,6 +778,8 @@ test_successor_accepts_backend_endpoint_readiness
 test_successor_rejects_dead_agent_endpoint_readiness
 test_successor_rejects_bare_turnend_readiness
 test_successor_halts_without_readiness_and_keeps_predecessor_active
+test_successor_failure_restores_claude_predecessor_hook
+test_successor_failure_restores_grok_predecessor_pointer
 test_successor_carries_x_followup_link
 test_successor_halts_when_predecessor_retire_fails
 test_spawn_failure_writes_halt_flag_and_failure_artifact
