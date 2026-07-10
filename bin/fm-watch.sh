@@ -304,6 +304,16 @@ watchdog_collect_failure() {
   : > "$throttle"
 }
 
+watchdog_collect_failure_recent() {
+  local key=$1 interval=$2 throttle age
+  case "$interval" in ''|null|*[!0-9]*) interval=300 ;; esac
+  [ "$interval" -gt 0 ] || interval=300
+  throttle="$STATE/watchdog/.metrics-failure-$key"
+  [ -e "$throttle" ] || return 1
+  age=$(fm_path_age "$throttle")
+  [ "$age" -lt "$interval" ]
+}
+
 watchdog_start_compact_steer() {
   local task=$1 context=$2 compact=$3 sig=$4 sid=$5 key=$6 pending=$7 inflight=$8 pid
   (
@@ -341,11 +351,13 @@ watchdog_threshold_scan() {
     watchdog_steer_inflight "$inflight" && continue
     mkdir -p "$STATE/watchdog"
     err_file="$STATE/watchdog/.metrics-error-$key"
+    watchdog_collect_failure_recent "$key" "$failure_interval" && continue
     if ! metrics=$(fm_watchdog_collect_metrics "$harness" "$task" 2>"$err_file"); then
       watchdog_collect_failure "$task" "$key" "$failure_interval" "$err_file"
       rm -f "$err_file"
       continue
     fi
+    rm -f "$STATE/watchdog/.metrics-failure-$key"
     rm -f "$err_file"
     [ -n "$metrics" ] || continue
     context=$(jq -r '.context_pct // empty' "$metrics" 2>/dev/null || true)

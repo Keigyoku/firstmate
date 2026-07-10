@@ -318,7 +318,7 @@ test_stale_pending_retries_without_rotation() {
 }
 
 test_metrics_collection_failure_is_visible_and_throttled() {
-  local home config session_dir worktree status event failure_count timeout_cmd
+  local home config session_dir worktree status event failure_count timeout_cmd fakebin find_log real_find
   if command -v timeout >/dev/null 2>&1; then
     timeout_cmd=timeout
   elif command -v gtimeout >/dev/null 2>&1; then
@@ -331,7 +331,10 @@ test_metrics_collection_failure_is_visible_and_throttled() {
   config="$TMP_ROOT/metrics-failure-config"
   session_dir="$TMP_ROOT/metrics-failure-sessions"
   worktree="$TMP_ROOT/metrics-failure-worktree"
-  mkdir -p "$home/state" "$session_dir" "$worktree"
+  fakebin="$TMP_ROOT/metrics-failure-fakebin"
+  find_log="$TMP_ROOT/metrics-failure-find.log"
+  real_find=$(command -v find)
+  mkdir -p "$home/state" "$session_dir" "$worktree" "$fakebin"
   fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
   write_fast_threshold_config "$config"
   jq '.metrics_failure_event_interval_sec = 60' "$config/watchdog.json" > "$config/watchdog.json.tmp"
@@ -346,12 +349,20 @@ test_metrics_collection_failure_is_visible_and_throttled() {
   assert_contains "$(cat "$event")" '"type":"metrics_collect_failed"' "metrics failure event should name collection failure"
   assert_contains "$(cat "$event")" 'no codex rollout file found for demo' "metrics failure detail should include parser stderr"
 
-  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+  cat > "$fakebin/find" <<'SH'
+#!/usr/bin/env bash
+printf 'find called\n' >> "$FM_FIND_LOG"
+exec "$REAL_FIND" "$@"
+SH
+  chmod +x "$fakebin/find"
+  "$timeout_cmd" 1 env PATH="$fakebin:$PATH" FM_FIND_LOG="$find_log" REAL_FIND="$real_find" \
+    FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
     FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
   status=$?
   expect_code 124 "$status" "throttled metrics failure watcher run should be stopped by test timeout"
   failure_count=$(grep -c '"type":"metrics_collect_failed"' "$event")
   [ "$failure_count" = 1 ] || fail "metrics failure event should be throttled, got $failure_count events"
+  assert_absent "$find_log" "throttled metrics failure should skip repeated rollout scans"
   pass "watcher reports metrics collection failures with throttling"
 }
 
