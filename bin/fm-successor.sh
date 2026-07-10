@@ -13,6 +13,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-watchdog-lib.sh
 . "$SCRIPT_DIR/fm-watchdog-lib.sh"
+# shellcheck source=bin/fm-classify-lib.sh
+. "$SCRIPT_DIR/fm-classify-lib.sh"
 
 usage() {
   echo "usage: fm-successor.sh <predecessor-sid> <handoff-path>" >&2
@@ -210,6 +212,30 @@ prepare_successor_check() {
 finalize_predecessor_check() {
   local predecessor=$1
   rm -f "$STATE/$predecessor.check.sh"
+}
+
+successor_signal_sig() {
+  if [ "$(uname)" = Darwin ]; then
+    stat -f '%z:%Fm' "$1" 2>/dev/null
+  else
+    stat -c '%s:%Y' "$1" 2>/dev/null
+  fi
+}
+
+mark_predecessor_signals_seen() {
+  local predecessor=$1 f sig last hb
+  for f in "$STATE/$predecessor.status" "$STATE/$predecessor.turn-ended"; do
+    [ -e "$f" ] || continue
+    sig=$(successor_signal_sig "$f") || continue
+    printf '%s' "$sig" > "$STATE/.seen-$(basename "$f" | tr '.' '_')"
+  done
+  f="$STATE/$predecessor.status"
+  [ -e "$f" ] || return 0
+  last=$(last_status_line "$f")
+  [ -n "$last" ] || return 0
+  status_is_captain_relevant "$last" || return 0
+  hb="$STATE/.hb-surfaced-$(printf '%s' "$predecessor" | tr ':/.' '___')"
+  printf '%s' "$last" > "$hb"
 }
 
 retire_predecessor() {
@@ -446,5 +472,6 @@ if ! mark_output=$(mark_predecessor_retired "$PREDECESSOR" "$META" "$SUCCESSOR_I
   exit 1
 fi
 finalize_predecessor_check "$PREDECESSOR"
+mark_predecessor_signals_seen "$PREDECESSOR"
 fm_watchdog_event predecessor_retired "$PREDECESSOR" closed "successor=$SUCCESSOR_ID"
 printf '%s\n' "$spawn_output"

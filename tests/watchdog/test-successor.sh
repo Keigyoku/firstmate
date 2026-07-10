@@ -98,6 +98,14 @@ write_claude_checkpoint() {
     '{version:1,session_id:$sid,fill_pct:$pct,quality:{tool_calls:2}}' > "$dir/$session_id.json"
 }
 
+test_stat_sig() {
+  if [ "$(uname)" = Darwin ]; then
+    stat -f '%z:%Fm' "$1" 2>/dev/null
+  else
+    stat -c '%s:%Y' "$1" 2>/dev/null
+  fi
+}
+
 make_spawn_double() {
   local path=$1 log=$2 status=${3:-0}
   cat > "$path" <<'SH'
@@ -194,7 +202,7 @@ SH
 }
 
 test_successor_spawns_with_handoff_brief_and_retires_predecessor() {
-  local home project worktree spawn_log retire_log spawn_double retire_double handoff brief event retired_meta
+  local home project worktree spawn_log retire_log spawn_double retire_double handoff brief event retired_meta status_sig turn_sig
   home="$TMP_ROOT/success-home"
   project="$home/project"
   worktree="$home/worktree"
@@ -206,6 +214,8 @@ test_successor_spawns_with_handoff_brief_and_retires_predecessor() {
   handoff="$home/fm-state/handoff-latest.md"
   printf 'Continue from W3 HANDOFF MARKER.\n' > "$handoff"
   printf 'Original objective marker.\n' > "$home/data/demo/brief.md"
+  printf 'done: predecessor clear completed\n' > "$home/state/demo.status"
+  : > "$home/state/demo.turn-ended"
   fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$project" "worktree=$worktree" "harness=claude" "model=default" "effort=default" "mode=local-only" "yolo=on"
   make_spawn_double "$spawn_double" "$spawn_log" 0
   make_retire_double "$retire_double" "$retire_log"
@@ -221,6 +231,13 @@ test_successor_spawns_with_handoff_brief_and_retires_predecessor() {
   assert_grep "$handoff" "$brief" "successor brief should include handoff path"
   assert_grep "W3 HANDOFF MARKER" "$brief" "successor brief should include handoff content"
   assert_absent "$home/state/demo.meta" "retired predecessor meta should leave active state"
+  assert_present "$home/state/demo.status" "retired predecessor status log should be preserved"
+  assert_present "$home/state/demo.turn-ended" "retired predecessor turn-end marker should be preserved"
+  status_sig=$(test_stat_sig "$home/state/demo.status")
+  turn_sig=$(test_stat_sig "$home/state/demo.turn-ended")
+  [ "$(cat "$home/state/.seen-demo_status")" = "$status_sig" ] || fail "retired predecessor status should be marked seen"
+  [ "$(cat "$home/state/.seen-demo_turn-ended")" = "$turn_sig" ] || fail "retired predecessor turn-end should be marked seen"
+  [ "$(cat "$home/state/.hb-surfaced-demo")" = "done: predecessor clear completed" ] || fail "retired predecessor status should be marked heartbeat-surfaced"
   retired_meta="$home/state/retired/demo.meta"
   assert_present "$retired_meta" "retired predecessor meta should be archived outside active state"
   assert_grep "retired_by=demo-next" "$retired_meta" "retired predecessor meta should record successor"
