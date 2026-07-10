@@ -263,10 +263,31 @@ remove_grok_turnend_auth() {
   rm -f "$hooks_dir/$token"
 }
 
+successor_hook_points_to_id() {
+  local successor=$1 predecessor_meta=$2 worktree=$3 harness state_real turnend token pointer
+  [ -d "$worktree" ] || return 1
+  harness=$(meta_value "$predecessor_meta" harness)
+  mkdir -p "$STATE"
+  state_real=$(cd "$STATE" && pwd -P)
+  turnend="$state_real/$successor.turn-ended"
+  case "$harness" in
+    claude*) grep -qF "$turnend" "$worktree/.claude/settings.local.json" 2>/dev/null ;;
+    opencode*) grep -qF "$turnend" "$worktree/.opencode/plugins/fm-turn-end.js" 2>/dev/null ;;
+    grok*)
+      token=$(cat "$STATE/$successor.grok-turnend-token" 2>/dev/null || true)
+      case "$token" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+      pointer=$(sed -n 's/^token=//p' "$worktree/.fm-grok-turnend" 2>/dev/null || true)
+      [ "$pointer" = "$token" ]
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 cleanup_successor_after_failure() {
-  local successor=$1 predecessor_meta=${2:-} predecessor=${3:-} worktree=${4:-} meta backend target
+  local successor=$1 predecessor_meta=${2:-} predecessor=${3:-} worktree=${4:-} meta backend target restore_needed=0
   meta="$STATE/$successor.meta"
   if [ -f "$meta" ]; then
+    restore_needed=1
     backend=$(meta_value "$meta" backend)
     [ -n "$backend" ] || backend=tmux
     target=$(fm_backend_resolve_selector "$successor" "$STATE" 2>/dev/null || meta_value "$meta" window)
@@ -279,9 +300,15 @@ cleanup_successor_after_failure() {
     fi
     rm -f "$meta"
   fi
+  for residue in "$STATE/$successor.status" "$STATE/$successor.turn-ended" "$STATE/$successor.check.sh" "$STATE/$successor.pi-ext.ts" "$STATE/$successor.grok-turnend-token"; do
+    [ ! -e "$residue" ] || restore_needed=1
+  done
+  if [ -n "$predecessor_meta" ] && [ -n "$worktree" ] && successor_hook_points_to_id "$successor" "$predecessor_meta" "$worktree"; then
+    restore_needed=1
+  fi
   remove_grok_turnend_auth "$successor"
   rm -f "$STATE/$successor.status" "$STATE/$successor.turn-ended" "$STATE/$successor.check.sh" "$STATE/$successor.pi-ext.ts" "$STATE/$successor.grok-turnend-token"
-  if [ -n "$predecessor_meta" ] && [ -n "$predecessor" ] && [ -n "$worktree" ]; then
+  if [ "$restore_needed" -eq 1 ] && [ -n "$predecessor_meta" ] && [ -n "$predecessor" ] && [ -n "$worktree" ]; then
     restore_predecessor_turnend_hook "$predecessor" "$predecessor_meta" "$worktree" || true
   fi
 }
@@ -351,6 +378,7 @@ spawn_args+=(--backend "$BACKEND")
 [ -z "$YOLO" ] || spawn_args+=(--yolo "$YOLO")
 
 if ! spawn_output=$(run_spawn "${spawn_args[@]}" 2>&1); then
+  cleanup_successor_after_failure "$SUCCESSOR_ID" "$META" "$PREDECESSOR" "$WORKTREE"
   write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "spawn failed: $spawn_output"
   exit 1
 fi

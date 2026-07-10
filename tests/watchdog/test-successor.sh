@@ -86,7 +86,7 @@ make_spawn_double() {
   cat > "$path" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_SUCCESSOR_SPAWN_LOG"
-if [ "${FM_SUCCESSOR_DOUBLE_CREATE_META:-0}" = 1 ] && [ "${FM_SUCCESSOR_SPAWN_STATUS:-0}" = 0 ]; then
+if [ "${FM_SUCCESSOR_DOUBLE_CREATE_META:-0}" = 1 ]; then
   mkdir -p "$FM_HOME/state"
   id=$1
   project=$2
@@ -525,6 +525,37 @@ test_spawn_failure_writes_halt_flag_and_failure_artifact() {
   pass "spawn failure writes halt flag and loud failure artifact"
 }
 
+test_partial_spawn_failure_cleans_successor_and_restores_hook() {
+  local home project worktree spawn_log spawn_double handoff status halt artifact settings
+  home="$TMP_ROOT/partial-failure-home"
+  project="$TMP_ROOT/partial-failure-project"
+  worktree="$TMP_ROOT/partial-failure-worktree"
+  spawn_log="$TMP_ROOT/partial-failure-spawn.log"
+  spawn_double="$TMP_ROOT/partial-failure-spawn-double"
+  mkdir -p "$home/state" "$home/fm-state" "$project" "$worktree/.claude"
+  handoff="$home/fm-state/handoff-partial-failure.md"
+  printf 'handoff for partial failing spawn\n' > "$handoff"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$project" "worktree=$worktree" "backend=tmux" "harness=claude" "mode=no-mistakes" "yolo=off"
+  make_spawn_double "$spawn_double" "$spawn_log" 23
+
+  FM_HOME="$home" FM_SUCCESSOR_ID=demo-partial-fails FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_SUCCESSOR_DOUBLE_CREATE_META=1 FM_SUCCESSOR_DOUBLE_WRITE_HOOKS=1 \
+    "$ROOT/bin/fm-successor.sh" demo "$handoff" >/dev/null 2>&1
+  status=$?
+  expect_code 1 "$status" "partial failed successor spawn should exit 1"
+  assert_present "$home/state/demo.meta" "predecessor meta should remain active after partial spawn failure"
+  assert_absent "$home/state/demo-partial-fails.meta" "partial successor meta should be cleaned after spawn failure"
+  assert_absent "$home/state/demo-partial-fails.status" "partial successor status should be cleaned after spawn failure"
+  halt="$home/fm-state/watchdog.halt"
+  assert_present "$halt" "partial failed successor spawn should set halt flag"
+  artifact=$(sed -n 's/^artifact=//p' "$halt")
+  assert_grep "spawn failed" "$artifact" "failure artifact should explain partial spawn failure"
+  settings="$worktree/.claude/settings.local.json"
+  assert_grep '/demo.turn-ended' "$settings" "Claude hook should be restored to predecessor after partial spawn failure"
+  assert_no_grep '/demo-partial-fails.turn-ended' "$settings" "Claude hook should not remain targeted at failed successor"
+  pass "partial spawn failure cleans successor and restores hook"
+}
+
 test_invalid_x_link_halts_before_spawn() {
   local home spawn_log spawn_double handoff status halt artifact
   home="$TMP_ROOT/invalid-xlink-home"
@@ -783,6 +814,7 @@ test_successor_failure_restores_grok_predecessor_pointer
 test_successor_carries_x_followup_link
 test_successor_halts_when_predecessor_retire_fails
 test_spawn_failure_writes_halt_flag_and_failure_artifact
+test_partial_spawn_failure_cleans_successor_and_restores_hook
 test_invalid_x_link_halts_before_spawn
 test_watch_loop_clear_rotation_starts_successor_and_exits_when_halted
 test_watch_loop_clear_rotation_detects_claude_same_file_compaction
