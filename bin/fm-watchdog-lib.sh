@@ -213,7 +213,7 @@ fm_watchdog_paths_match() {
 }
 
 fm_watchdog_claude_project_key() {
-  fm_watchdog_canonical_path "$1" | sed 's#/#-#g'
+  fm_watchdog_canonical_path "$1" | sed 's#[^A-Za-z0-9]#-#g'
 }
 
 fm_watchdog_latest_claude_jsonl_for_worktree() {

@@ -58,10 +58,10 @@ test_meta_backed_claude_checkpoint_accepts_session_id_alias() {
   home="$TMP_ROOT/claude-alias-home"
   session_dir="$TMP_ROOT/claude-alias-sessions"
   checkpoint_dir="$TMP_ROOT/claude-alias-checkpoints"
-  target_wt="$TMP_ROOT/worktrees/claude-alias-target"
+  target_wt="$TMP_ROOT/worktrees/.no-mistakes/claude.alias-target"
   session='claude-alias-session'
   mkdir -p "$home/state" "$target_wt" "$checkpoint_dir"
-  key=$(cd "$target_wt" && pwd -P | sed 's#/#-#g')
+  key=$(cd "$target_wt" && pwd -P | sed 's#[^A-Za-z0-9]#-#g')
   mkdir -p "$session_dir/$key"
   fm_write_meta "$home/state/demo.meta" "worktree=$target_wt" "harness=claude"
   printf '{}\n' > "$session_dir/$key/$session.jsonl"
