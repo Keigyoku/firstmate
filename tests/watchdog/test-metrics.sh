@@ -190,6 +190,30 @@ test_unknown_harness_is_observe_only_tolerant() {
   pass "unknown harness writes tolerant null metrics"
 }
 
+test_claude_project_key_matches_cli_normalization() {
+  local out
+  out=$(bash -c '. "$1"; fm_watchdog_claude_project_key "/var/home/mlight/.treehouse/firstmate-7bab20/1/firstmate"' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  [ "$out" = "-var-home-mlight--treehouse-firstmate-7bab20-1-firstmate" ] \
+    || fail "claude project key should replace every non-alphanumeric byte, got $out"
+  pass "claude project key matches Claude CLI normalization"
+}
+
+test_task_scoped_claude_lookup_requires_worktree() {
+  local home session_dir latest status
+  home="$TMP_ROOT/claude-no-worktree-home"
+  session_dir="$TMP_ROOT/claude-no-worktree-sessions"
+  mkdir -p "$home/state" "$session_dir/some-project"
+  fm_write_meta "$home/state/demo.meta" "harness=claude"
+  printf '{}\n' > "$session_dir/some-project/newest.jsonl"
+
+  latest=$(FM_HOME="$home" FM_WATCHDOG_CLAUDE_SESSION_DIR="$session_dir" \
+    bash -c '. "$1"; fm_watchdog_session_file claude demo' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  status=$?
+  expect_code 1 "$status" "task-scoped claude lookup without worktree should fail"
+  [ -z "$latest" ] || fail "task-scoped claude lookup must not fall back to global latest"
+  pass "task-scoped claude lookup refuses unscoped global fallback"
+}
+
 test_codex_metrics_are_scoped_to_task_worktree() {
   local home session_dir target_wt other_wt out context
   home="$TMP_ROOT/codex-scope-home"
@@ -248,8 +272,12 @@ test_threshold_defaults() {
   out=$(FM_HOME="$TMP_ROOT/no-config-home" bash -c '. "$1"; fm_watchdog_thresholds' _ "$ROOT/bin/fm-watchdog-lib.sh")
   [ "$(printf '%s' "$out" | jq -r '.thresholds.compact_at_context_pct')" = 85 ] \
     || fail "default compact threshold should be 85"
-  [ "$(printf '%s' "$out" | jq -r '.rotate_to | join(",")')" = "codex,opencode" ] \
-    || fail "default rotation should match shipped example"
+  [ "$(printf '%s' "$out" | jq -r 'has("rotate_to")')" = false ] \
+    || fail "default rotation should stay reserved for W4"
+  [ "$(printf '%s' "$out" | jq -r '.thresholds | has("embargo_at_5hr_pct")')" = false ] \
+    || fail "default embargo thresholds should stay reserved for W4"
+  [ "$(printf '%s' "$out" | jq -r '.reserved_w4.embargo_at_5hr_pct')" = 85 ] \
+    || fail "reserved W4 embargo default should be preserved"
   pass "watchdog thresholds fall back to shipped defaults"
 }
 
@@ -316,6 +344,8 @@ test_codex_rollout_selection_matches_session
 test_meta_backed_codex_rollout_accepts_root_session_id
 test_codex_rollout_missing_session_is_loud
 test_unknown_harness_is_observe_only_tolerant
+test_claude_project_key_matches_cli_normalization
+test_task_scoped_claude_lookup_requires_worktree
 test_codex_metrics_are_scoped_to_task_worktree
 test_codex_session_lookup_uses_task_cache
 test_threshold_defaults

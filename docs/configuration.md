@@ -156,10 +156,15 @@ When it is absent, `bin/fm-watchdog-lib.sh` uses the same defaults as the exampl
 Set `FM_WATCHDOG_CONFIG` to point at a different JSON file, `FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR` to override Claude checkpoint discovery, or `FM_WATCHDOG_CODEX_SESSION_DIR` to override Codex rollout discovery.
 Metrics parsing supports Claude token-optimizer checkpoints, Codex rollout files, and an unknown-harness fallback record.
 When it is malformed, bootstrap reports `WATCHDOG: invalid config/watchdog.json - malformed JSON; using defaults`, and the watcher records a `watchdog_config` event before falling back to defaults.
-The recognized fields are `poll_interval_sec`, `thresholds.compact_at_context_pct`, `thresholds.successor_at_context_pct`, `thresholds.embargo_at_5hr_pct`, `thresholds.embargo_at_7d_pct`, `steer_retries`, `steer_timeout_sec`, `compact_pending_retry_sec`, `metrics_failure_event_interval_sec`, `rotate_to`, and `parser_version`.
+The active fields are `poll_interval_sec`, `thresholds.compact_at_context_pct`, `thresholds.successor_at_context_pct`, `steer_retries`, `steer_timeout_sec`, `compact_pending_retry_sec`, `metrics_failure_event_interval_sec`, and `parser_version`.
+The `reserved_w4` fields `embargo_at_5hr_pct`, `embargo_at_7d_pct`, and `rotate_to` in the example are reserved for W4 budget rotation and are ignored by W3 successor spawning, which reuses the predecessor harness.
 `poll_interval_sec` becomes the watcher's default poll cadence when `FM_POLL` is unset.
 When a non-secondmate Claude or Codex task reaches `thresholds.compact_at_context_pct`, `fm-watch.sh` records a `compact_threshold` event and starts `fm-steer.sh` to ask the task to complete its current unit and run `/compact`.
-The steer is retried up to `steer_retries`, each delivery is bounded by `steer_timeout_sec`, and a pending compact is retried only after `compact_pending_retry_sec` unless Claude/Codex transcript rotation proves a new session has taken over.
+When the task reaches `thresholds.successor_at_context_pct`, `fm-watch.sh` records a `clear_threshold` event and asks the task to complete its current unit and run `/clear`.
+After a proven clear rotation, or after compact or clear steering becomes undeliverable, the watcher writes a unique handoff under `fm-state/handoffs/`, refreshes `fm-state/handoff-latest.md` as a convenience pointer, and invokes `fm-successor.sh` with the unique handoff path.
+The successor adopts the predecessor worktree instead of creating a new one, reuses the predecessor project, backend, harness, model, effort, mode, and yolo metadata, carries `pr=` and `pr_head=`, carries any X-mode follow-up link without resetting its counter or timestamp, and retires the predecessor endpoint only after successor ownership is proven.
+If spawn, metadata carry, X-link carry, or readiness proof fails, `fm-successor.sh` writes `fm-state/watchdog.halt` and a `fm-state/steer-failure-<ts>.md` artifact; `fm-guard.sh` surfaces the halt, and the watcher exits instead of retrying until the artifact is inspected and the halt file is deliberately removed.
+Steers are retried up to `steer_retries`, each delivery is bounded by `steer_timeout_sec`, and a pending compact or clear is retried only after `compact_pending_retry_sec` unless Claude/Codex transcript rotation proves a new session has taken over.
 Metrics snapshots are written under `state/watchdog/metrics-<task-id>.json`, keeping watchdog artifacts inside firstmate's existing runtime-signal directory without mixing them into the watcher's own dotfile internals.
 Watchdog event logs are written as JSON lines to `fm-state/watchdog.events`.
 Use `FM_WATCHDOG_CONFIG` to point at a different config file, `FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR` for Claude token-optimizer checkpoints, `FM_WATCHDOG_CLAUDE_SESSION_DIR` for Claude transcript JSONL files, and `FM_WATCHDOG_CODEX_SESSION_DIR` for Codex rollout JSONL files.
@@ -305,6 +310,11 @@ FM_WATCHDOG_CLAUDE_SESSION_DIR=~/.claude/projects   # Claude transcript source f
 FM_WATCHDOG_CODEX_SESSION_DIR=~/.codex/sessions   # Codex rollout source for watchdog metrics and session rotation detection
 FM_STEER_BACKEND_CMD=   # test/diagnostic override for fm-steer delivery command; receives backend, target, and text
 FM_STEER_BACKOFF_SEC=5  # seconds between fm-steer retry attempts
+FM_STEER_REQUIRE_TARGET_EXISTS=0   # set truthy for fm-steer to verify the resolved backend endpoint and return rc 4 before delivery when missing
+FM_STEER_SEND_SETTLE=0  # fm-send settle delay used by fm-steer delivery; defaults to 0 for watchdog speed
+FM_SUCCESSOR_ID=        # test/diagnostic override for the watchdog successor task id; normally generated from the predecessor id and UTC time
+FM_SUCCESSOR_READY_TIMEOUT=30      # seconds fm-successor waits for readiness proof before halting the watchdog
+FM_SUCCESSOR_SPAWN_CMD= # test/diagnostic override for the fm-successor spawn command; receives the fm-spawn-compatible argument vector
 GROK_HOME=              # optional Grok config home for firstmate's global grok turn-end hook; defaults to ~/.grok
 FM_SEND_RETRIES=3       # fm-send Enter-retry attempts after typing the line once
 FM_SEND_SLEEP=0.4       # seconds between fm-send submit checks

@@ -31,13 +31,24 @@ case "$TIMEOUT_SEC" in ''|*[!0-9]*) TIMEOUT_SEC=120 ;; esac
 
 TARGET=$(fm_backend_resolve_selector "$SID" "$STATE" 2>/dev/null || printf '%s' "$SID")
 BACKEND=$(fm_backend_of_selector "$SID" "$TARGET" "$STATE" 2>/dev/null || printf tmux)
+EXPECTED_LABEL=$(fm_backend_expected_label_of_selector "$SID" "$STATE" 2>/dev/null || true)
+
+case "${FM_STEER_REQUIRE_TARGET_EXISTS:-0}" in
+  1|true|TRUE|yes|YES)
+    if ! fm_backend_target_exists "$BACKEND" "$TARGET" "$EXPECTED_LABEL"; then
+      fm_watchdog_event steer "$SID" undeliverable "backend=$BACKEND target_missing=$TARGET"
+      echo "fm-steer: target $TARGET does not exist on backend $BACKEND" >&2
+      exit 4
+    fi
+    ;;
+esac
 
 deliver_once() {
   if [ -n "${FM_STEER_BACKEND_CMD:-}" ]; then
     with_timeout "$FM_STEER_BACKEND_CMD" "$BACKEND" "$TARGET" "$TEXT"
     return $?
   fi
-  with_timeout env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_SEND_SETTLE=0 "$SCRIPT_DIR/fm-send.sh" "$SID" "$TEXT"
+  with_timeout env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_SEND_SETTLE="${FM_STEER_SEND_SETTLE:-0}" "$SCRIPT_DIR/fm-send.sh" "$SID" "$TEXT"
 }
 
 with_timeout() {
