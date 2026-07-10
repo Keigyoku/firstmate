@@ -105,13 +105,13 @@ successor_readiness_signal() {
       printf 'agent_alive'
       return 0
     fi
+    if fm_backend_target_exists "$backend" "$target" "fm-$successor" 2>/dev/null; then
+      printf 'endpoint'
+      return 0
+    fi
   fi
   if [ -s "$STATE/$successor.status" ]; then
     printf 'status'
-    return 0
-  fi
-  if [ -e "$STATE/$successor.turn-ended" ]; then
-    printf 'turn-ended'
     return 0
   fi
   return 1
@@ -330,7 +330,11 @@ if ! ready_signal=$(wait_successor_ready "$SUCCESSOR_ID" "$WORKTREE"); then
 fi
 
 fm_watchdog_event successor_spawn "$PREDECESSOR" succeeded "successor=$SUCCESSOR_ID handoff=$HANDOFF readiness=$ready_signal"
-retire_predecessor "$PREDECESSOR" "$META"
+if ! retire_output=$(retire_predecessor "$PREDECESSOR" "$META" 2>&1); then
+  cleanup_successor_after_failure "$SUCCESSOR_ID"
+  write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "predecessor retirement failed: $retire_output"
+  exit 1
+fi
 mark_predecessor_retired "$PREDECESSOR" "$META" "$SUCCESSOR_ID" "$HANDOFF"
 fm_watchdog_event predecessor_retired "$PREDECESSOR" closed "successor=$SUCCESSOR_ID"
 printf '%s\n' "$spawn_output"

@@ -15,6 +15,14 @@ make_live_tmux_fakebin() {
 case "$*" in
   "display-message -p -t target-pane #{pane_id}") printf '%%1\n'; exit 0 ;;
 esac
+case "$1 $2 $3" in
+  "display-message -p -t")
+    if [ "${FM_TMUX_TARGET_EXISTS_ALL:-0}" = 1 ] && [ "$5" = '#{pane_id}' ]; then
+      printf '%%1\n'
+      exit 0
+    fi
+    ;;
+esac
 exit 1
 SH
   chmod +x "$fakebin/tmux"
@@ -92,6 +100,7 @@ make_retire_double() {
   cat > "$path" <<'SH'
 #!/usr/bin/env bash
 printf '%s|%s\n' "$1" "$2" >> "$FM_SUCCESSOR_RETIRE_LOG"
+exit "${FM_SUCCESSOR_RETIRE_STATUS:-0}"
 SH
   chmod +x "$path"
   : > "$log"
@@ -179,7 +188,7 @@ test_successor_preserves_scout_and_pr_metadata() {
   make_retire_double "$retire_double" "$retire_log"
 
   FM_HOME="$home" FM_SUCCESSOR_ID=demo-metadata-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
-    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_SUCCESSOR_DOUBLE_CREATE_META=1 FM_SUCCESSOR_DOUBLE_READY=turn \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_SUCCESSOR_DOUBLE_CREATE_META=1 FM_SUCCESSOR_DOUBLE_READY=status \
     FM_SUCCESSOR_RETIRE_CMD="$retire_double" FM_SUCCESSOR_RETIRE_LOG="$retire_log" \
     "$ROOT/bin/fm-successor.sh" demo "$handoff" >/dev/null \
     || fail "metadata successor spawn should succeed"
@@ -191,6 +200,65 @@ test_successor_preserves_scout_and_pr_metadata() {
   assert_grep 'pr_head=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' "$successor_meta" "successor meta should carry pr_head"
   [ "$(cat "$retire_log")" = "tmux|target-pane" ] || fail "metadata predecessor should retire after readiness"
   pass "successor preserves scout and PR metadata"
+}
+
+test_successor_accepts_backend_endpoint_readiness() {
+  local home project worktree spawn_log retire_log spawn_double retire_double handoff event
+  home="$TMP_ROOT/endpoint-ready-home"
+  project="$home/project"
+  worktree="$home/worktree"
+  spawn_log="$TMP_ROOT/endpoint-ready-spawn.log"
+  retire_log="$TMP_ROOT/endpoint-ready-retire.log"
+  spawn_double="$TMP_ROOT/endpoint-ready-spawn-double"
+  retire_double="$TMP_ROOT/endpoint-ready-retire-double"
+  mkdir -p "$home/state" "$home/fm-state" "$project" "$worktree"
+  handoff="$home/fm-state/handoff-endpoint.md"
+  printf 'handoff for endpoint-ready successor\n' > "$handoff"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$project" "worktree=$worktree" "backend=tmux" "harness=codex" "mode=no-mistakes" "yolo=off"
+  make_spawn_double "$spawn_double" "$spawn_log" 0
+  make_retire_double "$retire_double" "$retire_log"
+
+  FM_HOME="$home" FM_SUCCESSOR_ID=demo-endpoint-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_SUCCESSOR_DOUBLE_CREATE_META=1 FM_TMUX_TARGET_EXISTS_ALL=1 \
+    FM_SUCCESSOR_RETIRE_CMD="$retire_double" FM_SUCCESSOR_RETIRE_LOG="$retire_log" \
+    "$ROOT/bin/fm-successor.sh" demo "$handoff" >/dev/null \
+    || fail "endpoint-ready successor spawn should succeed"
+
+  event="$home/fm-state/watchdog.events"
+  assert_grep 'readiness=endpoint' "$event" "spawn success event should record endpoint readiness proof"
+  assert_absent "$home/state/demo.meta" "endpoint-ready predecessor meta should be retired"
+  pass "successor accepts backend endpoint readiness"
+}
+
+test_successor_rejects_bare_turnend_readiness() {
+  local home project worktree spawn_log retire_log spawn_double retire_double handoff status halt artifact
+  home="$TMP_ROOT/turnend-ready-home"
+  project="$home/project"
+  worktree="$home/worktree"
+  spawn_log="$TMP_ROOT/turnend-ready-spawn.log"
+  retire_log="$TMP_ROOT/turnend-ready-retire.log"
+  spawn_double="$TMP_ROOT/turnend-ready-spawn-double"
+  retire_double="$TMP_ROOT/turnend-ready-retire-double"
+  mkdir -p "$home/state" "$home/fm-state" "$project" "$worktree"
+  handoff="$home/fm-state/handoff-turnend.md"
+  printf 'handoff for turnend-only successor\n' > "$handoff"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$project" "worktree=$worktree" "backend=tmux" "harness=codex" "mode=no-mistakes" "yolo=off"
+  make_spawn_double "$spawn_double" "$spawn_log" 0
+  make_retire_double "$retire_double" "$retire_log"
+
+  FM_HOME="$home" FM_SUCCESSOR_ID=demo-turnend-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_SUCCESSOR_DOUBLE_CREATE_META=1 FM_SUCCESSOR_DOUBLE_READY=turn \
+    FM_SUCCESSOR_READY_TIMEOUT=0 FM_SUCCESSOR_RETIRE_CMD="$retire_double" FM_SUCCESSOR_RETIRE_LOG="$retire_log" \
+    "$ROOT/bin/fm-successor.sh" demo "$handoff" >/dev/null 2>&1
+  status=$?
+  expect_code 1 "$status" "turn-ended-only successor should exit 1"
+  assert_present "$home/state/demo.meta" "predecessor meta should remain active for turn-ended-only readiness"
+  assert_absent "$home/state/demo-turnend-next.meta" "turn-ended-only successor meta should be cleaned up"
+  halt="$home/fm-state/watchdog.halt"
+  assert_present "$halt" "turn-ended-only successor should set halt flag"
+  artifact=$(sed -n 's/^artifact=//p' "$halt")
+  assert_grep "successor readiness could not be proven" "$artifact" "failure artifact should explain missing readiness"
+  pass "successor rejects bare turn-ended readiness"
 }
 
 test_successor_halts_without_readiness_and_keeps_predecessor_active() {
@@ -258,6 +326,38 @@ test_successor_carries_x_followup_link() {
   assert_grep "worktree=$worktree" "$successor_meta" "successor meta should adopt predecessor worktree"
   [ "$(cat "$retire_log")" = "tmux|target-pane" ] || fail "X-linked predecessor should retire after relink"
   pass "successor carries X follow-up link before retiring predecessor"
+}
+
+test_successor_halts_when_predecessor_retire_fails() {
+  local home project worktree spawn_log retire_log spawn_double retire_double handoff status halt artifact
+  home="$TMP_ROOT/retire-fails-home"
+  project="$home/project"
+  worktree="$home/worktree"
+  spawn_log="$TMP_ROOT/retire-fails-spawn.log"
+  retire_log="$TMP_ROOT/retire-fails-retire.log"
+  spawn_double="$TMP_ROOT/retire-fails-spawn-double"
+  retire_double="$TMP_ROOT/retire-fails-retire-double"
+  mkdir -p "$home/state" "$home/fm-state" "$project" "$worktree"
+  handoff="$home/fm-state/handoff-retire-fails.md"
+  printf 'handoff for retire-failure successor\n' > "$handoff"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$project" "worktree=$worktree" "backend=tmux" "harness=codex" "mode=no-mistakes" "yolo=off"
+  make_spawn_double "$spawn_double" "$spawn_log" 0
+  make_retire_double "$retire_double" "$retire_log"
+
+  FM_HOME="$home" FM_SUCCESSOR_ID=demo-retire-fails-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_SUCCESSOR_DOUBLE_CREATE_META=1 FM_SUCCESSOR_DOUBLE_READY=status \
+    FM_SUCCESSOR_RETIRE_CMD="$retire_double" FM_SUCCESSOR_RETIRE_LOG="$retire_log" FM_SUCCESSOR_RETIRE_STATUS=17 \
+    "$ROOT/bin/fm-successor.sh" demo "$handoff" >/dev/null 2>&1
+  status=$?
+  expect_code 1 "$status" "retire failure should exit 1"
+  assert_present "$home/state/demo.meta" "predecessor meta should remain active after retire failure"
+  assert_absent "$home/state/retired/demo.meta" "predecessor meta should not be archived after retire failure"
+  assert_absent "$home/state/demo-retire-fails-next.meta" "successor meta should be cleaned up after retire failure"
+  halt="$home/fm-state/watchdog.halt"
+  assert_present "$halt" "retire failure should set halt flag"
+  artifact=$(sed -n 's/^artifact=//p' "$halt")
+  assert_grep "predecessor retirement failed" "$artifact" "failure artifact should explain retire failure"
+  pass "successor halts when predecessor retire fails"
 }
 
 test_spawn_failure_writes_halt_flag_and_failure_artifact() {
@@ -460,8 +560,11 @@ test_steer_rc4_escalates_to_successor() {
 
 test_successor_spawns_with_handoff_brief_and_retires_predecessor
 test_successor_preserves_scout_and_pr_metadata
+test_successor_accepts_backend_endpoint_readiness
+test_successor_rejects_bare_turnend_readiness
 test_successor_halts_without_readiness_and_keeps_predecessor_active
 test_successor_carries_x_followup_link
+test_successor_halts_when_predecessor_retire_fails
 test_spawn_failure_writes_halt_flag_and_failure_artifact
 test_invalid_x_link_halts_before_spawn
 test_watch_loop_clear_rotation_starts_successor_and_exits_when_halted
