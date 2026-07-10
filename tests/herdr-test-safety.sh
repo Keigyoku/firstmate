@@ -45,10 +45,10 @@
 # is not.
 set -u
 
-# herdr_refuse_if_default: 0 (SAFE to proceed) only if <name> is a currently-
-# listed, non-default session. 1 (REFUSE) on anything else.
+# herdr_refuse_if_default: 0 (SAFE to proceed) only if <name> is verified as a
+# non-default session. 1 (REFUSE) on anything else.
 herdr_refuse_if_default() {  # <name>
-  local name=$1 info flag
+  local name=$1 info flag status session socket
   [ -n "$name" ] || { echo "herdr safety guard: refusing - empty session name" >&2; return 1; }
   if [ "$name" = default ]; then
     echo "herdr safety guard: refusing - name is literally 'default'" >&2
@@ -59,6 +59,21 @@ herdr_refuse_if_default() {  # <name>
   if [ "$flag" = "false" ]; then
     return 0
   fi
+  # Herdr 0.7.3 no longer lists some scoped named sessions here in headless
+  # runs, even though `status --session <name>` still resolves their socket.
+  # Keep the hard default refusal above, then accept only a status result whose
+  # client session and named-session socket both match this explicit name.
+  status=$(herdr status --json --session "$name" 2>/dev/null) || {
+    echo "herdr safety guard: refusing - session '$name' not found in 'herdr session list', or flagged default (default=${flag:-<not found>})" >&2
+    return 1
+  }
+  session=$(printf '%s' "$status" | jq -r '.client.session // empty' 2>/dev/null)
+  socket=$(printf '%s' "$status" | jq -r '.server.socket // empty' 2>/dev/null)
+  case "$socket" in
+    */sessions/"$name"/herdr.sock)
+      [ "$session" = "$name" ] && return 0
+      ;;
+  esac
   echo "herdr safety guard: refusing - session '$name' not found in 'herdr session list', or flagged default (default=${flag:-<not found>})" >&2
   return 1
 }

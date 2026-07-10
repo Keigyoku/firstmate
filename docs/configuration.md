@@ -154,14 +154,21 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 See [`docs/examples/watchdog.json`](examples/watchdog.json) for a starting point to copy into local `config/watchdog.json`.
 When it is absent, `bin/fm-watchdog-lib.sh` uses the same defaults as the example file.
 Set `FM_WATCHDOG_CONFIG` to point at a different JSON file, `FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR` to override Claude checkpoint discovery, or `FM_WATCHDOG_CODEX_SESSION_DIR` to override Codex rollout discovery.
-Current metrics parsing is observe-only and supports Claude token-optimizer checkpoints, Codex rollout files, and an unknown-harness fallback record.
-Metrics snapshots are written under `state/watchdog/metrics-<session-id>.json`, keeping watchdog artifacts inside firstmate's existing runtime-signal directory without mixing them into the watcher's own dotfile internals.
+Metrics parsing supports Claude token-optimizer checkpoints, Codex rollout files, and an unknown-harness fallback record.
+When it is malformed, bootstrap reports `WATCHDOG: invalid config/watchdog.json - malformed JSON; using defaults`, and the watcher records a `watchdog_config` event before falling back to defaults.
+The recognized fields are `poll_interval_sec`, `thresholds.compact_at_context_pct`, `thresholds.successor_at_context_pct`, `thresholds.embargo_at_5hr_pct`, `thresholds.embargo_at_7d_pct`, `steer_retries`, `steer_timeout_sec`, `compact_pending_retry_sec`, `metrics_failure_event_interval_sec`, `rotate_to`, and `parser_version`.
+`poll_interval_sec` becomes the watcher's default poll cadence when `FM_POLL` is unset.
+When a non-secondmate Claude or Codex task reaches `thresholds.compact_at_context_pct`, `fm-watch.sh` records a `compact_threshold` event and starts `fm-steer.sh` to ask the task to complete its current unit and run `/compact`.
+The steer is retried up to `steer_retries`, each delivery is bounded by `steer_timeout_sec`, and a pending compact is retried only after `compact_pending_retry_sec` unless Claude/Codex transcript rotation proves a new session has taken over.
+Metrics snapshots are written under `state/watchdog/metrics-<task-id>.json`, keeping watchdog artifacts inside firstmate's existing runtime-signal directory without mixing them into the watcher's own dotfile internals.
+Watchdog event logs are written as JSON lines to `fm-state/watchdog.events`.
+Use `FM_WATCHDOG_CONFIG` to point at a different config file, `FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR` for Claude token-optimizer checkpoints, `FM_WATCHDOG_CLAUDE_SESSION_DIR` for Claude transcript JSONL files, and `FM_WATCHDOG_CODEX_SESSION_DIR` for Codex rollout JSONL files.
 
 ## Toolchain
 
-On session start the first mate detects what its required toolchain is missing or too old (tmux, node, gh, treehouse with durable lease support, no-mistakes v1.31.2 or newer, gh-axi, chrome-devtools-axi, lavish-axi, tasks-axi 0.1.1 or newer, and quota-axi), lists it with the exact install commands, and installs only after you say go.
+On session start the first mate detects what its required toolchain is missing or too old (tmux, node, gh, jq, treehouse with durable lease support, no-mistakes v1.31.2 or newer, gh-axi, chrome-devtools-axi, lavish-axi, tasks-axi 0.1.1 or newer, and quota-axi), lists it with the exact install commands, and installs only after you say go.
 When bootstrap resolves `backend=orca` from `FM_BACKEND` or `config/backend`, it requires the expected Orca CLI shape, keeps the universal `node` requirement, and skips `tmux` and `treehouse`.
-When `config/crew-dispatch.json` exists, bootstrap also requires `jq` for dispatch profile validation.
+Bootstrap requires `jq` in every profile because dispatch-profile validation, watchdog config validation, X-mode clients, watchdog metrics parsing, and JSON-speaking backends depend on it.
 When X mode is opted in, bootstrap also requires `curl` and `jq` before arming the relay poll shim.
 `tasks-axi` and `quota-axi` are required bootstrap tools in every profile, the same class as `lavish-axi`.
 An absent or incompatible `tasks-axi` reports `MISSING: tasks-axi (install: npm install -g tasks-axi)`; when `config/backlog-backend` is not `manual` and compatible `tasks-axi` is on `PATH`, bootstrap also prints `TASKS_AXI: available` and firstmate uses its verbs for routine backlog mutations, otherwise it hand-edits `data/backlog.md` until installation is approved and completed.
@@ -261,7 +268,7 @@ FM_SESSION_START_STATUS_TAIL=5   # state/*.status lines printed per task in the 
 FM_BOOTSTRAP_DETECT_ONLY=0   # internal/read-only session-start mode: skip bootstrap's mutating sweeps and print advisory TANGLE wording
 FM_GUARD_READ_ONLY=0    # internal/read-only guard mode: keep alarms but suppress drain, arm, and checkout repair commands
 FM_GUARD_CONTINUE_LINE='This is a supervision warning only; the guarded operation WILL still run.'   # banner continuation line; fm-send.sh overrides it to name the requested message specifically
-FM_POLL=15              # seconds between watcher poll cycles
+FM_POLL=30              # seconds between watcher poll cycles; unset uses config/watchdog.json poll_interval_sec, then the watchdog default
 FM_HEARTBEAT=600        # base seconds between heartbeat scans; no-change heartbeats are absorbed while idle
 FM_HEARTBEAT_MAX=7200   # heartbeat backoff cap
 FM_CHECK_INTERVAL=300   # seconds between slow checks (merge polls or the X-mode poll shim)
@@ -292,9 +299,12 @@ FM_STALE_WORKTREE_LOCK_AGE_SECS=30       # min mtime age before fm-teardown.sh t
 FM_STALE_WORKTREE_LOCK_RETRY_WAIT_SECS=2 # seconds fm-teardown.sh waits before retrying a worktree return that failed on a git lock or transient git-process lock message
 FM_BUSY_REGEX='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|ctrl\+c to stop|Ctrl\+C cancel'   # busy-pane signatures, shared by watcher, fm-crew-state pane fallback, and tmux helper
 FM_COMPOSER_IDLE_RE=    # optional empty-composer regex, applied after dim-ghost and border stripping
-FM_WATCHDOG_CONFIG=     # optional path to a watchdog config JSON file; defaults to config/watchdog.json
-FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR=  # optional Claude token-optimizer checkpoint directory override
-FM_WATCHDOG_CODEX_SESSION_DIR=      # optional Codex rollout/session directory override
+FM_WATCHDOG_CONFIG=     # optional path to watchdog config; defaults to config/watchdog.json under the effective config dir
+FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR=~/.claude/token-optimizer/checkpoints   # Claude token-optimizer checkpoint source for watchdog metrics
+FM_WATCHDOG_CLAUDE_SESSION_DIR=~/.claude/projects   # Claude transcript source for watchdog session rotation detection
+FM_WATCHDOG_CODEX_SESSION_DIR=~/.codex/sessions   # Codex rollout source for watchdog metrics and session rotation detection
+FM_STEER_BACKEND_CMD=   # test/diagnostic override for fm-steer delivery command; receives backend, target, and text
+FM_STEER_BACKOFF_SEC=5  # seconds between fm-steer retry attempts
 GROK_HOME=              # optional Grok config home for firstmate's global grok turn-end hook; defaults to ~/.grok
 FM_SEND_RETRIES=3       # fm-send Enter-retry attempts after typing the line once
 FM_SEND_SLEEP=0.4       # seconds between fm-send submit checks

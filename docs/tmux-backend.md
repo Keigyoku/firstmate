@@ -102,6 +102,8 @@ $ tmux display-message -p -t fmtest:testwin '#{pane_current_command}'
 zsh
 ```
 
+Cursor and Hermes were additionally verified on 2026-07-05 to expose foreground process names `cursor-agent` and `hermes`, respectively.
+
 An idle pane reports the shell's own name; a live foreground process reports its own name; the pane reverts to the shell's name the moment that process exits - exactly the alive/dead signal the probe needs.
 
 A second case matters for a harness that shells out to subcommands while it runs (git, npm, no-mistakes, ...): does `pane_current_command` report the harness or the subcommand?

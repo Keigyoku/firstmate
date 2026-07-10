@@ -2,6 +2,9 @@
 # Firstmate watcher.
 # Classifies supervision wakes in bash. In normal mode it absorbs benign wakes
 # and keeps blocking; it queues and exits only for actionable wakes.
+# Before each normal wake scan it also runs the session-metrics watchdog, which
+# can steer a non-secondmate Claude/Codex task into an unmanned compact cycle
+# when configured context thresholds are crossed.
 # The no-verb signal and stale path is absorb-only-when-provably-working: a wake
 # is absorbed only when the crew shows POSITIVE evidence it is still working (an
 # actively-running no-mistakes step, or a backend busy signal), and surfaced
@@ -41,12 +44,12 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 mkdir -p "$STATE"
 
-# shellcheck source=bin/fm-wake-lib.sh
+# shellcheck source=bin/fm-wake-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # Shared wake classifier (captain-relevant verbs + signal/stale/heartbeat
 # predicates), the SAME library the away-mode daemon uses, so the triage policy
 # has one definition.
-# shellcheck source=bin/fm-classify-lib.sh
+# shellcheck source=bin/fm-classify-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 # The DEFAULT EVENT SOURCE: this watcher's poll loop over the pull primitives
 # (capture, recorded windows, backend busy-state, and the BUSY_REGEX fallback)
@@ -55,8 +58,10 @@ mkdir -p "$STATE"
 # original regex path. herdr contributes native semantic busy-state through the
 # same poll loop until a future push subscription replaces this default source;
 # see bin/fm-backend.sh and docs/herdr-backend.md.
-# shellcheck source=bin/fm-backend.sh
+# shellcheck source=bin/fm-backend.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-watchdog-lib.sh
+. "$SCRIPT_DIR/fm-watchdog-lib.sh"
 
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
@@ -104,7 +109,11 @@ else
   stat_sig()   { stat -c '%s:%Y' "$1" 2>/dev/null; }
 fi
 
-POLL=${FM_POLL:-15}                   # seconds between cycles
+WATCHDOG_BOOT_CONFIG=$(fm_watchdog_thresholds 2>/dev/null || true)
+WATCHDOG_POLL=$(printf '%s' "$WATCHDOG_BOOT_CONFIG" | jq -r '.poll_interval_sec // empty' 2>/dev/null || true)
+case "$WATCHDOG_POLL" in ''|null|*[!0-9]*) WATCHDOG_POLL=15 ;; esac
+[ "$WATCHDOG_POLL" -gt 0 ] || WATCHDOG_POLL=15
+POLL=${FM_POLL:-$WATCHDOG_POLL}       # seconds between cycles
 HEARTBEAT=${FM_HEARTBEAT:-600}        # base seconds between heartbeat scans
 HEARTBEAT_MAX=${FM_HEARTBEAT_MAX:-7200}  # heartbeat backoff cap
 CHECK_INTERVAL=${FM_CHECK_INTERVAL:-300}  # seconds between *.check.sh sweeps
@@ -231,6 +240,138 @@ recorded_windows() {
     esac
     seen="$seen|$w|"
     printf '%s\n' "$w"
+  done
+}
+
+watchdog_marker_key() {
+  printf '%s' "$1" | tr ':/.' '___'
+}
+
+watchdog_check_rotation() {  # <task> <harness> <marker-file>
+  local task=$1 harness=$2 marker=$3 old_sig old_sid file sig new_sid
+  [ -s "$marker" ] || return 0
+  old_sig=$(sed -n '1p' "$marker")
+  old_sid=$(sed -n '2p' "$marker")
+  file=$(fm_watchdog_session_file "$harness" "$task" 2>/dev/null || true)
+  [ -n "$file" ] || return 0
+  sig=$(fm_watchdog_file_identity "$file" 2>/dev/null || true)
+  [ -n "$sig" ] || return 0
+  [ "$sig" != "$old_sig" ] || return 0
+  new_sid=$(fm_watchdog_session_id_from_file "$harness" "$file" 2>/dev/null || basename "$file")
+  fm_watchdog_event compact_rotated "$task" rearmed "old_sid=$old_sid new_sid=$new_sid file=$file"
+  printf '%s\n%s\n' "$old_sig" "$old_sid" > "$STATE/watchdog/.compact-handled-$(watchdog_marker_key "$task")"
+  rm -f "$marker"
+}
+
+watchdog_steer_inflight() {
+  local marker=$1 pid
+  [ -s "$marker" ] || return 1
+  pid=$(sed -n '1p' "$marker")
+  case "$pid" in ''|*[!0-9]*) rm -f "$marker"; return 1 ;; esac
+  if kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$marker"
+  return 1
+}
+
+watchdog_pending_active() {
+  local pending=$1 task=$2 retry_sec=$3 key=$4 age
+  [ -s "$pending" ] || return 1
+  case "$retry_sec" in ''|null|*[!0-9]*) retry_sec=900 ;; esac
+  [ "$retry_sec" -gt 0 ] || retry_sec=900
+  age=$(fm_path_age "$pending")
+  if [ "$age" -lt "$retry_sec" ]; then
+    return 0
+  fi
+  fm_watchdog_event compact_pending_expired "$task" retrying "age_sec=$age retry_sec=$retry_sec key=$key"
+  rm -f "$pending"
+  return 1
+}
+
+watchdog_collect_failure() {
+  local task=$1 key=$2 interval=$3 err_file=$4 throttle age detail
+  case "$interval" in ''|null|*[!0-9]*) interval=300 ;; esac
+  [ "$interval" -gt 0 ] || interval=300
+  throttle="$STATE/watchdog/.metrics-failure-$key"
+  if [ -e "$throttle" ]; then
+    age=$(fm_path_age "$throttle")
+    [ "$age" -lt "$interval" ] && return 0
+  fi
+  detail=$(tr '\n' ';' < "$err_file" | sed 's/[[:space:]][[:space:]]*/ /g; s/;*$//' | cut -c 1-300)
+  [ -n "$detail" ] || detail="metrics collection failed"
+  fm_watchdog_event metrics_collect_failed "$task" throttled "$detail"
+  : > "$throttle"
+}
+
+watchdog_collect_failure_recent() {
+  local key=$1 interval=$2 throttle age
+  case "$interval" in ''|null|*[!0-9]*) interval=300 ;; esac
+  [ "$interval" -gt 0 ] || interval=300
+  throttle="$STATE/watchdog/.metrics-failure-$key"
+  [ -e "$throttle" ] || return 1
+  age=$(fm_path_age "$throttle")
+  [ "$age" -lt "$interval" ]
+}
+
+watchdog_start_compact_steer() {
+  local task=$1 context=$2 compact=$3 sig=$4 sid=$5 key=$6 pending=$7 inflight=$8 pid
+  (
+    if "$SCRIPT_DIR/fm-steer.sh" "$task" "/compact complete current task, then /compact"; then
+      printf '%s\n%s\n' "$sig" "$sid" > "$pending"
+    else
+      fm_watchdog_event compact_steer_failed "$task" "rc=$?" "context_pct=$context threshold=$compact"
+    fi
+    rm -f "$inflight"
+  ) >/dev/null 2>&1 &
+  pid=$!
+  printf '%s\n' "$pid" > "$inflight"
+  fm_watchdog_event compact_steer_started "$task" "pid=$pid" "context_pct=$context threshold=$compact key=$key"
+}
+
+watchdog_threshold_scan() {
+  local config compact pending_retry failure_interval meta task harness metrics context file sig sid key handled pending inflight err_file
+  config=$(fm_watchdog_thresholds 2>/dev/null) || return 0
+  compact=$(printf '%s' "$config" | jq -r '.thresholds.compact_at_context_pct // empty' 2>/dev/null || true)
+  case "$compact" in ''|null|*[!0-9.]* ) return 0 ;; esac
+  pending_retry=$(printf '%s' "$config" | jq -r '.compact_pending_retry_sec // empty' 2>/dev/null || true)
+  failure_interval=$(printf '%s' "$config" | jq -r '.metrics_failure_event_interval_sec // empty' 2>/dev/null || true)
+  for meta in "$STATE"/*.meta; do
+    [ -e "$meta" ] || continue
+    [ "$(fm_meta_get "$meta" kind)" = secondmate ] && continue
+    task=$(basename "$meta")
+    task=${task%.meta}
+    harness=$(fm_meta_get "$meta" harness)
+    [ -n "$harness" ] || continue
+    key=$(watchdog_marker_key "$task")
+    pending="$STATE/watchdog/.compact-pending-$key"
+    inflight="$STATE/watchdog/.compact-steering-$key"
+    watchdog_check_rotation "$task" "$harness" "$pending"
+    watchdog_pending_active "$pending" "$task" "$pending_retry" "$key" && continue
+    watchdog_steer_inflight "$inflight" && continue
+    mkdir -p "$STATE/watchdog"
+    err_file="$STATE/watchdog/.metrics-error-$key"
+    watchdog_collect_failure_recent "$key" "$failure_interval" && continue
+    if ! metrics=$(fm_watchdog_collect_metrics "$harness" "$task" 2>"$err_file"); then
+      watchdog_collect_failure "$task" "$key" "$failure_interval" "$err_file"
+      rm -f "$err_file"
+      continue
+    fi
+    rm -f "$STATE/watchdog/.metrics-failure-$key"
+    rm -f "$err_file"
+    [ -n "$metrics" ] || continue
+    context=$(jq -r '.context_pct // empty' "$metrics" 2>/dev/null || true)
+    case "$context" in ''|null|*[!0-9.]* ) continue ;; esac
+    awk "BEGIN { exit !($context >= $compact) }" || continue
+    file=$(fm_watchdog_session_file "$harness" "$task" 2>/dev/null || true)
+    [ -n "$file" ] || continue
+    sig=$(fm_watchdog_file_identity "$file" 2>/dev/null || true)
+    [ -n "$sig" ] || continue
+    handled=$(cat "$STATE/watchdog/.compact-handled-$key" 2>/dev/null || true)
+    [ "$(printf '%s\n' "$handled" | sed -n '1p')" = "$sig" ] && continue
+    sid=$(fm_watchdog_session_id_from_file "$harness" "$file" 2>/dev/null || basename "$file")
+    fm_watchdog_event compact_threshold "$task" triggered "context_pct=$context threshold=$compact sid=$sid"
+    watchdog_start_compact_steer "$task" "$context" "$compact" "$sig" "$sid" "$key" "$pending" "$inflight"
   done
 }
 
@@ -399,6 +540,8 @@ while :; do
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   touch "$STATE/.last-watcher-beat"
+
+  watchdog_threshold_scan
 
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
   # Time-based via .last-check mtime so the cadence survives watcher restarts.

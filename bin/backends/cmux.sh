@@ -109,7 +109,7 @@ FM_BACKEND_CMUX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_BACKEND_CMUX_ROOT}}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 
-# shellcheck source=bin/fm-backend-hometag-lib.sh
+# shellcheck source=bin/fm-backend-hometag-lib.sh disable=SC1091
 . "$FM_BACKEND_CMUX_ROOT/bin/fm-backend-hometag-lib.sh"
 
 # Verified minimum: the version the live pass ran against (docs/cmux-backend.md).
@@ -494,10 +494,9 @@ fm_backend_cmux_send_key() {  # <target> <key> [expected-label]
 }
 
 # fm_backend_cmux_send_text_line: send one line of TEXT then submit. cmux has
-# no single-call atomic "run and submit" primitive (like herdr's `pane run`),
-# so this composes send (literal) + send-key enter, exactly like zellij's
-# equivalent - used for the fixed spawn-time commands (treehouse get, the
-# GOTMPDIR export).
+# no single-call atomic "run and submit" primitive, so this composes send
+# (literal) + send-key enter, exactly like zellij's equivalent - used for the
+# fixed spawn-time commands (treehouse get, the GOTMPDIR export).
 fm_backend_cmux_send_text_line() {  # <target> <text> [expected-label]
   fm_backend_cmux_send_literal "$1" "$2" "${3:-}" || return 1
   fm_backend_cmux_send_key "$1" Enter "${3:-}"

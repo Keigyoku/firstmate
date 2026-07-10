@@ -36,7 +36,7 @@
 #     secondmates never spawn secondmates), it is a silent no-op.
 set -u
 
-# shellcheck source=tests/lib.sh
+# shellcheck source=tests/lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
@@ -84,6 +84,14 @@ test_tmux_agent_alive_classifies() {
   fb=$(make_probe_tmux "$TMP_ROOT/tmux-grok" grok)
   [ "$(PATH="$fb:$BASE_PATH" bash -c '. "$0/bin/fm-backend.sh"; fm_backend_source tmux; fm_backend_tmux_agent_alive sess:win' "$ROOT")" = alive ] \
     || fail "a live grok foreground process should classify as alive"
+
+  fb=$(make_probe_tmux "$TMP_ROOT/tmux-cursor" cursor-agent)
+  [ "$(PATH="$fb:$BASE_PATH" bash -c '. "$0/bin/fm-backend.sh"; fm_backend_source tmux; fm_backend_tmux_agent_alive sess:win' "$ROOT")" = alive ] \
+    || fail "a live cursor-agent foreground process should classify as alive"
+
+  fb=$(make_probe_tmux "$TMP_ROOT/tmux-hermes" hermes)
+  [ "$(PATH="$fb:$BASE_PATH" bash -c '. "$0/bin/fm-backend.sh"; fm_backend_source tmux; fm_backend_tmux_agent_alive sess:win' "$ROOT")" = alive ] \
+    || fail "a live hermes foreground process should classify as alive"
 
   fb=$(make_probe_tmux "$TMP_ROOT/tmux-zsh" zsh)
   [ "$(PATH="$fb:$BASE_PATH" bash -c '. "$0/bin/fm-backend.sh"; fm_backend_source tmux; fm_backend_tmux_agent_alive sess:win' "$ROOT")" = dead ] \
@@ -283,18 +291,22 @@ test_sweep_respawns_confirmed_dead_secondmate() {
 }
 
 test_sweep_leaves_alive_secondmate_untouched() {
-  local w fb tmuxfb log out
-  w=$(new_world sweep-alive)
-  add_sm_home "$w" sm1 firstmate:fm-sm1
-  fb=$(make_toolchain "$w"); tmuxfb=$(make_liveness_tmux "$w")
-  log="$w/calls.log"; : > "$log"
+  local w fb tmuxfb log out harness cmd
+  for harness in claude cursor hermes; do
+    w=$(new_world "sweep-alive-$harness")
+    add_sm_home "$w" sm1 firstmate:fm-sm1 "$harness"
+    fb=$(make_toolchain "$w"); tmuxfb=$(make_liveness_tmux "$w")
+    log="$w/calls.log"; : > "$log"
+    cmd=$harness
+    [ "$harness" = cursor ] && cmd=cursor-agent
 
-  out=$(run_bootstrap "$tmuxfb:$fb" "$w/home" claude "$log")
+    out=$(run_bootstrap "$tmuxfb:$fb" "$w/home" "$cmd" "$log")
 
-  assert_contains "$out" "SECONDMATE_LIVENESS: secondmate sm1: already-live" \
-    "a live claude foreground process should be reported as already-live"
-  [ ! -s "$log" ] || fail "an already-live secondmate must never be killed or respawned: $(cat "$log")"
-  pass "sweep: an already-live secondmate is left untouched (no kill, no respawn)"
+    assert_contains "$out" "SECONDMATE_LIVENESS: secondmate sm1: already-live" \
+      "a live $harness foreground process should be reported as already-live"
+    [ ! -s "$log" ] || fail "an already-live $harness secondmate must never be killed or respawned: $(cat "$log")"
+  done
+  pass "sweep: already-live verified secondmates are left untouched"
 }
 
 test_sweep_handles_cursor_and_hermes_secondmates() {

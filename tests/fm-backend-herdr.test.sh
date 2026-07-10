@@ -10,7 +10,7 @@
 # gated on the herdr binary actually being installed.
 set -u
 
-# shellcheck source=tests/lib.sh
+# shellcheck source=tests/lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the herdr adapter)"; exit 0; }
@@ -746,6 +746,18 @@ test_send_key_normalizes_and_targets_pane() {
   pass "fm_backend_herdr_send_key: normalizes the key and targets the right pane"
 }
 
+test_send_text_line_uses_interactive_send_primitives() {
+  local dir log resp fb
+  dir="$TMP_ROOT/send-text-line"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SEND_LINE_SETTLE=0 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_line default:w1:p2 "echo captain-on-deck-line"' "$ROOT"
+  expect_code 0 $? "send_text_line should succeed"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''send-text'$'\x1f''w1:p2'$'\x1f''echo captain-on-deck-line' "send_text_line did not type the literal command"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "send_text_line did not submit with Enter"
+  pass "fm_backend_herdr_send_text_line: uses send-text plus Enter for restored-pane compatibility"
+}
+
 test_kill_is_best_effort() {
   local dir log resp fb
   dir="$TMP_ROOT/kill"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -1308,7 +1320,7 @@ test_dispatch_routes_herdr_backend() {
 }
 
 test_dispatch_busy_state_unknown_for_tmux() {
-  # shellcheck source=bin/fm-backend.sh
+  # shellcheck source=bin/fm-backend.sh disable=SC1091
   . "$ROOT/bin/fm-backend.sh"
   [ "$(fm_backend_busy_state tmux 'sess:win')" = unknown ] \
     || fail "fm_backend_busy_state should report unknown for tmux (no native agent-state primitive; watcher falls back to regex)"
@@ -1324,14 +1336,17 @@ test_dispatch_composer_state_routes_by_backend() {
   # Sourced-guards are pre-set so fm_backend_source no-ops and these stubs are
   # never clobbered by the real per-backend files trying (and failing) a live call.
   (
-    # shellcheck source=bin/fm-backend.sh
+    # shellcheck source=bin/fm-backend.sh disable=SC1091
     . "$ROOT/bin/fm-backend.sh"
     _FM_BACKEND_TMUX_SOURCED=1
     _FM_BACKEND_HERDR_SOURCED=1
     _FM_BACKEND_ORCA_SOURCED=1
     _FM_BACKEND_ZELLIJ_SOURCED=1
+    # shellcheck disable=SC2329
     fm_tmux_composer_state() { [ "$1" = "sess:win" ] || fail "tmux composer_state got wrong target: $1"; printf 'pending'; }
+    # shellcheck disable=SC2329
     fm_backend_herdr_composer_state() { [ "$1" = "default:w1:p2" ] || fail "herdr composer_state got wrong target: $1"; printf 'empty'; }
+    # shellcheck disable=SC2329
     fm_backend_orca_composer_state() { [ "$1" = "term-1" ] || fail "orca composer_state got wrong target: $1"; printf 'empty'; }
     [ "$(fm_backend_composer_state tmux sess:win)" = pending ] || fail "composer_state did not dispatch to the tmux classifier"
     [ "$(fm_backend_composer_state herdr default:w1:p2)" = empty ] || fail "composer_state did not dispatch to the herdr classifier"
@@ -1602,7 +1617,7 @@ test_no_jq_reserved_keyword_arg_names() {
   pass "no bin/ jq filter names a --arg/--argjson variable after a jq reserved keyword"
 }
 
-# shellcheck source=bin/fm-backend.sh
+# shellcheck source=bin/fm-backend.sh disable=SC1091
 . "$ROOT/bin/fm-backend.sh"
 
 test_version_check_accepts_current_protocol
@@ -1643,6 +1658,7 @@ test_capture_calls_pane_read
 test_capture_works_around_small_lines_bug
 test_capture_preserves_pane_read_failure
 test_send_key_normalizes_and_targets_pane
+test_send_text_line_uses_interactive_send_primitives
 test_kill_is_best_effort
 test_current_path_reads_cwd
 test_busy_state_working_maps_to_busy

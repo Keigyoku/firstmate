@@ -44,7 +44,7 @@ cleanup_all() {
   rm -rf "$SCRATCH"
 }
 
-# shellcheck source=bin/fm-backend.sh
+# shellcheck source=bin/fm-backend.sh disable=SC1091
 . "$ROOT/bin/fm-backend.sh"
 fm_backend_source herdr || fail "fm_backend_source herdr failed"
 herdr_real_shell_io_ready || exit 0
