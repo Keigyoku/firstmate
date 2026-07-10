@@ -417,7 +417,13 @@ watchdog_halted() {
 }
 
 watchdog_start_successor() {
-  local task=$1 context=$2 reason=$3 rc=${4:-} handoff latest tmp safe_task ts brief_path
+  local task=$1 context=$2 reason=$3 rc=${4:-} handoff latest tmp safe_task ts brief_path meta backend
+  meta="$STATE/$task.meta"
+  if [ -f "$meta" ] && ! watchdog_successor_supported "$meta"; then
+    backend=$(fm_backend_of_meta "$meta")
+    fm_watchdog_event successor_threshold "$task" skipped "context_pct=$context reason=$reason backend=$backend rc=$rc"
+    return 0
+  fi
   safe_task=$(watchdog_marker_key "$task")
   ts=$(date -u +%Y%m%dT%H%M%SZ)
   handoff="$FM_HOME/fm-state/handoffs/handoff-${safe_task}-${ts}-${$}.md"
@@ -461,8 +467,14 @@ watchdog_meta_target_exists() {
   fm_backend_target_exists "$backend" "$target" "fm-$task"
 }
 
+watchdog_successor_supported() {
+  local meta=$1 backend
+  backend=$(fm_backend_of_meta "$meta")
+  [ "$backend" != orca ]
+}
+
 watchdog_threshold_scan() {
-  local config compact successor pending_retry failure_interval meta task harness metrics context file sig sid generation key handled pending inflight clear_pending clear_inflight err_file
+  local config compact successor pending_retry failure_interval meta task harness metrics context file sig sid generation key handled pending inflight clear_pending clear_inflight err_file unsupported_marker
   watchdog_halted && exit 0
   config=$(fm_watchdog_thresholds 2>/dev/null) || return 0
   compact=$(printf '%s' "$config" | jq -r '.thresholds.compact_at_context_pct // empty' 2>/dev/null || true)
@@ -531,6 +543,15 @@ watchdog_threshold_scan() {
       watchdog_compact_handled "$handled" "$sig" "$generation" && rm -f "$STATE/watchdog/.compact-handled-$key"
     fi
     if [ -n "$successor" ] && awk "BEGIN { exit !($context >= $successor) }"; then
+      unsupported_marker="$STATE/watchdog/.successor-unsupported-$key"
+      if ! watchdog_successor_supported "$meta"; then
+        if [ ! -e "$unsupported_marker" ]; then
+          fm_watchdog_event successor_threshold "$task" skipped "context_pct=$context threshold=$successor sid=$sid backend=$(fm_backend_of_meta "$meta")"
+          : > "$unsupported_marker"
+        fi
+        continue
+      fi
+      rm -f "$unsupported_marker"
       handled=$(cat "$STATE/watchdog/.clear-handled-$key" 2>/dev/null || true)
       watchdog_clear_handled "$handled" "$sig" "$generation" && continue
       fm_watchdog_event clear_threshold "$task" triggered "context_pct=$context threshold=$successor sid=$sid"

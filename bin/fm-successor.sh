@@ -195,6 +195,23 @@ validate_x_link() {
   esac
 }
 
+prepare_successor_check() {
+  local predecessor=$1 successor=$2 src dst
+  src="$STATE/$predecessor.check.sh"
+  dst="$STATE/$successor.check.sh"
+  [ -f "$src" ] || return 0
+  if [ -e "$dst" ]; then
+    echo "successor check already exists: $dst" >&2
+    return 1
+  fi
+  cp -p "$src" "$dst"
+}
+
+finalize_predecessor_check() {
+  local predecessor=$1
+  rm -f "$STATE/$predecessor.check.sh"
+}
+
 retire_predecessor() {
   local predecessor=$1 meta=$2 backend target
   backend=$(meta_value "$meta" backend)
@@ -364,6 +381,10 @@ case "$KIND" in
     exit 1
     ;;
 esac
+if [ "$BACKEND" = orca ]; then
+  write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "unsupported successor backend $BACKEND"
+  exit 1
+fi
 
 write_successor_brief "$BRIEF" "$PREDECESSOR" "$HANDOFF"
 fm_watchdog_event successor_spawn "$PREDECESSOR" started "successor=$SUCCESSOR_ID handoff=$HANDOFF brief=$BRIEF"
@@ -401,6 +422,12 @@ if ! x_link_output=$(carry_x_link "$META" "$SUCCESSOR_ID" 2>&1); then
   exit 1
 fi
 
+if ! check_output=$(prepare_successor_check "$PREDECESSOR" "$SUCCESSOR_ID" 2>&1); then
+  cleanup_successor_after_failure "$SUCCESSOR_ID" "$META" "$PREDECESSOR" "$WORKTREE"
+  write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "check carry failed: $check_output"
+  exit 1
+fi
+
 if ! ready_signal=$(wait_successor_ready "$SUCCESSOR_ID" "$WORKTREE"); then
   cleanup_successor_after_failure "$SUCCESSOR_ID" "$META" "$PREDECESSOR" "$WORKTREE"
   write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "successor readiness could not be proven for worktree $WORKTREE"
@@ -413,6 +440,11 @@ if ! retire_output=$(retire_predecessor "$PREDECESSOR" "$META" 2>&1); then
   write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "predecessor retirement failed: $retire_output"
   exit 1
 fi
-mark_predecessor_retired "$PREDECESSOR" "$META" "$SUCCESSOR_ID" "$HANDOFF"
+if ! mark_output=$(mark_predecessor_retired "$PREDECESSOR" "$META" "$SUCCESSOR_ID" "$HANDOFF" 2>&1); then
+  cleanup_successor_after_failure "$SUCCESSOR_ID" "$META" "$PREDECESSOR" "$WORKTREE"
+  write_failure_and_halt "$PREDECESSOR" "$HANDOFF" "predecessor retire marking failed: $mark_output"
+  exit 1
+fi
+finalize_predecessor_check "$PREDECESSOR"
 fm_watchdog_event predecessor_retired "$PREDECESSOR" closed "successor=$SUCCESSOR_ID"
 printf '%s\n' "$spawn_output"

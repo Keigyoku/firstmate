@@ -44,6 +44,23 @@ SH
   printf '%s\n' "$fakebin"
 }
 
+make_orca_terminal_fakebin() {
+  local dir=$1 fakebin
+  fakebin=$(fm_fakebin "$dir")
+  cat > "$fakebin/orca" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+  --help) printf 'status repo worktree terminal\n'; exit 0 ;;
+esac
+case "$1 $2" in
+  "terminal read") printf '{"ok":true,"result":{"terminal":{"tail":["ready"]}}}\n'; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/orca"
+  printf '%s\n' "$fakebin"
+}
+
 LIVE_TMUX_FAKEBIN=$(make_live_tmux_fakebin "$TMP_ROOT/live-tmux")
 PATH="$LIVE_TMUX_FAKEBIN:$PATH"
 export PATH
@@ -248,6 +265,66 @@ test_successor_preserves_scout_and_pr_metadata() {
   assert_grep 'pr_head=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' "$successor_meta" "successor meta should carry pr_head"
   [ "$(cat "$retire_log")" = "tmux|target-pane" ] || fail "metadata predecessor should retire after readiness"
   pass "successor preserves scout and PR metadata"
+}
+
+test_successor_carries_predecessor_check_script() {
+  local home project worktree spawn_log retire_log spawn_double retire_double handoff successor_check
+  home="$TMP_ROOT/check-carry-home"
+  project="$home/project"
+  worktree="$home/worktree"
+  spawn_log="$TMP_ROOT/check-carry-spawn.log"
+  retire_log="$TMP_ROOT/check-carry-retire.log"
+  spawn_double="$TMP_ROOT/check-carry-spawn-double"
+  retire_double="$TMP_ROOT/check-carry-retire-double"
+  mkdir -p "$home/state" "$home/fm-state" "$project" "$worktree"
+  handoff="$home/fm-state/handoff-check.md"
+  printf 'handoff for check successor\n' > "$handoff"
+  fm_write_meta "$home/state/demo.meta" \
+    "window=target-pane" "project=$project" "worktree=$worktree" "backend=tmux" "harness=codex" \
+    "mode=no-mistakes" "yolo=off" "pr=https://github.com/o/r/pull/42"
+  printf '%s\n' 'echo merged' > "$home/state/demo.check.sh"
+  make_spawn_double "$spawn_double" "$spawn_log" 0
+  make_retire_double "$retire_double" "$retire_log"
+
+  FM_HOME="$home" FM_SUCCESSOR_ID=demo-check-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_SUCCESSOR_DOUBLE_CREATE_META=1 FM_SUCCESSOR_DOUBLE_READY=status \
+    FM_SUCCESSOR_RETIRE_CMD="$retire_double" FM_SUCCESSOR_RETIRE_LOG="$retire_log" \
+    "$ROOT/bin/fm-successor.sh" demo "$handoff" >/dev/null \
+    || fail "check-carry successor spawn should succeed"
+
+  successor_check="$home/state/demo-check-next.check.sh"
+  assert_present "$successor_check" "successor should inherit predecessor check script"
+  assert_grep 'echo merged' "$successor_check" "successor check script should keep poll body"
+  assert_absent "$home/state/demo.check.sh" "retired predecessor check script should be disarmed"
+  pass "successor carries predecessor check script"
+}
+
+test_successor_rejects_orca_backend_before_spawn() {
+  local home project worktree spawn_log spawn_double handoff status halt artifact
+  home="$TMP_ROOT/orca-backend-home"
+  project="$home/project"
+  worktree="$home/worktree"
+  spawn_log="$TMP_ROOT/orca-backend-spawn.log"
+  spawn_double="$TMP_ROOT/orca-backend-spawn-double"
+  mkdir -p "$home/state" "$home/fm-state" "$project" "$worktree"
+  handoff="$home/fm-state/handoff-orca.md"
+  printf 'handoff for unsupported Orca successor\n' > "$handoff"
+  fm_write_meta "$home/state/demo.meta" \
+    "window=fm-demo" "terminal=term-demo" "project=$project" "worktree=$worktree" \
+    "backend=orca" "harness=codex" "mode=no-mistakes" "yolo=off"
+  make_spawn_double "$spawn_double" "$spawn_log" 0
+
+  FM_HOME="$home" FM_SUCCESSOR_ID=demo-orca-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" "$ROOT/bin/fm-successor.sh" demo "$handoff" >/dev/null 2>&1
+  status=$?
+  expect_code 1 "$status" "Orca successor should exit 1 before spawn"
+  [ ! -s "$spawn_log" ] || fail "Orca successor should not call fm-spawn"
+  assert_present "$home/state/demo.meta" "Orca predecessor meta should remain active"
+  halt="$home/fm-state/watchdog.halt"
+  assert_present "$halt" "Orca successor direct call should set halt flag"
+  artifact=$(sed -n 's/^artifact=//p' "$halt")
+  assert_grep "unsupported successor backend orca" "$artifact" "failure artifact should explain unsupported Orca successor"
+  pass "successor rejects Orca backend before spawn"
 }
 
 test_successor_accepts_backend_endpoint_readiness() {
@@ -482,6 +559,7 @@ test_successor_halts_when_predecessor_retire_fails() {
   handoff="$home/fm-state/handoff-retire-fails.md"
   printf 'handoff for retire-failure successor\n' > "$handoff"
   fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$project" "worktree=$worktree" "backend=tmux" "harness=codex" "mode=no-mistakes" "yolo=off"
+  printf '%s\n' 'echo merged' > "$home/state/demo.check.sh"
   make_spawn_double "$spawn_double" "$spawn_log" 0
   make_retire_double "$retire_double" "$retire_log"
 
@@ -492,6 +570,8 @@ test_successor_halts_when_predecessor_retire_fails() {
   status=$?
   expect_code 1 "$status" "retire failure should exit 1"
   assert_present "$home/state/demo.meta" "predecessor meta should remain active after retire failure"
+  assert_present "$home/state/demo.check.sh" "predecessor check should remain armed after retire failure"
+  assert_absent "$home/state/demo-retire-fails-next.check.sh" "successor check should be cleaned after retire failure"
   assert_absent "$home/state/retired/demo.meta" "predecessor meta should not be archived after retire failure"
   assert_absent "$home/state/demo-retire-fails-next.meta" "successor meta should be cleaned up after retire failure"
   halt="$home/fm-state/watchdog.halt"
@@ -660,6 +740,52 @@ test_watch_loop_clear_rotation_starts_successor_and_exits_when_halted() {
   pass "watch loop clear rotation starts successor and exits when halted"
 }
 
+test_watch_loop_skips_orca_successor_threshold() {
+  local home config session_dir worktree spawn_log spawn_double timeout_cmd orca_fakebin status event
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping Orca successor-skip coverage"
+    return
+  fi
+  home="$TMP_ROOT/watch-orca-skip-home"
+  config="$TMP_ROOT/watch-orca-skip-config"
+  session_dir="$TMP_ROOT/watch-orca-skip-sessions"
+  worktree="$TMP_ROOT/watch-orca-skip-worktree"
+  spawn_log="$TMP_ROOT/watch-orca-skip-spawn.log"
+  spawn_double="$TMP_ROOT/watch-orca-skip-spawn-double"
+  orca_fakebin=$(make_orca_terminal_fakebin "$TMP_ROOT/watch-orca-tools")
+  mkdir -p "$home/state" "$home/fm-state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" \
+    "window=fm-demo" "terminal=term-demo" "project=$worktree" "worktree=$worktree" \
+    "backend=orca" "harness=codex"
+  write_successor_config "$config" 90 95
+  write_codex_rollout "$session_dir/rollout-demo.jsonl" "$worktree" 960 old-sid
+  make_spawn_double "$spawn_double" "$spawn_log" 23
+
+  "$timeout_cmd" 1 env PATH="$orca_fakebin:$PATH" FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" \
+    FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_SUCCESSOR_ID=demo-orca-next \
+    FM_SUCCESSOR_SPAWN_CMD="$spawn_double" FM_SUCCESSOR_SPAWN_LOG="$spawn_log" \
+    FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial Orca watcher pass should arm the session"
+
+  "$timeout_cmd" 1 env PATH="$orca_fakebin:$PATH" FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" \
+    FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_SUCCESSOR_ID=demo-orca-next \
+    FM_SUCCESSOR_SPAWN_CMD="$spawn_double" FM_SUCCESSOR_SPAWN_LOG="$spawn_log" \
+    FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "Orca successor threshold should be skipped without halting"
+  assert_absent "$home/fm-state/watchdog.halt" "Orca successor skip should not halt the watcher"
+  [ ! -s "$spawn_log" ] || fail "Orca successor skip should not invoke fm-successor"
+  event="$home/fm-state/watchdog.events"
+  assert_grep '"type":"successor_threshold","sid":"demo","status":"skipped"' "$event" "Orca successor threshold should be logged as skipped"
+  assert_grep 'backend=orca' "$event" "Orca successor skip event should name the backend"
+  pass "watch loop skips Orca successor threshold"
+}
+
 test_watch_loop_clear_rotation_detects_claude_same_file_compaction() {
   local home config session_dir checkpoint_dir project_dir session_file worktree steer_log steer_double spawn_log spawn_double pending status event timeout_cmd project_key generated_handoff
   if command -v timeout >/dev/null 2>&1; then
@@ -805,6 +931,8 @@ test_steer_rc4_escalates_to_successor() {
 
 test_successor_spawns_with_handoff_brief_and_retires_predecessor
 test_successor_preserves_scout_and_pr_metadata
+test_successor_carries_predecessor_check_script
+test_successor_rejects_orca_backend_before_spawn
 test_successor_accepts_backend_endpoint_readiness
 test_successor_rejects_dead_agent_endpoint_readiness
 test_successor_rejects_bare_turnend_readiness
@@ -817,6 +945,7 @@ test_spawn_failure_writes_halt_flag_and_failure_artifact
 test_partial_spawn_failure_cleans_successor_and_restores_hook
 test_invalid_x_link_halts_before_spawn
 test_watch_loop_clear_rotation_starts_successor_and_exits_when_halted
+test_watch_loop_skips_orca_successor_threshold
 test_watch_loop_clear_rotation_detects_claude_same_file_compaction
 test_steer_rc4_escalates_to_successor
 
