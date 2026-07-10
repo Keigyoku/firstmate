@@ -29,6 +29,21 @@ SH
   printf '%s\n' "$fakebin"
 }
 
+make_dead_tmux_fakebin() {
+  local dir=$1 fakebin
+  fakebin=$(fm_fakebin "$dir")
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  "display-message -p -t fm-demo-dead-next #{pane_current_command}") printf 'bash\n'; exit 0 ;;
+  "display-message -p -t fm-demo-dead-next #{pane_id}") printf '%%1\n'; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/tmux"
+  printf '%s\n' "$fakebin"
+}
+
 LIVE_TMUX_FAKEBIN=$(make_live_tmux_fakebin "$TMP_ROOT/live-tmux")
 PATH="$LIVE_TMUX_FAKEBIN:$PATH"
 export PATH
@@ -245,6 +260,38 @@ test_successor_accepts_backend_endpoint_readiness() {
   assert_grep 'readiness=endpoint' "$event" "spawn success event should record endpoint readiness proof"
   assert_absent "$home/state/demo.meta" "endpoint-ready predecessor meta should be retired"
   pass "successor accepts backend endpoint readiness"
+}
+
+test_successor_rejects_dead_agent_endpoint_readiness() {
+  local home project worktree spawn_log retire_log spawn_double retire_double handoff status halt artifact dead_fakebin
+  home="$TMP_ROOT/dead-endpoint-home"
+  project="$home/project"
+  worktree="$home/worktree"
+  spawn_log="$TMP_ROOT/dead-endpoint-spawn.log"
+  retire_log="$TMP_ROOT/dead-endpoint-retire.log"
+  spawn_double="$TMP_ROOT/dead-endpoint-spawn-double"
+  retire_double="$TMP_ROOT/dead-endpoint-retire-double"
+  dead_fakebin=$(make_dead_tmux_fakebin "$TMP_ROOT/dead-endpoint-tools")
+  mkdir -p "$home/state" "$home/fm-state" "$project" "$worktree"
+  handoff="$home/fm-state/handoff-dead-endpoint.md"
+  printf 'handoff for dead endpoint successor\n' > "$handoff"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$project" "worktree=$worktree" "backend=tmux" "harness=codex" "mode=no-mistakes" "yolo=off"
+  make_spawn_double "$spawn_double" "$spawn_log" 0
+  make_retire_double "$retire_double" "$retire_log"
+
+  PATH="$dead_fakebin:$PATH" FM_HOME="$home" FM_SUCCESSOR_ID=demo-dead-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_SUCCESSOR_DOUBLE_CREATE_META=1 FM_SUCCESSOR_READY_TIMEOUT=0 \
+    FM_SUCCESSOR_RETIRE_CMD="$retire_double" FM_SUCCESSOR_RETIRE_LOG="$retire_log" \
+    "$ROOT/bin/fm-successor.sh" demo "$handoff" >/dev/null 2>&1
+  status=$?
+  expect_code 1 "$status" "dead-agent successor endpoint should exit 1"
+  assert_present "$home/state/demo.meta" "predecessor meta should remain active when successor agent is dead"
+  assert_no_grep 'tmux|target-pane' "$retire_log" "predecessor should not retire for a dead successor agent"
+  halt="$home/fm-state/watchdog.halt"
+  assert_present "$halt" "dead-agent successor should set halt flag"
+  artifact=$(sed -n 's/^artifact=//p' "$halt")
+  assert_grep "successor readiness could not be proven" "$artifact" "failure artifact should explain missing readiness"
+  pass "successor rejects endpoint readiness after a dead agent verdict"
 }
 
 test_successor_rejects_bare_turnend_readiness() {
@@ -651,6 +698,7 @@ test_steer_rc4_escalates_to_successor() {
 test_successor_spawns_with_handoff_brief_and_retires_predecessor
 test_successor_preserves_scout_and_pr_metadata
 test_successor_accepts_backend_endpoint_readiness
+test_successor_rejects_dead_agent_endpoint_readiness
 test_successor_rejects_bare_turnend_readiness
 test_successor_halts_without_readiness_and_keeps_predecessor_active
 test_successor_carries_x_followup_link

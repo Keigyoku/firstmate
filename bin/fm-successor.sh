@@ -105,7 +105,7 @@ successor_readiness_signal() {
       printf 'agent_alive'
       return 0
     fi
-    if fm_backend_target_exists "$backend" "$target" "fm-$successor" 2>/dev/null; then
+    if [ "$alive" = unknown ] && fm_backend_target_exists "$backend" "$target" "fm-$successor" 2>/dev/null; then
       printf 'endpoint'
       return 0
     fi

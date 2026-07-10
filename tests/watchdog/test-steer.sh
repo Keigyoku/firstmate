@@ -125,6 +125,29 @@ SH
   printf '%s\n' "$toolbin"
 }
 
+make_zellij_label_toolbin() {
+  local dir=$1 toolbin=$1/zellij-label-bin
+  mkdir -p "$toolbin"
+  cat > "$toolbin/zellij" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${FM_STEER_ZELLIJ_LOG:?}"
+case "$1" in
+  list-sessions) printf 'firstmate\n'; exit 0 ;;
+  --session)
+    shift 2
+    case "$*" in
+      "action list-clients") printf '[{"session_name":"firstmate"}]\n'; exit 0 ;;
+      "action list-panes --json") printf '[{"id":7,"tab_id":3,"is_plugin":false}]\n'; exit 0 ;;
+      "action list-tabs --json") printf '[{"tab_id":3,"name":"fm-demo"}]\n'; exit 0 ;;
+    esac
+    ;;
+esac
+exit 1
+SH
+  chmod +x "$toolbin/zellij"
+  printf '%s\n' "$toolbin"
+}
+
 test_success_delivers_exact_text_and_event() {
   local home config double log event
   home="$TMP_ROOT/success-home"
@@ -175,6 +198,31 @@ test_require_target_exists_blocks_delivery() {
   assert_contains "$(cat "$event")" '"status":"undeliverable"' "missing target should write an undeliverable steer event"
   assert_contains "$(cat "$event")" 'target_missing=missing-pane' "missing target event should name the target"
   pass "steer target-exists guard blocks delivery before send"
+}
+
+test_require_target_exists_uses_task_label_for_zellij() {
+  local home config double log zellij_log toolbin
+  home="$TMP_ROOT/zellij-label-home"
+  config="$TMP_ROOT/zellij-label-config"
+  double="$TMP_ROOT/zellij-label-double"
+  log="$TMP_ROOT/zellij-label.log"
+  zellij_log="$TMP_ROOT/zellij-label-zellij.log"
+  mkdir -p "$home/state"
+  fm_write_meta "$home/state/demo.meta" "window=firstmate:7" "backend=zellij" "harness=claude"
+  write_config "$config" 1
+  make_success_double "$double" "$log"
+  : > "$zellij_log"
+  toolbin=$(make_zellij_label_toolbin "$TMP_ROOT/zellij-label-tools")
+
+  PATH="$toolbin:$PATH" FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_STEER_BACKEND_CMD="$double" \
+    FM_STEER_DOUBLE_LOG="$log" FM_STEER_ZELLIJ_LOG="$zellij_log" FM_STEER_REQUIRE_TARGET_EXISTS=1 \
+    "$ROOT/bin/fm-steer.sh" demo 'send through zellij' >/dev/null \
+    || fail "zellij task-id target-exists guard should accept the matching fm-task label"
+
+  [ "$(cat "$log")" = "zellij|firstmate:7|send through zellij" ] \
+    || fail "backend double should receive zellij steer after label-verified guard"
+  assert_contains "$(cat "$zellij_log")" "action list-tabs" "zellij guard should verify the tab label"
+  pass "steer target-exists guard uses fm-task labels for zellij"
 }
 
 test_failure_retries_three_then_rc4() {
@@ -645,6 +693,7 @@ SH
 
 test_success_delivers_exact_text_and_event
 test_require_target_exists_blocks_delivery
+test_require_target_exists_uses_task_label_for_zellij
 test_failure_retries_three_then_rc4
 test_timeout_bounds_each_attempt
 test_timeout_uses_perl_when_timeout_tools_are_absent
