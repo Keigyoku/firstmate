@@ -480,6 +480,7 @@ watchdog_threshold_scan() {
     watchdog_steer_inflight "$clear_inflight" && continue
     watchdog_pending_active "$pending" "$task" "$pending_retry" "$key" compact && continue
     watchdog_steer_inflight "$inflight" && continue
+    watchdog_collect_failure_recent "$key" "$failure_interval" && continue
     file=$(fm_watchdog_session_file "$harness" "$task" 2>/dev/null || true)
     if [ -z "$file" ]; then
       mkdir -p "$STATE/watchdog"
@@ -500,7 +501,6 @@ watchdog_threshold_scan() {
     fi
     mkdir -p "$STATE/watchdog"
     err_file="$STATE/watchdog/.metrics-error-$key"
-    watchdog_collect_failure_recent "$key" "$failure_interval" && continue
     if ! metrics=$(fm_watchdog_collect_metrics "$harness" "$task" 2>"$err_file"); then
       watchdog_collect_failure "$task" "$key" "$failure_interval" "$err_file"
       rm -f "$err_file"
