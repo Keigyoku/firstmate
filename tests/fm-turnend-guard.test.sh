@@ -10,10 +10,11 @@
 # All hermetic over temp dirs; no real agent session is invoked.
 set -u
 
-# shellcheck source=tests/lib.sh
+# shellcheck source=tests/lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-# shellcheck source=bin/fm-supervision-lib.sh
+# shellcheck source=bin/fm-supervision-lib.sh disable=SC1091
+# shellcheck disable=SC2153
 . "$ROOT/bin/fm-supervision-lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-turnend-guard)
@@ -133,8 +134,9 @@ make_crewmate_worktree_dir() {
 }
 
 run_hook() {
-  local dir=$1 stop_active=$2
-  printf '{"stop_hook_active":%s}' "$stop_active" | bash "$dir/bin/fm-turnend-guard.sh" 2>&1
+  local dir=$1 stop_active=$2 home
+  home=$(cd "$dir" && pwd)
+  printf '{"stop_hook_active":%s}' "$stop_active" | FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1
 }
 
 nonexistent_pid() {
