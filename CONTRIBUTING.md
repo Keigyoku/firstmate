@@ -76,7 +76,7 @@ tests/fm-watcher-lock.test.sh             # watcher singleton, lock-race, PID id
 tests/fm-turnend-guard.test.sh            # shared supervision predicate plus Claude Stop-hook scoping, loop guard, fail-open, and live watcher health tests
 tests/fm-pi-primary-types.test.sh         # strict no-emit TypeScript check for both tracked Pi primary extensions against an installed Pi package
 FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh # opt-in real Pi TUI regression in an isolated home and private tmux socket
-tests/fm-arm-pretool-check.test.sh        # PreToolUse watcher-arm seatbelt: CLI/stdin allow-deny table, fail-open, --claude output shaping, and all five harness wiring files
+tests/fm-arm-pretool-check.test.sh        # command-position watcher-arm policy: adversarial allow/deny matrix across all five adapter entry forms, reason codes, fail-closed malformed-protected syntax, fail-open transport, and --claude output shaping
 tests/fm-watch-triage.test.sh             # always-on watcher triage: benign absorb, actionable surface, stale status-log override, wedge threshold, repeated wedge demand marker, heartbeat backstop, and afk one-shot coherence
 tests/watchdog/test-metrics.sh            # watchdog metrics and threshold config: Claude/Codex session scoping, checkpoint/rollout parsing, active W4 defaults, and JSONL event concurrency
 tests/watchdog/test-embargo.sh            # watchdog budget embargo behavior: threshold raise, spawn gating, harness rotation, manual lift, provider-reset auto-lift, and reset timestamp parsing
