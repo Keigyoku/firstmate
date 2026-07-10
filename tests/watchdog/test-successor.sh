@@ -49,6 +49,23 @@ write_codex_rollout() {
     '{type:"event_msg",payload:{type:"token_count",info:{last_token_usage:{total_tokens:$total},model_context_window:1000},rate_limits:{primary:{used_percent:11},secondary:{used_percent:22}}}}' >> "$path"
 }
 
+write_claude_jsonl() {
+  local path=$1 session_id=$2 compact_uuid=${3:-}
+  mkdir -p "$(dirname "$path")"
+  jq -cn --arg sid "$session_id" '{type:"user",sessionId:$sid,message:{role:"user",content:"fixture"}}' > "$path"
+  if [ -n "$compact_uuid" ]; then
+    jq -cn --arg sid "$session_id" --arg uuid "$compact_uuid" \
+      '{type:"assistant",sessionId:$sid,isCompactSummary:true,uuid:$uuid,message:{role:"assistant",content:[]}}' >> "$path"
+  fi
+}
+
+write_claude_checkpoint() {
+  local dir=$1 session_id=$2 pct=${3:-96}
+  mkdir -p "$dir"
+  jq -cn --arg sid "$session_id" --argjson pct "$pct" \
+    '{version:1,session_id:$sid,fill_pct:$pct,quality:{tool_calls:2}}' > "$dir/$session_id.json"
+}
+
 make_spawn_double() {
   local path=$1 log=$2 status=${3:-0}
   cat > "$path" <<'SH'
@@ -488,6 +505,79 @@ test_watch_loop_clear_rotation_starts_successor_and_exits_when_halted() {
   pass "watch loop clear rotation starts successor and exits when halted"
 }
 
+test_watch_loop_clear_rotation_detects_claude_same_file_compaction() {
+  local home config session_dir checkpoint_dir project_dir session_file worktree steer_log steer_double spawn_log spawn_double pending status event timeout_cmd project_key generated_handoff
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping Claude same-file clear coverage"
+    return
+  fi
+  home="$TMP_ROOT/watch-claude-clear-home"
+  config="$TMP_ROOT/watch-claude-clear-config"
+  session_dir="$TMP_ROOT/watch-claude-clear-sessions"
+  checkpoint_dir="$TMP_ROOT/watch-claude-clear-checkpoints"
+  worktree="$TMP_ROOT/watch-claude-clear-worktree"
+  steer_log="$TMP_ROOT/watch-claude-clear-steer.log"
+  steer_double="$TMP_ROOT/watch-claude-clear-steer-double"
+  spawn_log="$TMP_ROOT/watch-claude-clear-spawn.log"
+  spawn_double="$TMP_ROOT/watch-claude-clear-spawn-double"
+  mkdir -p "$home/state" "$home/fm-state" "$home/data/demo" "$worktree"
+  printf 'Claude same-file successor objective.\n' > "$home/data/demo/brief.md"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$worktree" "worktree=$worktree" "backend=tmux" "harness=claude"
+  write_successor_config "$config" 90 95
+  project_key=$(bash -c '. "$1"; fm_watchdog_claude_project_key "$2"' _ "$ROOT/bin/fm-watchdog-lib.sh" "$worktree")
+  project_dir="$session_dir/$project_key"
+  session_file="$project_dir/claude-sid.jsonl"
+  write_claude_jsonl "$session_file" claude-sid compact-before
+  write_claude_checkpoint "$checkpoint_dir" claude-sid 96
+  make_steer_success_double "$steer_double" "$steer_log"
+  make_spawn_double "$spawn_double" "$spawn_log" 23
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CLAUDE_SESSION_DIR="$session_dir" \
+    FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR="$checkpoint_dir" FM_STEER_BACKEND_CMD="$steer_double" \
+    FM_STEER_DOUBLE_LOG="$steer_log" FM_SUCCESSOR_ID=demo-claude-clear-next \
+    FM_SUCCESSOR_SPAWN_CMD="$spawn_double" FM_SUCCESSOR_SPAWN_LOG="$spawn_log" \
+    FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial Claude clear-threshold watcher pass should arm the session"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CLAUDE_SESSION_DIR="$session_dir" \
+    FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR="$checkpoint_dir" FM_STEER_BACKEND_CMD="$steer_double" \
+    FM_STEER_DOUBLE_LOG="$steer_log" FM_SUCCESSOR_ID=demo-claude-clear-next \
+    FM_SUCCESSOR_SPAWN_CMD="$spawn_double" FM_SUCCESSOR_SPAWN_LOG="$spawn_log" \
+    FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "Claude clear-threshold watcher pass should steer clear"
+  pending="$home/state/watchdog/.clear-pending-demo"
+  for _ in $(seq 1 20); do
+    [ -s "$pending" ] && break
+    sleep 0.1
+  done
+  assert_present "$pending" "successful Claude clear steer should leave pending marker"
+  assert_contains "$(cat "$pending")" "compact-before" "clear pending marker should record pre-clear compact generation"
+
+  write_claude_jsonl "$session_file" claude-sid compact-after
+  "$timeout_cmd" 5 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CLAUDE_SESSION_DIR="$session_dir" \
+    FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR="$checkpoint_dir" FM_STEER_BACKEND_CMD="$steer_double" \
+    FM_STEER_DOUBLE_LOG="$steer_log" FM_SUCCESSOR_ID=demo-claude-clear-next \
+    FM_SUCCESSOR_SPAWN_CMD="$spawn_double" FM_SUCCESSOR_SPAWN_LOG="$spawn_log" \
+    FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 0 "$status" "same-file Claude clear rotation should attempt successor and exit after halt"
+  event="$home/fm-state/watchdog.events"
+  assert_grep '"type":"clear_rotated","sid":"demo","status":"successor_takeover"' "$event" "same-file Claude clear rotation should be logged"
+  assert_contains "$(cat "$event")" "compact_generation=compact-after" "clear rotation event should name the new compact generation"
+  assert_grep '"type":"successor_spawn_failed","sid":"demo","status":"halted"' "$event" "same-file Claude clear spawn failure should halt through watch loop"
+  generated_handoff=$(jq -r 'select(.type == "successor_threshold") | .detail | capture("handoff=(?<handoff>[^ ]+)").handoff' "$event" | tail -1)
+  [ -n "$generated_handoff" ] || fail "same-file Claude clear event should record generated handoff"
+  assert_present "$generated_handoff" "same-file Claude clear path should create unique handoff"
+  assert_contains "$(cat "$generated_handoff")" "Reason: clear_rotated." "same-file Claude handoff should name clear rotation"
+  pass "watch loop clear rotation detects Claude same-file compaction"
+}
+
 test_steer_rc4_escalates_to_successor() {
   local home config session_dir worktree steer_log steer_double spawn_log spawn_double handoff generated_handoff status event timeout_cmd
   if command -v timeout >/dev/null 2>&1; then
@@ -568,6 +658,7 @@ test_successor_halts_when_predecessor_retire_fails
 test_spawn_failure_writes_halt_flag_and_failure_artifact
 test_invalid_x_link_halts_before_spawn
 test_watch_loop_clear_rotation_starts_successor_and_exits_when_halted
+test_watch_loop_clear_rotation_detects_claude_same_file_compaction
 test_steer_rc4_escalates_to_successor
 
 echo "# all watchdog successor tests passed"

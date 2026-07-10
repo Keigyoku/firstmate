@@ -279,21 +279,36 @@ watchdog_compact_handled() {
   [ "$handled_generation" = "$generation" ]
 }
 
+watchdog_clear_handled() {
+  local handled=$1 sig=$2 generation=$3 handled_sig handled_generation
+  handled_sig=$(printf '%s\n' "$handled" | sed -n '1p')
+  [ "$handled_sig" = "$sig" ] || return 1
+  handled_generation=$(printf '%s\n' "$handled" | sed -n '3p')
+  [ -n "$handled_generation" ] || return 0
+  [ -n "$generation" ] || return 0
+  [ "$handled_generation" = "$generation" ]
+}
+
 watchdog_check_clear_rotation() {  # <task> <harness> <marker-file>
-  local task=$1 harness=$2 marker=$3 old_sig old_sid context file sig new_sid
+  local task=$1 harness=$2 marker=$3 old_sig old_sid context old_generation file sig new_sid generation
   [ -s "$marker" ] || return 0
   old_sig=$(sed -n '1p' "$marker")
   old_sid=$(sed -n '2p' "$marker")
   context=$(sed -n '3p' "$marker")
+  old_generation=$(sed -n '4p' "$marker")
   file=$(fm_watchdog_session_file "$harness" "$task" 2>/dev/null || true)
   [ -n "$file" ] || return 0
   sig=$(fm_watchdog_file_identity "$file" 2>/dev/null || true)
   [ -n "$sig" ] || return 0
-  [ "$sig" != "$old_sig" ] || return 0
+  generation=$(fm_watchdog_compact_generation "$harness" "$file" 2>/dev/null || true)
+  if [ "$sig" = "$old_sig" ]; then
+    [ -n "$generation" ] || return 0
+    [ "$generation" != "$old_generation" ] || return 0
+  fi
   new_sid=$(fm_watchdog_session_id_from_file "$harness" "$file" 2>/dev/null || basename "$file")
-  fm_watchdog_event clear_rotated "$task" successor_takeover "old_sid=$old_sid new_sid=$new_sid file=$file"
+  fm_watchdog_event clear_rotated "$task" successor_takeover "old_sid=$old_sid new_sid=$new_sid file=$file compact_generation=$generation"
   fm_watchdog_arm_session "$task" "$harness" "$file"
-  printf '%s\n%s\n' "$old_sig" "$old_sid" > "$STATE/watchdog/.clear-handled-$(watchdog_marker_key "$task")"
+  printf '%s\n%s\n%s\n' "$old_sig" "$old_sid" "$generation" > "$STATE/watchdog/.clear-handled-$(watchdog_marker_key "$task")"
   rm -f "$marker"
   watchdog_start_successor "$task" "${context:-unknown}" "clear_rotated"
 }
@@ -370,11 +385,11 @@ watchdog_start_compact_steer() {
 }
 
 watchdog_start_clear_steer() {
-  local task=$1 context=$2 threshold=$3 sig=$4 sid=$5 key=$6 pending=$7 inflight=$8 pid
+  local task=$1 context=$2 threshold=$3 sig=$4 sid=$5 key=$6 pending=$7 inflight=$8 generation=$9 pid
   (
     local rc
     if "$SCRIPT_DIR/fm-steer.sh" "$task" "/clear complete current task, then /clear"; then
-      printf '%s\n%s\n%s\n' "$sig" "$sid" "$context" > "$pending"
+      printf '%s\n%s\n%s\n%s\n' "$sig" "$sid" "$context" "$generation" > "$pending"
     else
       rc=$?
       fm_watchdog_event clear_steer_failed "$task" "rc=$rc" "context_pct=$context threshold=$threshold"
@@ -517,9 +532,9 @@ watchdog_threshold_scan() {
     fi
     if [ -n "$successor" ] && awk "BEGIN { exit !($context >= $successor) }"; then
       handled=$(cat "$STATE/watchdog/.clear-handled-$key" 2>/dev/null || true)
-      [ "$(printf '%s\n' "$handled" | sed -n '1p')" = "$sig" ] && continue
+      watchdog_clear_handled "$handled" "$sig" "$generation" && continue
       fm_watchdog_event clear_threshold "$task" triggered "context_pct=$context threshold=$successor sid=$sid"
-      watchdog_start_clear_steer "$task" "$context" "$successor" "$sig" "$sid" "$key" "$clear_pending" "$clear_inflight"
+      watchdog_start_clear_steer "$task" "$context" "$successor" "$sig" "$sid" "$key" "$clear_pending" "$clear_inflight" "$generation"
       continue
     fi
     [ -n "$compact" ] || continue
