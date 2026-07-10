@@ -74,6 +74,8 @@ for test_script in tests/*.test.sh; do bash "$test_script"; done   # behavior te
 tests/fm-wake-queue.test.sh               # durable wake queue losslessness, catch-up, double-drain, duplicate-collapse, and drain liveness guard tests
 tests/fm-watcher-lock.test.sh             # watcher singleton, lock-race, PID identity stability, watch-arm liveness, and guard-warning tests
 tests/fm-turnend-guard.test.sh            # shared supervision predicate plus Claude Stop-hook scoping, loop guard, fail-open, and live watcher health tests
+tests/fm-pi-primary-types.test.sh         # strict no-emit TypeScript check for both tracked Pi primary extensions against an installed Pi package
+FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh # opt-in real Pi TUI regression in an isolated home and private tmux socket
 tests/fm-arm-pretool-check.test.sh        # PreToolUse watcher-arm seatbelt: CLI/stdin allow-deny table, fail-open, --claude output shaping, and all five harness wiring files
 tests/fm-watch-triage.test.sh             # always-on watcher triage: benign absorb, actionable surface, stale status-log override, wedge threshold, repeated wedge demand marker, heartbeat backstop, and afk one-shot coherence
 tests/watchdog/test-metrics.sh            # watchdog metrics and threshold config: Claude/Codex session scoping, checkpoint/rollout parsing, active W4 defaults, and JSONL event concurrency

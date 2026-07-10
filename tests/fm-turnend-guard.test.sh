@@ -20,7 +20,7 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-turnend-guard)
 fm_git_identity fmtest fmtest@example.invalid
 
-REQUIRED_REASON='tasks in flight, no live watcher - run bin/fm-watch-arm.sh as a background task before ending the turn'
+REQUIRED_REASON='resume supervision with bin/fm-watch-arm.sh as its own Claude Code background task'
 
 # --- PREDICATE: bin/fm-supervision-lib.sh -----------------------------------
 
@@ -89,9 +89,13 @@ install_guard_scripts() {
   mkdir -p "$dir/bin"
   cp "$ROOT/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard.sh"
   cp "$ROOT/bin/fm-turnend-guard-grok.sh" "$dir/bin/fm-turnend-guard-grok.sh"
+  cp "$ROOT/bin/fm-supervision-instructions.sh" "$dir/bin/fm-supervision-instructions.sh"
+  cp "$ROOT/bin/fm-harness.sh" "$dir/bin/fm-harness.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
-  chmod +x "$dir/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard-grok.sh"
+  mkdir -p "$dir/docs"
+  cp -R "$ROOT/docs/supervision-protocols" "$dir/docs/supervision-protocols"
+  chmod +x "$dir/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard-grok.sh" "$dir/bin/fm-supervision-instructions.sh" "$dir/bin/fm-harness.sh"
 }
 
 mark_codex_hook_root() {
@@ -136,14 +140,7 @@ make_crewmate_worktree_dir() {
 run_hook() {
   local dir=$1 stop_active=$2 home
   home=$(cd "$dir" && pwd)
-  printf '{"stop_hook_active":%s}' "$stop_active" | CLAUDE_PROJECT_DIR="$home" FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1
-}
-
-run_hook_without_project_dir() {
-  local dir=$1 stop_active=$2
-  printf '{"stop_hook_active":%s}' "$stop_active" | (
-    cd "$dir" && env -u CLAUDE_PROJECT_DIR -u FM_HOME -u FM_ROOT_OVERRIDE -u FM_STATE_OVERRIDE bash bin/fm-turnend-guard.sh
-  ) 2>&1
+  printf '{"stop_hook_active":%s}' "$stop_active" | CLAUDECODE=1 FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1
 }
 
 nonexistent_pid() {
@@ -224,67 +221,6 @@ test_hook_silent_with_live_lock_and_fresh_beacon() {
   pass "fm-turnend-guard: silent no-op with a live watcher lock and fresh beacon"
 }
 
-test_hook_unset_project_dir_silent_with_healthy_watcher() {
-  local dir pid identity out status
-  dir=$(make_primary_dir "$TMP_ROOT/hook-unset-project-live")
-  : > "$dir/state/task1.meta"
-  sleep 60 &
-  pid=$!
-  identity=$(watcher_identity "$dir" "$pid") || {
-    kill "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-    fail "could not identify live watcher holder"
-  }
-  record_watcher_lock "$dir" "$pid" "$identity"
-  touch "$dir/state/.last-watcher-beat"
-  out=$(run_hook_without_project_dir "$dir" false); status=$?
-  kill "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
-  expect_code 0 "$status" "hook must derive the primary root from physical pwd when CLAUDE_PROJECT_DIR is unset"
-  [ -z "$out" ] || fail "hook produced output with an unset project dir and healthy watcher: $out"
-  pass "fm-turnend-guard: unset CLAUDE_PROJECT_DIR uses the verified physical hook cwd"
-}
-
-test_hook_unset_project_dir_blocks_with_dead_watcher() {
-  local dir dead out status
-  dir=$(make_primary_dir "$TMP_ROOT/hook-unset-project-dead")
-  dead=$(nonexistent_pid)
-  : > "$dir/state/task1.meta"
-  record_watcher_lock "$dir" "$dead" "dead watcher identity"
-  touch "$dir/state/.last-watcher-beat"
-  out=$(run_hook_without_project_dir "$dir" false); status=$?
-  expect_code 2 "$status" "hook must still block for a dead watcher when CLAUDE_PROJECT_DIR is unset"
-  assert_contains "$out" "$REQUIRED_REASON" "unset-project-dir dead watcher must retain the required alarm"
-  pass "fm-turnend-guard: unset CLAUDE_PROJECT_DIR still blocks for a dead watcher"
-}
-
-test_hook_accepts_logical_lock_paths_for_physical_home() {
-  local real logical pid identity out status
-  real=$(make_primary_dir "$TMP_ROOT/hook-physical-home")
-  logical="$TMP_ROOT/hook-logical-home"
-  ln -s "$real" "$logical"
-  : > "$real/state/task1.meta"
-  sleep 60 &
-  pid=$!
-  identity=$(watcher_identity "$real" "$pid") || {
-    kill "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-    fail "could not identify live watcher holder"
-  }
-  mkdir -p "$real/state/.watch.lock"
-  printf '%s\n' "$pid" > "$real/state/.watch.lock/pid"
-  printf '%s\n' "$logical" > "$real/state/.watch.lock/fm-home"
-  printf '%s\n' "$logical/bin/fm-watch.sh" > "$real/state/.watch.lock/watcher-path"
-  printf '%s\n' "$identity" > "$real/state/.watch.lock/pid-identity"
-  touch "$real/state/.last-watcher-beat"
-  out=$(run_hook_without_project_dir "$real" false); status=$?
-  kill "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
-  expect_code 0 "$status" "logical and physical spellings of the same home must identity-match"
-  [ -z "$out" ] || fail "hook produced output for equivalent logical and physical lock paths: $out"
-  pass "fm-turnend-guard: logical and physical home spellings share watcher identity"
-}
-
 test_hook_blocks_with_live_lock_and_stale_beacon() {
   local dir pid identity out status
   dir=$(make_primary_dir "$TMP_ROOT/hook-live-lock-stale")
@@ -323,10 +259,23 @@ test_hook_blocks_from_fm_home_state() {
   home="$TMP_ROOT/hook-fm-home-op"
   mkdir -p "$home/state"
   : > "$home/state/task1.meta"
-  out=$(printf '{"stop_hook_active":false}' | CLAUDE_PROJECT_DIR="$dir" FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1); status=$?
+  out=$(printf '{"stop_hook_active":false}' | CLAUDECODE=1 FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1); status=$?
   expect_code 2 "$status" "hook must inspect the active FM_HOME state dir"
   assert_contains "$out" "$REQUIRED_REASON" "block reason must contain the exact required instruction"
   pass "fm-turnend-guard: blocks from active FM_HOME state, not only repo-root state"
+}
+
+test_hook_x_mode_reason_sources_cadence() {
+  local dir home out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-x-mode")
+  home=$(cd "$dir" && pwd)
+  mkdir -p "$dir/config"
+  : > "$dir/config/x-mode.env"
+  : > "$dir/state/task1.meta"
+  out=$(run_hook "$dir" false); status=$?
+  expect_code 2 "$status" "hook must block when in-flight X-mode work has no live watcher"
+  assert_contains "$out" "source '$home/config/x-mode.env' first" "block reason must source the effective X-mode cadence"
+  pass "fm-turnend-guard: X-mode repair reason sources the cadence config"
 }
 
 test_hook_ignores_repo_state_when_fm_home_set() {
@@ -335,7 +284,7 @@ test_hook_ignores_repo_state_when_fm_home_set() {
   home="$TMP_ROOT/hook-fm-home-quiet"
   mkdir -p "$home/state"
   : > "$dir/state/task1.meta"
-  out=$(printf '{"stop_hook_active":false}' | CLAUDE_PROJECT_DIR="$dir" FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1); status=$?
+  out=$(printf '{"stop_hook_active":false}' | FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1); status=$?
   expect_code 0 "$status" "hook must ignore repo-root state when FM_HOME selects another state dir"
   [ -z "$out" ] || fail "hook produced output from stale repo-root state despite FM_HOME: $out"
   pass "fm-turnend-guard: ignores stale repo-root state when FM_HOME is set"
@@ -348,7 +297,7 @@ test_hook_uses_state_override() {
   state="$TMP_ROOT/hook-state-override-active"
   mkdir -p "$home/state" "$state"
   : > "$state/task1.meta"
-  out=$(printf '{"stop_hook_active":false}' | CLAUDE_PROJECT_DIR="$dir" FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$dir/bin/fm-turnend-guard.sh" 2>&1); status=$?
+  out=$(printf '{"stop_hook_active":false}' | CLAUDECODE=1 FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$dir/bin/fm-turnend-guard.sh" 2>&1); status=$?
   expect_code 2 "$status" "hook must let FM_STATE_OVERRIDE win over FM_HOME/state"
   assert_contains "$out" "$REQUIRED_REASON" "block reason must contain the exact required instruction"
   pass "fm-turnend-guard: uses FM_STATE_OVERRIDE ahead of FM_HOME/state"
@@ -442,7 +391,7 @@ test_grok_adapter_forces_one_resume_when_unhealthy() {
 } >> "$log"
 EOF
   chmod +x "$fakebin/grok"
-  out=$(printf '{"sessionId":"session-test","hookEventName":"stop"}' | (cd "$dir" && env -u CLAUDE_PROJECT_DIR PATH="$fakebin:$PATH" GROK_WORKSPACE_ROOT="$dir" bash "$dir/bin/fm-turnend-guard-grok.sh") 2>&1); status=$?
+  out=$(printf '{"sessionId":"session-test","hookEventName":"stop"}' | PATH="$fakebin:$PATH" GROK_WORKSPACE_ROOT="$dir" bash "$dir/bin/fm-turnend-guard-grok.sh" 2>&1); status=$?
   expect_code 0 "$status" "grok adapter must fail open after queuing a forced resume"
   [ -z "$out" ] || fail "grok adapter printed output: $out"
   assert_contains "$(cat "$log")" 'active=1' "grok adapter must mark its forced resume as loop-guarded"
@@ -465,7 +414,7 @@ test_grok_adapter_loop_guard_skips_resume() {
 printf 'called\n' >> "$log"
 EOF
   chmod +x "$fakebin/grok"
-  out=$(printf '{"sessionId":"session-test","hookEventName":"stop"}' | (cd "$dir" && env -u CLAUDE_PROJECT_DIR PATH="$fakebin:$PATH" GROK_WORKSPACE_ROOT="$dir" GROK_TURNEND_GUARD_ACTIVE=1 bash "$dir/bin/fm-turnend-guard-grok.sh") 2>&1); status=$?
+  out=$(printf '{"sessionId":"session-test","hookEventName":"stop"}' | PATH="$fakebin:$PATH" GROK_WORKSPACE_ROOT="$dir" GROK_TURNEND_GUARD_ACTIVE=1 bash "$dir/bin/fm-turnend-guard-grok.sh" 2>&1); status=$?
   expect_code 0 "$status" "grok adapter must allow its own forced resume turn to end"
   [ -z "$out" ] || fail "grok adapter printed output while loop-guarded: $out"
   [ ! -e "$log" ] || fail "grok adapter spawned another resume while loop-guarded: $(cat "$log")"
@@ -479,15 +428,13 @@ test_settings_hook_uses_claude_project_dir() {
   command=$(jq -r '.hooks.Stop[0].hooks[0].command // empty' "$settings")
   [ -n "$command" ] || fail "Stop hook command is missing from .claude/settings.json"
   assert_contains "$command" 'CLAUDE_PROJECT_DIR' "Stop hook must resolve via CLAUDE_PROJECT_DIR, not a cwd-relative path"
-  assert_contains "$command" 'pwd -P' "Stop hook must fall back to the physical hook cwd when CLAUDE_PROJECT_DIR is unset"
-  assert_contains "$command" 'AGENTS.md' "Stop hook must verify the fallback root is firstmate-shaped"
   assert_contains "$command" 'fm-turnend-guard.sh' "Stop hook must still invoke fm-turnend-guard.sh"
   case "$command" in
     bin/fm-turnend-guard.sh|./bin/fm-turnend-guard.sh)
       fail "Stop hook must not use a bare relative path (cwd-dependent): $command"
       ;;
   esac
-  pass ".claude/settings.json: Stop hook uses CLAUDE_PROJECT_DIR with a verified physical-cwd fallback"
+  pass ".claude/settings.json: Stop hook uses CLAUDE_PROJECT_DIR-anchored command"
 }
 
 test_codex_hook_invokes_shared_guard() {
@@ -580,10 +527,12 @@ test_opencode_plugin_forces_followup() {
 }
 
 test_opencode_plugin_anchors_guard_to_worktree() {
-  local plugin worktree_dir wrong_dir out status
+  local plugin parent worktree_dir wrong_dir out status
   plugin="$ROOT/.opencode/plugins/fm-primary-turnend-guard.js"
   [ -f "$plugin" ] || fail "tracked OpenCode primary plugin is missing"
-  worktree_dir="$TMP_ROOT/opencode-plugin-worktree"
+  parent="$TMP_ROOT/opencode-plugin-parent"
+  git init -q "$parent"
+  worktree_dir="$parent/nested/opencode-plugin-worktree"
   wrong_dir="$TMP_ROOT/opencode-plugin-cwd/subdir"
   mkdir -p "$worktree_dir/bin" "$wrong_dir"
   cat > "$worktree_dir/bin/fm-turnend-guard.sh" <<'EOF'
@@ -628,12 +577,129 @@ test_pi_extension_forces_followup() {
   ext="$ROOT/.pi/extensions/fm-primary-turnend-guard.ts"
   [ -f "$ext" ] || fail "tracked pi primary extension is missing"
   content=$(cat "$ext")
-  assert_contains "$content" 'turn_end' "pi extension must run on turn_end"
+  assert_contains "$content" 'agent_settled' "pi extension must run after one logical agent run settles"
   assert_contains "$content" 'fm-turnend-guard.sh' "pi extension must invoke the shared guard"
   assert_contains "$content" 'sendUserMessage' "pi extension must force a follow-up turn"
   assert_contains "$content" 'deliverAs: "followUp"' "pi extension must queue the follow-up safely"
-  assert_contains "$content" 'skipNextTurnEnd' "pi extension must carry a loop guard"
-  pass ".pi primary extension: turn_end forces one follow-up through the shared guard"
+  assert_contains "$content" 'guardFollowupActive' "pi extension must carry a logical-run loop guard"
+  assert_not_contains "$content" 'skipNextTurnEnd' "pi extension kept the internal-turn loop guard"
+  assert_contains "$content" 'session-start operating block' "pi extension must use harness-neutral repair wording"
+  assert_contains "$content" '.pi-turnend-extension-loaded' "pi extension must write its loaded marker for session-start diagnostics"
+  assert_contains "$content" 'lockOwnership' "pi extension loaded marker must respect the session lock"
+  assert_contains "$content" 'const command = String((event.input as { command?: unknown })?.command ?? "")' "pi extension changed bash command extraction for the PreToolUse contract"
+  assert_contains "$content" 'runPretoolCheck(command)' "pi extension changed the PreToolUse checker invocation"
+  assert_contains "$content" 'return { block: true, reason:' "pi extension changed the checker exit-2 block result"
+  assert_not_contains "$content" 'Run bin/fm-watch-arm.sh as a background task' "pi extension must not hardcode the old watcher-arm instruction"
+  pass ".pi primary extension: agent_settled forces one follow-up through the shared guard"
+}
+
+test_pi_extension_injects_once_per_logical_agent_run() {
+  local repo home ext log out status
+  repo="$TMP_ROOT/pi-logical-run-root"
+  home="$TMP_ROOT/pi-logical-run-home"
+  ext="$repo/.pi/extensions/fm-primary-turnend-guard.ts"
+  log="$TMP_ROOT/pi-logical-run-guard.log"
+  mkdir -p "$repo/.pi/extensions" "$repo/bin" "$home/state"
+  cp "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" "$ext"
+  cat > "$repo/bin/fm-turnend-guard.sh" <<'SH'
+#!/usr/bin/env bash
+cat >/dev/null
+printf 'guard\n' >> "${FM_GUARD_LOG:?}"
+printf 'logical-run guard fired\n' >&2
+exit 2
+SH
+  cat > "$repo/bin/fm-arm-pretool-check.sh" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$repo/bin/fm-turnend-guard.sh" "$repo/bin/fm-arm-pretool-check.sh"
+  out=$(PLUGIN="$ext" FM_HOME="$home" FM_GUARD_LOG="$log" node --input-type=module 2>&1 <<'EOF'
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const handlers = new Map();
+let prompts = 0;
+const pi = {
+  on(event, handler) {
+    handlers.set(event, handler);
+  },
+  async sendUserMessage(message, options) {
+    prompts += 1;
+    if (!message.includes("TURN WOULD END BLIND")) throw new Error(`unexpected prompt: ${message}`);
+    if (options?.deliverAs !== "followUp") throw new Error("guard prompt was not a follow-up");
+    await handlers.get("agent_settled")?.({ type: "agent_settled" }, {});
+  },
+};
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+if (handlers.has("turn_end")) throw new Error("guard still treats internal Pi turns as logical runs");
+const settled = handlers.get("agent_settled");
+if (!settled) throw new Error("agent_settled handler was not registered");
+
+await settled({ type: "agent_settled" }, {});
+if (prompts !== 1) throw new Error(`no-tool run injected ${prompts} follow-ups`);
+
+for (let i = 0; i < 3; i += 1) {
+  await handlers.get("turn_end")?.({ type: "turn_end", turnIndex: i }, {});
+}
+await settled({ type: "agent_settled" }, {});
+if (prompts !== 2) throw new Error(`multi-tool run produced ${prompts - 1} follow-ups`);
+
+const guardRuns = readFileSync(process.env.FM_GUARD_LOG, "utf8").trim().split("\n").length;
+if (guardRuns !== 2) throw new Error(`guard predicate ran ${guardRuns} times for two logical runs`);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "Pi guard must inject once for no-tool and multi-tool logical runs"
+  [ -z "$out" ] || fail "Pi logical-run guard test printed output: $out"
+  pass ".pi primary extension: no-tool and multi-tool runs each inject exactly one guard follow-up"
+}
+
+test_pi_extension_retries_after_followup_delivery_failure() {
+  local repo home ext out status
+  repo="$TMP_ROOT/pi-delivery-failure-root"
+  home="$TMP_ROOT/pi-delivery-failure-home"
+  ext="$repo/.pi/extensions/fm-primary-turnend-guard.ts"
+  mkdir -p "$repo/.pi/extensions" "$repo/bin" "$home/state"
+  cp "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" "$ext"
+  cat > "$repo/bin/fm-turnend-guard.sh" <<'SH'
+#!/usr/bin/env bash
+cat >/dev/null
+printf 'delivery failure guard\n' >&2
+exit 2
+SH
+  cat > "$repo/bin/fm-arm-pretool-check.sh" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$repo/bin/fm-turnend-guard.sh" "$repo/bin/fm-arm-pretool-check.sh"
+  out=$(PLUGIN="$ext" FM_HOME="$home" node --input-type=module 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+
+const handlers = new Map();
+let attempts = 0;
+const pi = {
+  on(event, handler) {
+    handlers.set(event, handler);
+  },
+  async sendUserMessage() {
+    attempts += 1;
+    if (attempts === 1) throw new Error("synthetic delivery failure");
+    await handlers.get("agent_settled")?.({ type: "agent_settled" }, {});
+  },
+};
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+const settled = handlers.get("agent_settled");
+await settled({ type: "agent_settled" }, {});
+await settled({ type: "agent_settled" }, {});
+if (attempts !== 2) throw new Error(`expected delivery retry, saw ${attempts} attempts`);
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "Pi guard latch must reset after follow-up delivery failure"
+  [ -z "$out" ] || fail "Pi delivery-failure guard test printed output: $out"
+  pass ".pi primary extension: delivery failure resets the logical-run latch"
 }
 
 test_grok_hook_invokes_adapter() {
@@ -656,12 +722,10 @@ test_hook_silent_when_no_work_in_flight
 test_hook_blocks_when_fresh_beacon_has_no_live_lock
 test_hook_blocks_when_dead_lock_has_fresh_beacon
 test_hook_silent_with_live_lock_and_fresh_beacon
-test_hook_unset_project_dir_silent_with_healthy_watcher
-test_hook_unset_project_dir_blocks_with_dead_watcher
-test_hook_accepts_logical_lock_paths_for_physical_home
 test_hook_blocks_with_live_lock_and_stale_beacon
 test_hook_blocks_when_unhealthy_in_primary
 test_hook_blocks_from_fm_home_state
+test_hook_x_mode_reason_sources_cadence
 test_hook_ignores_repo_state_when_fm_home_set
 test_hook_uses_state_override
 test_hook_loop_guard_allows_retry
@@ -679,4 +743,6 @@ test_codex_hook_ignores_nested_git_root_guard
 test_opencode_plugin_forces_followup
 test_opencode_plugin_anchors_guard_to_worktree
 test_pi_extension_forces_followup
+test_pi_extension_injects_once_per_logical_agent_run
+test_pi_extension_retries_after_followup_delivery_failure
 test_grok_hook_invokes_adapter
