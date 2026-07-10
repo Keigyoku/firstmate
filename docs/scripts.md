@@ -46,7 +46,7 @@ If you have changed away from the firstmate home in an interactive shell, invoke
 | `fm-watchdog-lib.sh`     | Shared watchdog config, metrics, session lookup, embargo, and event helpers |
 | `fm-embargo-lift`        | Manually lift one watchdog budget embargo flag |
 | `fm-afk-start.sh`        | Enter away mode and run the sub-supervisor daemon as a tracked foreground process    |
-| `fm-supervise-daemon.sh` | Presence-gated away-mode sub-supervisor: self-handle routine wakes, escalate batched digests |
+| `fm-supervise-daemon.sh` | Presence-gated away-mode sub-supervisor: self-handle routine wakes, escalate batched digests, alert on failed delivery |
 | `fm-crew-state.sh`       | Print one deterministic current-state line for a crew                                |
 | `fm-tangle-lib.sh`       | Shared default-branch resolution and primary-checkout tangle classification          |
 | `fm-supervision-lib.sh`  | Shared in-flight-work-without-fresh-watcher-beacon predicate                         |
