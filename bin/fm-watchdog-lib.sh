@@ -115,7 +115,7 @@ fm_watchdog_claude_checkpoint_for_session() {
   local file mtime best_file='' best_mtime=-1 found_sid
   [ -d "$dir" ] || return 1
   while IFS= read -r -d '' file; do
-    found_sid=$(jq -r '.session_id // empty' "$file" 2>/dev/null || true)
+    found_sid=$(jq -r '.session_id // .sessionId // empty' "$file" 2>/dev/null || true)
     [ "$found_sid" = "$session_id" ] || continue
     mtime=$(fm_path_mtime "$file") || continue
     case "$mtime" in
@@ -331,7 +331,7 @@ fm_watchdog_session_id_from_file() {
       printf '%s\n' "${sid%.jsonl}"
       ;;
     codex)
-      sid=$(jq -r 'select(.type == "session_meta") | .payload.session_id // .payload.id // empty' "$file" 2>/dev/null | head -n 1)
+      sid=$(jq -r 'select(.type == "session_meta") | .payload.session_id // .payload.id // .session_id // .sessionId // empty' "$file" 2>/dev/null | head -n 1)
       if [ -n "$sid" ]; then
         printf '%s\n' "$sid"
       else

@@ -53,6 +53,29 @@ test_claude_checkpoint_selection_matches_session() {
   pass "claude checkpoint selection is scoped to the requested session"
 }
 
+test_meta_backed_claude_checkpoint_accepts_session_id_alias() {
+  local home session_dir checkpoint_dir target_wt key session out
+  home="$TMP_ROOT/claude-alias-home"
+  session_dir="$TMP_ROOT/claude-alias-sessions"
+  checkpoint_dir="$TMP_ROOT/claude-alias-checkpoints"
+  target_wt="$TMP_ROOT/worktrees/claude-alias-target"
+  session='claude-alias-session'
+  mkdir -p "$home/state" "$target_wt" "$checkpoint_dir"
+  key=$(cd "$target_wt" && pwd -P | sed 's#/#-#g')
+  mkdir -p "$session_dir/$key"
+  fm_write_meta "$home/state/demo.meta" "worktree=$target_wt" "harness=claude"
+  printf '{}\n' > "$session_dir/$key/$session.jsonl"
+  jq --arg session "$session" 'del(.session_id) | .sessionId = $session | .fill_pct = 43' \
+    "$CLAUDE_FIXTURE" > "$checkpoint_dir/target.json"
+
+  out=$(FM_HOME="$home" \
+    FM_WATCHDOG_CLAUDE_SESSION_DIR="$session_dir" \
+    FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR="$checkpoint_dir" \
+    bash -c '. "$1"; fm_watchdog_collect_metrics claude demo' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  [ "$(jq -r '.context_pct' "$out")" = 43 ] || fail "meta-backed claude metrics should accept sessionId checkpoints"
+  pass "meta-backed claude checkpoint selection accepts sessionId"
+}
+
 test_claude_checkpoint_missing_session_is_loud() {
   local dir out err status
   dir="$TMP_ROOT/claude-missing"
@@ -101,6 +124,15 @@ write_codex_rollout() {
     > "$file"
 }
 
+write_codex_rollout_root_session() {
+  local file=$1 session=$2 cwd=$3 total=$4 primary=$5 secondary=$6
+  mkdir -p "$(dirname "$file")"
+  jq -cn --arg session "$session" --arg cwd "$cwd" \
+    '{type:"session_meta",session_id:$session,payload:{cwd:$cwd}}' > "$file"
+  jq -cn --argjson total "$total" --argjson primary "$primary" --argjson secondary "$secondary" \
+    '{type:"event_msg",payload:{type:"token_count",info:{last_token_usage:{total_tokens:$total},model_context_window:1000},rate_limits:{primary:{used_percent:$primary},secondary:{used_percent:$secondary}}}}' >> "$file"
+}
+
 test_codex_rollout_selection_matches_session() {
   local dir out
   dir="$TMP_ROOT/codex-selection"
@@ -115,6 +147,22 @@ test_codex_rollout_selection_matches_session() {
   jq -e '.context_pct == 50 and .five_hr_pct == 12 and .seven_day_pct == 34' "$out" >/dev/null \
     || fail "codex metrics should come from the requested session"
   pass "codex rollout selection is scoped to the requested session"
+}
+
+test_meta_backed_codex_rollout_accepts_root_session_id() {
+  local home session_dir target_wt out
+  home="$TMP_ROOT/codex-root-session-home"
+  session_dir="$TMP_ROOT/codex-root-session-sessions"
+  target_wt="$TMP_ROOT/worktrees/codex-root-session-target"
+  mkdir -p "$home/state" "$target_wt"
+  fm_write_meta "$home/state/demo.meta" "worktree=$target_wt" "harness=codex"
+  write_codex_rollout_root_session "$session_dir/2026/07/08/rollout-target.jsonl" codex-root-session "$target_wt" 420 21 31
+
+  out=$(FM_HOME="$home" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    bash -c '. "$1"; fm_watchdog_collect_metrics codex demo' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  jq -e '.context_pct == 42 and .five_hr_pct == 21 and .seven_day_pct == 31' "$out" >/dev/null \
+    || fail "meta-backed codex metrics should accept root session_id rollouts"
+  pass "meta-backed codex rollout selection accepts root session_id"
 }
 
 test_codex_rollout_missing_session_is_loud() {
@@ -261,9 +309,11 @@ test_watchdog_events_remain_jsonl_under_concurrency() {
 
 test_claude_checkpoint_metrics
 test_claude_checkpoint_selection_matches_session
+test_meta_backed_claude_checkpoint_accepts_session_id_alias
 test_claude_checkpoint_missing_session_is_loud
 test_corrupt_claude_checkpoint_is_loud
 test_codex_rollout_selection_matches_session
+test_meta_backed_codex_rollout_accepts_root_session_id
 test_codex_rollout_missing_session_is_loud
 test_unknown_harness_is_observe_only_tolerant
 test_codex_metrics_are_scoped_to_task_worktree
