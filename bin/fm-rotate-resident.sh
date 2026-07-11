@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Manually rotate the task resident in this backend endpoint through the watchdog successor path.
+# Manually rotate the current live task resident through the watchdog successor path.
+# Resolves the predecessor from the active backend endpoint and refuses when the
+# watchdog is halted, another rotation is active, or the resident is not live.
+# --dry-run prints the predecessor, handoff, and successor plan without writes.
 # Usage: fm-rotate-resident.sh [--dry-run]
 set -euo pipefail
 

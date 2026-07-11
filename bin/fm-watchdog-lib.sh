@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Session metrics, config, transcript, embargo, and event helpers for the firstmate watchdog.
+# Session metrics, config, transcript, rotation-lock, embargo, and event helpers for the firstmate watchdog.
 #
 # fm_watchdog_collect_metrics <harness> <task-id> writes one metrics snapshot
 # to $STATE/watchdog/metrics-<task-id>.json.
