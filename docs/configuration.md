@@ -195,10 +195,16 @@ When a harness reaches either budget embargo threshold, the watcher writes `fm-s
 `fm-spawn.sh` checks that flag only at entry and exits 7 for new spawns on the embargoed harness, so in-flight work continues.
 `fm-harness.sh crew` rotates to the first non-embargoed entry in `rotate_to` when the configured crew harness is embargoed.
 `fm-embargo-lift --harness <name>` removes a flag manually, and the watcher also lifts a flag after a recorded provider reset timestamp crosses.
+`fm-rotate-resident.sh` manually starts that same successor path for the currently live resident endpoint, resolving the predecessor task, backend endpoint, session file, and session id from live metadata and backend state.
+It refuses non-zero when `fm-state/watchdog.halt` exists, when a compact, clear, or resident rotation is already in flight for that task, when no matching live resident can be resolved, or when more than one task record matches the current endpoint.
+Pass `--dry-run` to print the predecessor, session file, backend endpoint, unique-handoff shape, and successor plan without creating or removing watchdog files.
 After a proven clear rotation, or after compact or clear steering becomes undeliverable, the watcher writes a unique handoff under `fm-state/handoffs/`, refreshes `fm-state/handoff-latest.md` as a convenience pointer, and invokes `fm-successor.sh` with the unique handoff path.
+Manual resident rotation uses the same handoff creator and `fm-successor.sh` invocation, so successor adoption, readiness proof, predecessor retirement, halt behavior, and registry cleanup stay shared with watchdog-triggered successors.
 The successor adopts the predecessor worktree instead of creating a new one, reuses the predecessor project, backend, harness, model, effort, mode, and yolo metadata, carries `pr=` and `pr_head=`, carries any X-mode follow-up link without resetting its counter or timestamp, and retires the predecessor endpoint only after successor ownership is proven.
 If spawn, metadata carry, X-link carry, or readiness proof fails, `fm-successor.sh` writes `fm-state/watchdog.halt` and a `fm-state/steer-failure-<ts>.md` artifact; `fm-guard.sh` surfaces the halt, and the watcher exits instead of retrying until the artifact is inspected and the halt file is deliberately removed.
 Steers are retried up to `steer_retries`, each delivery is bounded by `steer_timeout_sec`, and a pending compact or clear is retried only after `compact_pending_retry_sec` unless Claude/Codex transcript rotation proves a new session has taken over.
+Rotation locks live under `state/watchdog/.resident-rotation-<task-key>` and fence compact steers, clear steers, clear-successor handoff, and manual resident rotation from racing each other.
+Stale initialized locks are reclaimed when their recorded process is gone, while fresh provisional locks without a pid are treated as active for `FM_WATCHDOG_ROTATION_PROVISIONAL_STALE_SEC` seconds.
 Metrics snapshots are written under `state/watchdog/metrics-<task-id>.json`, keeping watchdog artifacts inside firstmate's existing runtime-signal directory without mixing them into the watcher's own dotfile internals.
 Watchdog event logs are written as JSON lines to `fm-state/watchdog.events`.
 Use `FM_WATCHDOG_CONFIG` to point at a different config file, `FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR` for Claude token-optimizer checkpoints, `FM_WATCHDOG_CLAUDE_SESSION_DIR` for Claude transcript JSONL files, and `FM_WATCHDOG_CODEX_SESSION_DIR` for Codex rollout JSONL files.
@@ -359,10 +365,13 @@ FM_WATCHDOG_CONFIG=     # optional path to watchdog config; defaults to config/w
 FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR=~/.claude/token-optimizer/checkpoints   # Claude token-optimizer checkpoint source for watchdog metrics
 FM_WATCHDOG_CLAUDE_SESSION_DIR=~/.claude/projects   # Claude transcript source for watchdog session rotation detection
 FM_WATCHDOG_CODEX_SESSION_DIR=~/.codex/sessions   # Codex rollout source for watchdog metrics and session rotation detection
+FM_WATCHDOG_ROTATION_PROVISIONAL_STALE_SEC=30   # seconds a pid-less resident-rotation lock blocks another rotation before stale reclamation
+FM_RESIDENT_TARGET=      # test/diagnostic override for fm-rotate-resident.sh's current backend endpoint detection
 FM_STEER_BACKEND_CMD=   # test/diagnostic override for fm-steer delivery command; receives backend, target, and text
 FM_STEER_BACKOFF_SEC=5  # seconds between fm-steer retry attempts
 FM_STEER_REQUIRE_TARGET_EXISTS=0   # set truthy for fm-steer to verify the resolved backend endpoint and return rc 4 before delivery when missing
 FM_STEER_SEND_SETTLE=0  # fm-send settle delay used by fm-steer delivery; defaults to 0 for watchdog speed
+FM_WATCHDOG_SUCCESSOR_CMD= # test/diagnostic override for the shared watchdog handoff-to-successor command
 FM_SUCCESSOR_ID=        # test/diagnostic override for the watchdog successor task id; normally generated from the predecessor id and UTC time
 FM_SUCCESSOR_READY_TIMEOUT=30      # seconds fm-successor waits for readiness proof before halting the watchdog
 FM_SUCCESSOR_SPAWN_CMD= # test/diagnostic override for the fm-successor spawn command; receives the fm-spawn-compatible argument vector

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Session metrics, config, transcript, embargo, and event helpers for the firstmate watchdog.
+# Session metrics, config, transcript, rotation-lock, embargo, and event helpers for the firstmate watchdog.
 #
 # fm_watchdog_collect_metrics <harness> <task-id> writes one metrics snapshot
 # to $STATE/watchdog/metrics-<task-id>.json.
@@ -491,7 +491,7 @@ fm_watchdog_codex_cached_rollout() {
 }
 
 fm_watchdog_latest_codex_rollout_for_worktree() {
-  local worktree=$1 task=${2:-} dir=${FM_WATCHDOG_CODEX_SESSION_DIR:-$HOME/.codex/sessions}
+  local worktree=$1 task=${2:-} cache_mode=${3:-write-cache} dir=${FM_WATCHDOG_CODEX_SESSION_DIR:-$HOME/.codex/sessions}
   local cache='' cached='' file cwd mtime best_file='' best_mtime=-1 search_dir seen_dirs=''
   [ -d "$dir" ] || return 1
   fm_watchdog_wake_lib_source
@@ -530,7 +530,7 @@ fm_watchdog_latest_codex_rollout_for_worktree() {
     fi
   )
   [ -n "$best_file" ] || return 1
-  [ -n "$cache" ] && fm_watchdog_codex_rollout_cache_write "$cache" "$best_file" "$worktree"
+  [ -n "$cache" ] && [ "$cache_mode" != no-write ] && fm_watchdog_codex_rollout_cache_write "$cache" "$best_file" "$worktree"
   printf '%s\n' "$best_file"
 }
 
@@ -544,13 +544,13 @@ fm_watchdog_task_worktree() {
 }
 
 fm_watchdog_session_file() {
-  local harness=$1 task=${2:-} worktree
+  local harness=$1 task=${2:-} cache_mode=${3:-write-cache} worktree
   if [ -n "$task" ]; then
     worktree=$(fm_watchdog_task_worktree "$task" 2>/dev/null || true)
     [ -n "$worktree" ] || return 1
     case "$harness" in
       claude) fm_watchdog_latest_claude_jsonl_for_worktree "$worktree"; return $? ;;
-      codex) fm_watchdog_latest_codex_rollout_for_worktree "$worktree" "$task"; return $? ;;
+      codex) fm_watchdog_latest_codex_rollout_for_worktree "$worktree" "$task" "$cache_mode"; return $? ;;
       *) return 1 ;;
     esac
   fi
@@ -601,6 +601,192 @@ fm_watchdog_compact_generation() {
       return 1
       ;;
   esac
+}
+
+fm_watchdog_marker_key() {
+  printf '%s' "$1" | tr ':/.' '___'
+}
+
+fm_watchdog_rotation_lock_path() {
+  local task=$1
+  printf '%s/.resident-rotation-%s\n' "$(fm_watchdog_metrics_dir)" "$(fm_watchdog_marker_key "$task")"
+}
+
+fm_watchdog_rotation_stat_mtime() {
+  if [ "$(uname)" = Darwin ]; then
+    stat -f %m "$1" 2>/dev/null
+  else
+    stat -c %Y "$1" 2>/dev/null
+  fi
+}
+
+fm_watchdog_rotation_lock_age() {
+  local path=$1 mtime
+  mtime=$(fm_watchdog_rotation_stat_mtime "$path" 2>/dev/null || true)
+  case "$mtime" in ''|*[!0-9]*) mtime=$(date +%s) ;; esac
+  echo $(( $(date +%s) - mtime ))
+}
+
+fm_watchdog_rotation_provisional_stale_sec() {
+  local value=${FM_WATCHDOG_ROTATION_PROVISIONAL_STALE_SEC:-30}
+  case "$value" in ''|*[!0-9]*) value=30 ;; esac
+  printf '%s\n' "$value"
+}
+
+fm_watchdog_rotation_remove_lock() {
+  local lock=$1
+  rm -f "$lock/pid" "$lock/owner" "$lock/created_at" "$lock/token"
+  rmdir "$lock" 2>/dev/null
+}
+
+fm_watchdog_rotation_lock_identity() {
+  local lock=$1 token pid mtime
+  [ -d "$lock" ] || return 1
+  token=$(sed -n '1p' "$lock/token" 2>/dev/null || true)
+  pid=$(sed -n '1p' "$lock/pid" 2>/dev/null || true)
+  mtime=$(fm_watchdog_rotation_stat_mtime "$lock" 2>/dev/null || true)
+  printf '%s\n%s\n%s\n' "$token" "$pid" "$mtime"
+}
+
+fm_watchdog_rotation_remove_lock_if_identity() {
+  local lock=$1 identity=$2 current
+  current=$(fm_watchdog_rotation_lock_identity "$lock" 2>/dev/null || true)
+  [ -n "$current" ] || return 1
+  [ "$current" = "$identity" ] || return 1
+  fm_watchdog_rotation_remove_lock "$lock"
+}
+
+fm_watchdog_rotation_claim() {
+  local task=$1 owner=${2:-watchdog} lock pid token age stale_sec identity
+  lock=$(fm_watchdog_rotation_lock_path "$task")
+  mkdir -p "$(dirname "$lock")"
+  while ! mkdir "$lock" 2>/dev/null; do
+    identity=$(fm_watchdog_rotation_lock_identity "$lock" 2>/dev/null || true)
+    [ -n "$identity" ] || continue
+    pid=$(sed -n '1p' "$lock/pid" 2>/dev/null || true)
+    case "$pid" in
+      ''|*[!0-9]*)
+        stale_sec=$(fm_watchdog_rotation_provisional_stale_sec)
+        age=$(fm_watchdog_rotation_lock_age "$lock")
+        [ "$age" -ge "$stale_sec" ] || return 1
+        fm_watchdog_rotation_remove_lock_if_identity "$lock" "$identity" || return 1
+        ;;
+      *)
+        kill -0 "$pid" 2>/dev/null || {
+          fm_watchdog_rotation_remove_lock_if_identity "$lock" "$identity" || return 1
+          continue
+        }
+        return 1
+        ;;
+    esac
+  done
+  token="${owner}.${$}.${BASHPID:-$$}.$(date -u +%Y%m%dT%H%M%SZ).${RANDOM}${RANDOM}"
+  printf '%s\n' "$token" > "$lock/token"
+  printf '%s\n' "$owner" > "$lock/owner"
+  printf '%s\n' "$$" > "$lock/pid"
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$lock/created_at"
+  printf '%s\n' "$token"
+}
+
+fm_watchdog_rotation_set_pid() {
+  local task=$1 pid=$2 token=${3:-} lock actual
+  lock=$(fm_watchdog_rotation_lock_path "$task")
+  [ -d "$lock" ] || return 1
+  [ -n "$token" ] || return 1
+  actual=$(sed -n '1p' "$lock/token" 2>/dev/null || true)
+  [ "$actual" = "$token" ] || return 1
+  printf '%s\n' "$pid" > "$lock/pid"
+}
+
+fm_watchdog_rotation_release() {
+  local task=$1 token=${2:-} lock actual identity
+  lock=$(fm_watchdog_rotation_lock_path "$task")
+  [ -d "$lock" ] || return 0
+  [ -n "$token" ] || return 1
+  actual=$(sed -n '1p' "$lock/token" 2>/dev/null || true)
+  [ "$actual" = "$token" ] || return 1
+  identity=$(fm_watchdog_rotation_lock_identity "$lock" 2>/dev/null || true)
+  [ -n "$identity" ] || return 0
+  fm_watchdog_rotation_remove_lock_if_identity "$lock" "$identity" || true
+}
+
+fm_watchdog_rotation_active() {
+  local task=$1 lock pid age stale_sec identity
+  lock=$(fm_watchdog_rotation_lock_path "$task")
+  [ -e "$lock" ] || return 1
+  identity=$(fm_watchdog_rotation_lock_identity "$lock" 2>/dev/null || true)
+  [ -n "$identity" ] || return 1
+  pid=$(sed -n '1p' "$lock/pid" 2>/dev/null || true)
+  case "$pid" in
+    ''|*[!0-9]*)
+      stale_sec=$(fm_watchdog_rotation_provisional_stale_sec)
+      age=$(fm_watchdog_rotation_lock_age "$lock")
+      [ "$age" -ge "$stale_sec" ] || return 0
+      fm_watchdog_rotation_remove_lock_if_identity "$lock" "$identity" || return 0
+      return 1
+      ;;
+  esac
+  kill -0 "$pid" 2>/dev/null && return 0
+  fm_watchdog_rotation_remove_lock_if_identity "$lock" "$identity" || return 0
+  return 1
+}
+
+fm_watchdog_rotation_active_readonly() {
+  local task=$1 lock pid age stale_sec
+  lock=$(fm_watchdog_rotation_lock_path "$task")
+  [ -e "$lock" ] || return 1
+  pid=$(sed -n '1p' "$lock/pid" 2>/dev/null || true)
+  case "$pid" in
+    ''|*[!0-9]*)
+      stale_sec=$(fm_watchdog_rotation_provisional_stale_sec)
+      age=$(fm_watchdog_rotation_lock_age "$lock")
+      [ "$age" -lt "$stale_sec" ]
+      return
+      ;;
+  esac
+  kill -0 "$pid" 2>/dev/null
+}
+
+fm_watchdog_halt_file() {
+  printf '%s/fm-state/watchdog.halt\n' "$FM_HOME"
+}
+
+fm_watchdog_start_successor() {
+  local task=$1 context=$2 reason=$3 rc=${4:-} handoff latest tmp safe_task ts brief_path successor_cmd
+  safe_task=$(fm_watchdog_marker_key "$task")
+  ts=$(date -u +%Y%m%dT%H%M%SZ)
+  handoff="$FM_HOME/fm-state/handoffs/handoff-${safe_task}-${ts}-${$}.md"
+  latest="$FM_HOME/fm-state/handoff-latest.md"
+  brief_path="$FM_HOME/data/$task/brief.md"
+  successor_cmd=${FM_WATCHDOG_SUCCESSOR_CMD:-$SCRIPT_DIR/fm-successor.sh}
+  mkdir -p "$(dirname "$handoff")"
+  tmp=$(mktemp "${handoff}.tmp.XXXXXX")
+  {
+    printf '# Watchdog Handoff\n\n'
+    printf "Predecessor: \`%s\`.\n" "$task"
+    printf 'Reason: %s.\n' "$reason"
+    printf 'Context percent: %s.\n' "$context"
+    [ -z "$rc" ] || printf 'Steer rc: %s.\n' "$rc"
+    printf "Created: \`%s\`.\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '\n## Original Brief\n\n'
+    if [ -f "$brief_path" ]; then
+      printf "Original brief path: \`%s\`.\n\n" "$brief_path"
+      printf '~~~~markdown\n'
+      cat "$brief_path"
+      printf '\n~~~~\n'
+    else
+      printf "Original brief path: \`%s\` was not present when this handoff was generated.\n" "$brief_path"
+    fi
+  } > "$tmp"
+  mv "$tmp" "$handoff"
+  cp "$handoff" "$latest" 2>/dev/null || true
+  fm_watchdog_event successor_threshold "$task" triggered "context_pct=$context reason=$reason handoff=$handoff rc=$rc"
+  if "$successor_cmd" "$task" "$handoff"; then
+    fm_watchdog_event successor_complete "$task" succeeded "reason=$reason"
+  else
+    fm_watchdog_event successor_complete "$task" failed "reason=$reason"
+    return 1
+  fi
 }
 
 fm_watchdog_write_metrics() {

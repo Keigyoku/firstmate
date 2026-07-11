@@ -44,6 +44,7 @@ If you have changed away from the firstmate home in an interactive shell, invoke
 | `fm-watch.sh`            | Singleton-safe always-on watcher: absorb benign wakes, queue and exit on actionable ones |
 | `fm-steer.sh`            | Deliver one bounded watchdog steer line to a task through `fm-send.sh` |
 | `fm-successor.sh`        | Spawn a proven watchdog successor from a handoff and retire the predecessor, halting on any unproven spawn |
+| `fm-rotate-resident.sh`   | Manually rotate the current task resident through the watchdog successor path |
 | `fm-watchdog-lib.sh`     | Shared watchdog config, metrics, session lookup, embargo, and event helpers |
 | `fm-embargo-lift`        | Manually lift one watchdog budget embargo flag |
 | `fm-afk-start.sh`        | Enter away mode and run the sub-supervisor daemon as a tracked foreground process    |
