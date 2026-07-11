@@ -708,6 +708,22 @@ fm_watchdog_rotation_active() {
   return 1
 }
 
+fm_watchdog_rotation_active_readonly() {
+  local task=$1 lock pid age stale_sec
+  lock=$(fm_watchdog_rotation_lock_path "$task")
+  [ -e "$lock" ] || return 1
+  pid=$(sed -n '1p' "$lock/pid" 2>/dev/null || true)
+  case "$pid" in
+    ''|*[!0-9]*)
+      stale_sec=$(fm_watchdog_rotation_provisional_stale_sec)
+      age=$(fm_watchdog_rotation_lock_age "$lock")
+      [ "$age" -lt "$stale_sec" ]
+      return
+      ;;
+  esac
+  kill -0 "$pid" 2>/dev/null
+}
+
 fm_watchdog_halt_file() {
   printf '%s/fm-state/watchdog.halt\n' "$FM_HOME"
 }

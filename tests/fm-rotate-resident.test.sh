@@ -10,6 +10,27 @@ PASS=0
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "ok $((PASS += 1)) - $*"; }
 assert_contains() { case "$1" in *"$2"*) ;; *) fail "$3: missing '$2' in '$1'" ;; esac; }
+stat_mtime() {
+  if [ "$(uname)" = Darwin ]; then
+    stat -f %m "$1"
+  else
+    stat -c %Y "$1"
+  fi
+}
+path_snapshot() {
+  local root=$1 item type mtime sum
+  find "$root" -print | LC_ALL=C sort | while IFS= read -r item; do
+    if [ -d "$item" ]; then
+      type=d
+      sum=-
+    else
+      type=f
+      sum=$(cksum "$item")
+    fi
+    mtime=$(stat_mtime "$item")
+    printf '%s\t%s\t%s\t%s\n' "$item" "$type" "$mtime" "$sum"
+  done
+}
 
 make_fixture() {
   local name=$1 harness=${2:-claude} home fakebin sessions project_key command
@@ -110,6 +131,53 @@ test_refuses_live_resident_rotation_claim() {
   if out=$(run_fixture "$home" "$fakebin" "$sessions" claude 2>&1); then fail 'live resident rotation claim was accepted'; fi
   assert_contains "$out" 'rotation already in flight' 'live-claim refusal was unclear'
   pass 'live resident rotation claim is refused'
+}
+
+test_dry_run_allows_stale_initialized_claim_readonly() {
+  local fixture home fakebin sessions out lock before after
+  fixture=$(make_fixture stale-claim-dry); home=$(printf '%s\n' "$fixture" | sed -n '1p'); fakebin=$(printf '%s\n' "$fixture" | sed -n '2p'); sessions=$(printf '%s\n' "$fixture" | sed -n '3p')
+  lock="$home/state/watchdog/.resident-rotation-resident"
+  mkdir "$lock"
+  printf '999999999\n' > "$lock/pid"
+  printf 'manual\n' > "$lock/owner"
+  printf 'stale-token\n' > "$lock/token"
+  printf '2000-01-01T00:00:00Z\n' > "$lock/created_at"
+  before=$(path_snapshot "$lock")
+  out=$(run_fixture "$home" "$fakebin" "$sessions" claude --dry-run)
+  after=$(path_snapshot "$lock")
+  assert_contains "$out" 'predecessor task=resident sid=resident-session' 'stale initialized claim blocked dry-run'
+  [ "$before" = "$after" ] || fail 'dry-run mutated stale initialized claim'
+  pass 'dry-run treats stale initialized claims as inactive without writes'
+}
+
+test_dry_run_refuses_live_initialized_claim_readonly() {
+  local fixture home fakebin sessions out lock before after
+  fixture=$(make_fixture live-claim-dry); home=$(printf '%s\n' "$fixture" | sed -n '1p'); fakebin=$(printf '%s\n' "$fixture" | sed -n '2p'); sessions=$(printf '%s\n' "$fixture" | sed -n '3p')
+  lock="$home/state/watchdog/.resident-rotation-resident"
+  mkdir "$lock"
+  printf '%s\n' "$$" > "$lock/pid"
+  printf 'manual\n' > "$lock/owner"
+  printf 'live-token\n' > "$lock/token"
+  printf '2026-01-01T00:00:00Z\n' > "$lock/created_at"
+  before=$(path_snapshot "$lock")
+  if out=$(run_fixture "$home" "$fakebin" "$sessions" claude --dry-run 2>&1); then fail 'live initialized dry-run claim was accepted'; fi
+  after=$(path_snapshot "$lock")
+  assert_contains "$out" 'rotation already in flight' 'live initialized dry-run refusal was unclear'
+  [ "$before" = "$after" ] || fail 'dry-run mutated live initialized claim'
+  pass 'dry-run refuses live initialized claims without writes'
+}
+
+test_dry_run_refuses_fresh_provisional_claim_readonly() {
+  local fixture home fakebin sessions out lock before after
+  fixture=$(make_fixture provisional-claim-dry); home=$(printf '%s\n' "$fixture" | sed -n '1p'); fakebin=$(printf '%s\n' "$fixture" | sed -n '2p'); sessions=$(printf '%s\n' "$fixture" | sed -n '3p')
+  lock="$home/state/watchdog/.resident-rotation-resident"
+  mkdir "$lock"
+  before=$(path_snapshot "$lock")
+  if out=$(run_fixture "$home" "$fakebin" "$sessions" claude --dry-run 2>&1); then fail 'fresh provisional dry-run claim was accepted'; fi
+  after=$(path_snapshot "$lock")
+  assert_contains "$out" 'rotation already in flight' 'fresh provisional dry-run refusal was unclear'
+  [ "$before" = "$after" ] || fail 'dry-run mutated fresh provisional claim'
+  pass 'dry-run refuses fresh provisional claims without writes'
 }
 
 test_recovers_stale_resident_rotation_claim() {
@@ -276,6 +344,9 @@ test_resident_resolution_and_dry_run
 test_refuses_halted_watchdog
 test_refuses_rotation_in_flight
 test_refuses_live_resident_rotation_claim
+test_dry_run_allows_stale_initialized_claim_readonly
+test_dry_run_refuses_live_initialized_claim_readonly
+test_dry_run_refuses_fresh_provisional_claim_readonly
 test_recovers_stale_resident_rotation_claim
 test_rotation_claim_token_fences_reacquired_lock
 test_provisional_rotation_claim_blocks_contenders

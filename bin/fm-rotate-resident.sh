@@ -78,7 +78,9 @@ if [ "$DRY_RUN" -eq 0 ]; then
   fi
   trap 'fm_watchdog_rotation_release "$TASK" "$ROTATION_CLAIM"' EXIT
 elif [ -e "$(fm_watchdog_rotation_lock_path "$TASK")" ]; then
-  fail "refusing rotation: rotation already in flight ($(fm_watchdog_rotation_lock_path "$TASK"))"
+  if fm_watchdog_rotation_active_readonly "$TASK"; then
+    fail "refusing rotation: rotation already in flight ($(fm_watchdog_rotation_lock_path "$TASK"))"
+  fi
 fi
 for MARKER in \
   "$STATE/watchdog/.clear-steering-$KEY" \
