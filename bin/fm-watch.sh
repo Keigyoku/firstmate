@@ -258,7 +258,7 @@ watchdog_marker_key() {
 }
 
 watchdog_check_rotation() {  # <task> <harness> <marker-file>
-  local task=$1 harness=$2 marker=$3 old_sig old_sid old_generation file sig new_sid generation
+  local task=$1 harness=$2 marker=$3 old_sig old_sid old_generation file sig new_sid generation claim
   [ -s "$marker" ] || return 0
   old_sig=$(sed -n '1p' "$marker")
   old_sid=$(sed -n '2p' "$marker")
@@ -272,13 +272,13 @@ watchdog_check_rotation() {  # <task> <harness> <marker-file>
     [ -n "$generation" ] || return 0
     [ "$generation" != "$old_generation" ] || return 0
   fi
-  watchdog_resident_rotation_claim "$task" compact-rotation || return 0
+  claim=$(watchdog_resident_rotation_claim "$task" compact-rotation) || return 0
   new_sid=$(fm_watchdog_session_id_from_file "$harness" "$file" 2>/dev/null || basename "$file")
   fm_watchdog_event compact_rotated "$task" rearmed "old_sid=$old_sid new_sid=$new_sid file=$file compact_generation=$generation"
   fm_watchdog_arm_session "$task" "$harness" "$file"
   printf '%s\n%s\n%s\n' "$old_sig" "$old_sid" "$generation" > "$STATE/watchdog/.compact-handled-$(watchdog_marker_key "$task")"
   rm -f "$marker"
-  watchdog_resident_rotation_release "$task"
+  watchdog_resident_rotation_release "$task" "$claim"
 }
 
 watchdog_compact_handled() {
@@ -301,7 +301,7 @@ watchdog_clear_handled() {
 }
 
 watchdog_check_clear_rotation() {  # <task> <harness> <marker-file>
-  local task=$1 harness=$2 marker=$3 old_sig old_sid context old_generation file sig new_sid generation
+  local task=$1 harness=$2 marker=$3 old_sig old_sid context old_generation file sig new_sid generation claim
   [ -s "$marker" ] || return 0
   watchdog_resident_rotation_active "$task" && return 0
   old_sig=$(sed -n '1p' "$marker")
@@ -317,14 +317,14 @@ watchdog_check_clear_rotation() {  # <task> <harness> <marker-file>
     [ -n "$generation" ] || return 0
     [ "$generation" != "$old_generation" ] || return 0
   fi
-  watchdog_resident_rotation_claim "$task" clear-rotation || return 0
+  claim=$(watchdog_resident_rotation_claim "$task" clear-rotation) || return 0
   new_sid=$(fm_watchdog_session_id_from_file "$harness" "$file" 2>/dev/null || basename "$file")
   fm_watchdog_event clear_rotated "$task" successor_takeover "old_sid=$old_sid new_sid=$new_sid file=$file compact_generation=$generation"
   fm_watchdog_arm_session "$task" "$harness" "$file"
   printf '%s\n%s\n%s\n' "$old_sig" "$old_sid" "$generation" > "$STATE/watchdog/.clear-handled-$(watchdog_marker_key "$task")"
   rm -f "$marker"
   watchdog_start_successor "$task" "${context:-unknown}" "clear_rotated"
-  watchdog_resident_rotation_release "$task"
+  watchdog_resident_rotation_release "$task" "$claim"
 }
 
 watchdog_resident_rotation_active() {
@@ -337,13 +337,13 @@ watchdog_resident_rotation_claim() {
 
 watchdog_resident_rotation_set_pid() {
   if [ -n "${FM_WATCHDOG_BEFORE_ROTATION_SET_PID:-}" ]; then
-    "$FM_WATCHDOG_BEFORE_ROTATION_SET_PID" "$1" "$2"
+    "$FM_WATCHDOG_BEFORE_ROTATION_SET_PID" "$1" "$2" "$3"
   fi
-  fm_watchdog_rotation_set_pid "$1" "$2"
+  fm_watchdog_rotation_set_pid "$1" "$2" "$3"
 }
 
 watchdog_resident_rotation_release() {
-  fm_watchdog_rotation_release "$1"
+  fm_watchdog_rotation_release "$1" "$2"
 }
 
 watchdog_steer_inflight() {
@@ -398,12 +398,12 @@ watchdog_collect_failure_recent() {
 }
 
 watchdog_start_compact_steer() {
-  local task=$1 context=$2 compact=$3 sig=$4 sid=$5 key=$6 pending=$7 inflight=$8 generation=$9 pid
-  watchdog_resident_rotation_claim "$task" compact-steer || return 0
+  local task=$1 context=$2 compact=$3 sig=$4 sid=$5 key=$6 pending=$7 inflight=$8 generation=$9 pid claim
+  claim=$(watchdog_resident_rotation_claim "$task" compact-steer) || return 0
   fm_watchdog_event compact_threshold "$task" triggered "context_pct=$context threshold=$compact sid=$sid"
   (
     local rc
-    trap 'watchdog_resident_rotation_release "$task"' EXIT
+    trap 'watchdog_resident_rotation_release "$task" "$claim"' EXIT
     if "$SCRIPT_DIR/fm-steer.sh" "$task" "/compact complete current task, then /compact"; then
       printf '%s\n%s\n%s\n' "$sig" "$sid" "$generation" > "$pending"
     else
@@ -416,7 +416,7 @@ watchdog_start_compact_steer() {
     rm -f "$inflight"
   ) >/dev/null 2>&1 &
   pid=$!
-  if watchdog_resident_rotation_set_pid "$task" "$pid"; then
+  if watchdog_resident_rotation_set_pid "$task" "$pid" "$claim"; then
     printf '%s\n' "$pid" > "$inflight"
     fm_watchdog_event compact_steer_started "$task" "pid=$pid" "context_pct=$context threshold=$compact key=$key"
   elif kill -0 "$pid" 2>/dev/null; then
@@ -425,12 +425,12 @@ watchdog_start_compact_steer() {
 }
 
 watchdog_start_clear_steer() {
-  local task=$1 context=$2 threshold=$3 sig=$4 sid=$5 key=$6 pending=$7 inflight=$8 generation=$9 pid
-  watchdog_resident_rotation_claim "$task" clear-steer || return 0
+  local task=$1 context=$2 threshold=$3 sig=$4 sid=$5 key=$6 pending=$7 inflight=$8 generation=$9 pid claim
+  claim=$(watchdog_resident_rotation_claim "$task" clear-steer) || return 0
   fm_watchdog_event clear_threshold "$task" triggered "context_pct=$context threshold=$threshold sid=$sid"
   (
     local rc
-    trap 'watchdog_resident_rotation_release "$task"' EXIT
+    trap 'watchdog_resident_rotation_release "$task" "$claim"' EXIT
     if "$SCRIPT_DIR/fm-steer.sh" "$task" "/clear complete current task, then /clear"; then
       printf '%s\n%s\n%s\n%s\n' "$sig" "$sid" "$context" "$generation" > "$pending"
     else
@@ -443,7 +443,7 @@ watchdog_start_clear_steer() {
     rm -f "$inflight"
   ) >/dev/null 2>&1 &
   pid=$!
-  if watchdog_resident_rotation_set_pid "$task" "$pid"; then
+  if watchdog_resident_rotation_set_pid "$task" "$pid" "$claim"; then
     printf '%s\n' "$pid" > "$inflight"
     fm_watchdog_event clear_steer_started "$task" "pid=$pid" "context_pct=$context threshold=$threshold key=$key"
   elif kill -0 "$pid" 2>/dev/null; then

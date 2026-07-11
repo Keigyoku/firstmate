@@ -133,6 +133,28 @@ EOF
   pass 'stale resident rotation claim is recovered'
 }
 
+test_rotation_claim_token_fences_reacquired_lock() {
+  local home claim1 claim2 lock pid_after
+  home="$TMP_ROOT/token-fence-home"
+  mkdir -p "$home/state/watchdog"
+  claim1=$(FM_HOME="$home" bash -c '. "$1"; fm_watchdog_rotation_claim resident manual' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  FM_HOME="$home" bash -c '. "$1"; fm_watchdog_rotation_release resident "$2"' _ "$ROOT/bin/fm-watchdog-lib.sh" "$claim1"
+  claim2=$(FM_HOME="$home" bash -c '. "$1"; fm_watchdog_rotation_claim resident watchdog' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  lock="$home/state/watchdog/.resident-rotation-resident"
+  if FM_HOME="$home" bash -c '. "$1"; fm_watchdog_rotation_set_pid resident 999999 "$2"' _ "$ROOT/bin/fm-watchdog-lib.sh" "$claim1"; then
+    fail 'stale rotation claim token rewrote replacement pid'
+  fi
+  pid_after=$(sed -n '1p' "$lock/pid")
+  [ "$pid_after" != 999999 ] || fail 'replacement rotation pid was corrupted by stale token'
+  if FM_HOME="$home" bash -c '. "$1"; fm_watchdog_rotation_release resident "$2"' _ "$ROOT/bin/fm-watchdog-lib.sh" "$claim1"; then
+    fail 'stale rotation claim token released replacement lock'
+  fi
+  [ -d "$lock" ] || fail 'replacement rotation lock was removed by stale token'
+  FM_HOME="$home" bash -c '. "$1"; fm_watchdog_rotation_release resident "$2"' _ "$ROOT/bin/fm-watchdog-lib.sh" "$claim2"
+  [ ! -e "$lock" ] || fail 'current rotation claim did not release its own lock'
+  pass 'rotation claim token fences replacement lock mutations'
+}
+
 test_refuses_no_live_resident() {
   local fixture home fakebin sessions out
   fixture=$(make_fixture missing); home=$(printf '%s\n' "$fixture" | sed -n '1p'); fakebin=$(printf '%s\n' "$fixture" | sed -n '2p'); sessions=$(printf '%s\n' "$fixture" | sed -n '3p')
@@ -218,6 +240,7 @@ test_refuses_halted_watchdog
 test_refuses_rotation_in_flight
 test_refuses_live_resident_rotation_claim
 test_recovers_stale_resident_rotation_claim
+test_rotation_claim_token_fences_reacquired_lock
 test_refuses_no_live_resident
 test_invokes_shared_successor_helper
 test_mutating_rotation_locks_before_liveness_lookup

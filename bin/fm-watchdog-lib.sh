@@ -613,19 +613,19 @@ fm_watchdog_rotation_lock_path() {
 }
 
 fm_watchdog_rotation_claim() {
-  local task=$1 owner=${2:-watchdog} lock pid
+  local task=$1 owner=${2:-watchdog} lock pid token
   lock=$(fm_watchdog_rotation_lock_path "$task")
   mkdir -p "$(dirname "$lock")"
   while ! mkdir "$lock" 2>/dev/null; do
     pid=$(sed -n '1p' "$lock/pid" 2>/dev/null || true)
     case "$pid" in
       ''|*[!0-9]*)
-        rm -f "$lock/pid" "$lock/owner" "$lock/created_at"
+        rm -f "$lock/pid" "$lock/owner" "$lock/created_at" "$lock/token"
         rmdir "$lock" 2>/dev/null || return 1
         ;;
       *)
         kill -0 "$pid" 2>/dev/null || {
-          rm -f "$lock/pid" "$lock/owner" "$lock/created_at"
+          rm -f "$lock/pid" "$lock/owner" "$lock/created_at" "$lock/token"
           rmdir "$lock" 2>/dev/null || return 1
           continue
         }
@@ -633,22 +633,32 @@ fm_watchdog_rotation_claim() {
         ;;
     esac
   done
+  token="${owner}.${$}.${BASHPID:-$$}.$(date -u +%Y%m%dT%H%M%SZ).${RANDOM}${RANDOM}"
   printf '%s\n' "$$" > "$lock/pid"
   printf '%s\n' "$owner" > "$lock/owner"
+  printf '%s\n' "$token" > "$lock/token"
   date -u +%Y-%m-%dT%H:%M:%SZ > "$lock/created_at"
+  printf '%s\n' "$token"
 }
 
 fm_watchdog_rotation_set_pid() {
-  local task=$1 pid=$2 lock
+  local task=$1 pid=$2 token=${3:-} lock actual
   lock=$(fm_watchdog_rotation_lock_path "$task")
   [ -d "$lock" ] || return 1
+  [ -n "$token" ] || return 1
+  actual=$(sed -n '1p' "$lock/token" 2>/dev/null || true)
+  [ "$actual" = "$token" ] || return 1
   printf '%s\n' "$pid" > "$lock/pid"
 }
 
 fm_watchdog_rotation_release() {
-  local task=$1 lock
+  local task=$1 token=${2:-} lock actual
   lock=$(fm_watchdog_rotation_lock_path "$task")
-  rm -f "$lock/pid" "$lock/owner" "$lock/created_at"
+  [ -d "$lock" ] || return 0
+  [ -n "$token" ] || return 1
+  actual=$(sed -n '1p' "$lock/token" 2>/dev/null || true)
+  [ "$actual" = "$token" ] || return 1
+  rm -f "$lock/pid" "$lock/owner" "$lock/created_at" "$lock/token"
   rmdir "$lock" 2>/dev/null || true
 }
 
@@ -659,13 +669,13 @@ fm_watchdog_rotation_active() {
   pid=$(sed -n '1p' "$lock/pid" 2>/dev/null || true)
   case "$pid" in
     ''|*[!0-9]*)
-      rm -f "$lock/pid" "$lock/owner" "$lock/created_at"
+      rm -f "$lock/pid" "$lock/owner" "$lock/created_at" "$lock/token"
       rmdir "$lock" 2>/dev/null || return 0
       return 1
       ;;
   esac
   kill -0 "$pid" 2>/dev/null && return 0
-  rm -f "$lock/pid" "$lock/owner" "$lock/created_at"
+  rm -f "$lock/pid" "$lock/owner" "$lock/created_at" "$lock/token"
   rmdir "$lock" 2>/dev/null || return 0
   return 1
 }

@@ -52,6 +52,7 @@ TASK=''
 HARNESS=''
 BACKEND=''
 FILE=''
+ROTATION_CLAIM=''
 for META in "$STATE"/*.meta; do
   [ -f "$META" ] || continue
   CANDIDATE_TASK=$(basename "$META" .meta)
@@ -72,10 +73,10 @@ done
 [ -n "$TASK" ] || fail "refusing rotation: no live resident record matches endpoint $TARGET"
 KEY=$(fm_watchdog_marker_key "$TASK")
 if [ "$DRY_RUN" -eq 0 ]; then
-  if ! fm_watchdog_rotation_claim "$TASK" manual; then
+  if ! ROTATION_CLAIM=$(fm_watchdog_rotation_claim "$TASK" manual); then
     fail "refusing rotation: rotation already in flight ($(fm_watchdog_rotation_lock_path "$TASK"))"
   fi
-  trap 'fm_watchdog_rotation_release "$TASK"' EXIT
+  trap 'fm_watchdog_rotation_release "$TASK" "$ROTATION_CLAIM"' EXIT
 elif [ -e "$(fm_watchdog_rotation_lock_path "$TASK")" ]; then
   fail "refusing rotation: rotation already in flight ($(fm_watchdog_rotation_lock_path "$TASK"))"
 fi

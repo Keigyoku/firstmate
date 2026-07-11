@@ -850,6 +850,66 @@ SH
   pass "fast completed compact steer handoff does not exit watcher"
 }
 
+test_fast_steer_handoff_does_not_corrupt_reacquired_lock() {
+  local home config session_dir worktree double log status timeout_cmd hook hook_log lock child_pid
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping resident-rotation ABA coverage"
+    return
+  fi
+  home="$TMP_ROOT/fast-steer-aba-home"
+  config="$TMP_ROOT/fast-steer-aba-config"
+  session_dir="$TMP_ROOT/fast-steer-aba-sessions"
+  worktree="$TMP_ROOT/fast-steer-aba-worktree"
+  double="$TMP_ROOT/fast-steer-aba-double"
+  log="$TMP_ROOT/fast-steer-aba.log"
+  hook="$TMP_ROOT/fast-steer-aba-hook"
+  hook_log="$TMP_ROOT/fast-steer-aba-hook.log"
+  lock="$home/state/watchdog/.resident-rotation-demo"
+  mkdir -p "$home/state/watchdog" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  write_codex_rollout "$session_dir/rollout-arm.jsonl" "$worktree" 0 armed-sid
+  make_success_double "$double" "$log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial ABA watcher pass should arm the session"
+
+  cat > "$hook" <<'SH'
+#!/usr/bin/env bash
+lock="$FM_HOME/state/watchdog/.resident-rotation-demo"
+printf '%s\n%s\n' "$2" "$3" > "$FM_TEST_ABA_HOOK_LOG"
+i=0
+while [ -d "$lock" ] && [ "$i" -lt 200 ]; do
+  i=$((i + 1))
+  sleep 0.01
+done
+mkdir "$lock"
+printf '%s\n' "$$" > "$lock/pid"
+printf 'manual\n' > "$lock/owner"
+printf 'replacement-token\n' > "$lock/token"
+date -u +%Y-%m-%dT%H:%M:%SZ > "$lock/created_at"
+SH
+  chmod +x "$hook"
+  sleep 1
+  write_codex_rollout "$session_dir/rollout-arm.jsonl" "$worktree" 900 armed-sid
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_WATCHDOG_BEFORE_ROTATION_SET_PID="$hook" \
+    FM_TEST_ABA_HOOK_LOG="$hook_log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "ABA watcher pass should keep polling"
+  child_pid=$(sed -n '1p' "$hook_log")
+  [ "$(sed -n '1p' "$lock/token")" = replacement-token ] || fail "old rotation claim corrupted replacement token"
+  [ "$(sed -n '1p' "$lock/pid")" != "$child_pid" ] || fail "old rotation claim corrupted replacement pid"
+  pass "fast steer handoff cannot corrupt a reacquired rotation lock"
+}
+
 test_stale_resident_rotation_lock_allows_compact_steer() {
   local home config session_dir worktree double log status event timeout_cmd
   if command -v timeout >/dev/null 2>&1; then
@@ -911,6 +971,7 @@ test_stale_meta_skips_watchdog_threshold_scan
 test_resident_rotation_lock_blocks_compact_steer
 test_resident_rotation_lock_blocks_compact_after_metrics
 test_fast_steer_completion_does_not_exit_watcher
+test_fast_steer_handoff_does_not_corrupt_reacquired_lock
 test_stale_resident_rotation_lock_allows_compact_steer
 
 echo "# all watchdog steer tests passed"
