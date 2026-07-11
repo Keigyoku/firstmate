@@ -22,16 +22,29 @@ fail() {
   exit 1
 }
 
-resident_endpoint() {
+resident_endpoints() {
   if [ -n "${FM_RESIDENT_TARGET:-}" ]; then
     printf '%s\n' "$FM_RESIDENT_TARGET"
   elif [ -n "${TMUX_PANE:-}" ]; then
-    tmux display-message -p -t "$TMUX_PANE" '#{session_name}:#{window_name}'
+    tmux display-message -p -t "$TMUX_PANE" '#{window_id}' || true
+    tmux display-message -p -t "$TMUX_PANE" '#{pane_id}' || true
+    tmux display-message -p -t "$TMUX_PANE" '#{session_name}:#{window_name}' || true
   elif [ "${HERDR_ENV:-}" = 1 ] && [ -n "${HERDR_PANE_ID:-}" ]; then
     printf '%s:%s\n' "${HERDR_SESSION:-default}" "$HERDR_PANE_ID"
   else
     return 1
   fi
+}
+
+resident_target_matches() {
+  local candidate=$1 target
+  while IFS= read -r target; do
+    [ -n "$target" ] || continue
+    [ "$candidate" = "$target" ] && return 0
+  done <<EOF
+$TARGETS
+EOF
+  return 1
 }
 
 DRY_RUN=0
@@ -45,8 +58,9 @@ esac
 
 HALT=$(fm_watchdog_halt_file)
 [ ! -s "$HALT" ] || fail "refusing rotation: watchdog is halted ($HALT)"
-TARGET=$(resident_endpoint 2>/dev/null || true)
-[ -n "$TARGET" ] || fail "refusing rotation: current resident backend endpoint is unknown"
+TARGETS=$(resident_endpoints 2>/dev/null || true)
+[ -n "$TARGETS" ] || fail "refusing rotation: current resident backend endpoint is unknown"
+TARGET=$(printf '%s\n' "$TARGETS" | sed -n '1p')
 
 TASK=''
 HARNESS=''
@@ -58,7 +72,7 @@ for META in "$STATE"/*.meta; do
   CANDIDATE_TASK=$(basename "$META" .meta)
   CANDIDATE_BACKEND=$(fm_backend_of_meta "$META")
   CANDIDATE_TARGET=$(fm_backend_resolve_selector "$CANDIDATE_TASK" "$STATE" 2>/dev/null || true)
-  [ "$CANDIDATE_TARGET" = "$TARGET" ] || continue
+  resident_target_matches "$CANDIDATE_TARGET" || continue
   KIND=$(fm_meta_get "$META" kind)
   [ -n "$KIND" ] || KIND=ship
   case "$KIND" in
@@ -68,6 +82,7 @@ for META in "$STATE"/*.meta; do
   [ -z "$TASK" ] || fail "refusing rotation: multiple resident records match endpoint $TARGET"
   TASK=$CANDIDATE_TASK
   BACKEND=$CANDIDATE_BACKEND
+  TARGET=$CANDIDATE_TARGET
   HARNESS=$(fm_meta_get "$META" harness)
 done
 [ -n "$TASK" ] || fail "refusing rotation: no live resident record matches endpoint $TARGET"

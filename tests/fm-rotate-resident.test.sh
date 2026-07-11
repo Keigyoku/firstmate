@@ -33,14 +33,14 @@ path_snapshot() {
 }
 
 make_fixture() {
-  local name=$1 harness=${2:-claude} home fakebin sessions project_key command
+  local name=$1 harness=${2:-claude} target=${3:-@42} home fakebin sessions project_key command
   home="$TMP_ROOT/$name"
   fakebin="$TMP_ROOT/$name-bin"
   sessions="$TMP_ROOT/$name-sessions"
   mkdir -p "$home/state/watchdog" "$home/data/resident" "$fakebin" "$home/project"
   command=$harness
   cat > "$home/state/resident.meta" <<EOF
-window=session:fm-resident
+window=$target
 project=$home/project
 worktree=$home/project
 backend=tmux
@@ -65,6 +65,8 @@ if [ "\$1|\${*: -1}" = 'display-message|#{pane_current_command}' ]; then
   exit 0
 fi
 case "\$1|\${*: -1}" in
+  'display-message|#{window_id}') printf '@42\n' ;;
+  'display-message|#{pane_id}') printf '%%77\n' ;;
   'display-message|#{session_name}:#{window_name}') printf 'session:fm-resident\n' ;;
   *) printf '$command\n' ;;
 esac
@@ -93,11 +95,24 @@ test_resident_resolution_and_dry_run() {
   sessions=$(printf '%s\n' "$fixture" | sed -n '3p')
   out=$(run_fixture "$home" "$fakebin" "$sessions" claude --dry-run)
   assert_contains "$out" 'predecessor task=resident sid=resident-session' 'dry-run did not resolve resident session'
-  assert_contains "$out" 'backend=tmux endpoint=session:fm-resident' 'dry-run did not resolve backend endpoint'
+  assert_contains "$out" 'backend=tmux endpoint=@42' 'dry-run did not resolve stable backend endpoint'
   assert_contains "$out" 'handoff=' 'dry-run omitted handoff plan'
   assert_contains "$out" 'fm-successor.sh' 'dry-run omitted successor plan'
   [ ! -e "$home/fm-state" ] || fail 'dry-run mutated fm-state'
   pass 'resident resolution and dry-run report are complete and non-mutating'
+}
+
+test_legacy_tmux_label_resolution_and_dry_run() {
+  local fixture home fakebin sessions out
+  fixture=$(make_fixture legacy-label claude session:fm-resident)
+  home=$(printf '%s\n' "$fixture" | sed -n '1p')
+  fakebin=$(printf '%s\n' "$fixture" | sed -n '2p')
+  sessions=$(printf '%s\n' "$fixture" | sed -n '3p')
+  out=$(run_fixture "$home" "$fakebin" "$sessions" claude --dry-run)
+  assert_contains "$out" 'predecessor task=resident sid=resident-session' 'legacy label dry-run did not resolve resident session'
+  assert_contains "$out" 'backend=tmux endpoint=session:fm-resident' 'legacy label dry-run did not retain stored endpoint'
+  [ ! -e "$home/fm-state" ] || fail 'legacy label dry-run mutated fm-state'
+  pass 'legacy tmux session:window metadata still resolves'
 }
 
 test_refuses_halted_watchdog() {
@@ -194,7 +209,7 @@ test_recovers_stale_resident_rotation_claim() {
 printf '%s\n%s\n' "$1" "$2" > "$FM_TEST_SUCCESSOR_LOG"
 EOF
   chmod +x "$mock"
-  PATH="$fakebin:$PATH" FM_HOME="$home" FM_RESIDENT_TARGET=session:fm-resident FM_WATCHDOG_CLAUDE_SESSION_DIR="$sessions" \
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_RESIDENT_TARGET=@42 FM_WATCHDOG_CLAUDE_SESSION_DIR="$sessions" \
     FM_WATCHDOG_SUCCESSOR_CMD="$mock" FM_TEST_SUCCESSOR_LOG="$log" "$ROOT/bin/fm-rotate-resident.sh" >/dev/null
   [ "$(sed -n '1p' "$log")" = resident ] || fail 'stale claim recovery did not delegate successor'
   [ ! -e "$lock" ] || fail 'stale resident rotation claim survived successful delegation'
@@ -326,7 +341,7 @@ test_invokes_shared_successor_helper() {
 printf '%s\n%s\n' "$1" "$2" > "$FM_TEST_SUCCESSOR_LOG"
 EOF
   chmod +x "$mock"
-  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_RESIDENT_TARGET=session:fm-resident FM_WATCHDOG_CLAUDE_SESSION_DIR="$sessions" \
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_RESIDENT_TARGET=@42 FM_WATCHDOG_CLAUDE_SESSION_DIR="$sessions" \
     FM_WATCHDOG_SUCCESSOR_CMD="$mock" FM_TEST_SUCCESSOR_LOG="$log" "$ROOT/bin/fm-rotate-resident.sh")
   [ "$(sed -n '1p' "$log")" = resident ] || fail 'shared successor helper received wrong predecessor'
   handoff=$(sed -n '2p' "$log")
@@ -348,7 +363,7 @@ test_mutating_rotation_locks_before_liveness_lookup() {
 printf '%s\n%s\n' "$1" "$2" > "$FM_TEST_SUCCESSOR_LOG"
 EOF
   chmod +x "$mock"
-  PATH="$fakebin:$PATH" FM_HOME="$home" FM_RESIDENT_TARGET=session:fm-resident FM_WATCHDOG_CLAUDE_SESSION_DIR="$sessions" \
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_RESIDENT_TARGET=@42 FM_WATCHDOG_CLAUDE_SESSION_DIR="$sessions" \
     FM_WATCHDOG_SUCCESSOR_CMD="$mock" FM_TEST_SUCCESSOR_LOG="$log" \
     FM_TEST_EXPECT_LOCK_FILE="$home/state/watchdog/.resident-rotation-resident" FM_TEST_LOCK_LOG="$lock_log" \
     "$ROOT/bin/fm-rotate-resident.sh" >/dev/null
@@ -389,6 +404,7 @@ test_codex_dry_run_does_not_write_rollout_cache() {
 }
 
 test_resident_resolution_and_dry_run
+test_legacy_tmux_label_resolution_and_dry_run
 test_refuses_halted_watchdog
 test_refuses_rotation_in_flight
 test_refuses_live_resident_rotation_claim
