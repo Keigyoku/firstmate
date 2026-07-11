@@ -31,7 +31,16 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+SCRIPT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+FM_ROOT=${FM_ROOT_OVERRIDE:-${CLAUDE_PROJECT_DIR:-}}
+if [ -z "$FM_ROOT" ]; then
+  PWD_ROOT=$(pwd -P 2>/dev/null || true)
+  if [ -f "$PWD_ROOT/AGENTS.md" ] && [ -f "$PWD_ROOT/bin/fm-turnend-guard.sh" ]; then
+    FM_ROOT=$PWD_ROOT
+  else
+    FM_ROOT=$SCRIPT_ROOT
+  fi
+fi
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 GRACE=${FM_GUARD_GRACE:-300}
