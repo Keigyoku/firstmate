@@ -639,22 +639,41 @@ fm_watchdog_rotation_remove_lock() {
   rmdir "$lock" 2>/dev/null
 }
 
+fm_watchdog_rotation_lock_identity() {
+  local lock=$1 token pid mtime
+  [ -d "$lock" ] || return 1
+  token=$(sed -n '1p' "$lock/token" 2>/dev/null || true)
+  pid=$(sed -n '1p' "$lock/pid" 2>/dev/null || true)
+  mtime=$(fm_watchdog_rotation_stat_mtime "$lock" 2>/dev/null || true)
+  printf '%s\n%s\n%s\n' "$token" "$pid" "$mtime"
+}
+
+fm_watchdog_rotation_remove_lock_if_identity() {
+  local lock=$1 identity=$2 current
+  current=$(fm_watchdog_rotation_lock_identity "$lock" 2>/dev/null || true)
+  [ -n "$current" ] || return 1
+  [ "$current" = "$identity" ] || return 1
+  fm_watchdog_rotation_remove_lock "$lock"
+}
+
 fm_watchdog_rotation_claim() {
-  local task=$1 owner=${2:-watchdog} lock pid token age stale_sec
+  local task=$1 owner=${2:-watchdog} lock pid token age stale_sec identity
   lock=$(fm_watchdog_rotation_lock_path "$task")
   mkdir -p "$(dirname "$lock")"
   while ! mkdir "$lock" 2>/dev/null; do
+    identity=$(fm_watchdog_rotation_lock_identity "$lock" 2>/dev/null || true)
+    [ -n "$identity" ] || continue
     pid=$(sed -n '1p' "$lock/pid" 2>/dev/null || true)
     case "$pid" in
       ''|*[!0-9]*)
         stale_sec=$(fm_watchdog_rotation_provisional_stale_sec)
         age=$(fm_watchdog_rotation_lock_age "$lock")
         [ "$age" -ge "$stale_sec" ] || return 1
-        fm_watchdog_rotation_remove_lock "$lock" || return 1
+        fm_watchdog_rotation_remove_lock_if_identity "$lock" "$identity" || return 1
         ;;
       *)
         kill -0 "$pid" 2>/dev/null || {
-          fm_watchdog_rotation_remove_lock "$lock" || return 1
+          fm_watchdog_rotation_remove_lock_if_identity "$lock" "$identity" || return 1
           continue
         }
         return 1
@@ -680,31 +699,35 @@ fm_watchdog_rotation_set_pid() {
 }
 
 fm_watchdog_rotation_release() {
-  local task=$1 token=${2:-} lock actual
+  local task=$1 token=${2:-} lock actual identity
   lock=$(fm_watchdog_rotation_lock_path "$task")
   [ -d "$lock" ] || return 0
   [ -n "$token" ] || return 1
   actual=$(sed -n '1p' "$lock/token" 2>/dev/null || true)
   [ "$actual" = "$token" ] || return 1
-  fm_watchdog_rotation_remove_lock "$lock" || true
+  identity=$(fm_watchdog_rotation_lock_identity "$lock" 2>/dev/null || true)
+  [ -n "$identity" ] || return 0
+  fm_watchdog_rotation_remove_lock_if_identity "$lock" "$identity" || true
 }
 
 fm_watchdog_rotation_active() {
-  local task=$1 lock pid age stale_sec
+  local task=$1 lock pid age stale_sec identity
   lock=$(fm_watchdog_rotation_lock_path "$task")
   [ -e "$lock" ] || return 1
+  identity=$(fm_watchdog_rotation_lock_identity "$lock" 2>/dev/null || true)
+  [ -n "$identity" ] || return 1
   pid=$(sed -n '1p' "$lock/pid" 2>/dev/null || true)
   case "$pid" in
     ''|*[!0-9]*)
       stale_sec=$(fm_watchdog_rotation_provisional_stale_sec)
       age=$(fm_watchdog_rotation_lock_age "$lock")
       [ "$age" -ge "$stale_sec" ] || return 0
-      fm_watchdog_rotation_remove_lock "$lock" || return 0
+      fm_watchdog_rotation_remove_lock_if_identity "$lock" "$identity" || return 0
       return 1
       ;;
   esac
   kill -0 "$pid" 2>/dev/null && return 0
-  fm_watchdog_rotation_remove_lock "$lock" || return 0
+  fm_watchdog_rotation_remove_lock_if_identity "$lock" "$identity" || return 0
   return 1
 }
 

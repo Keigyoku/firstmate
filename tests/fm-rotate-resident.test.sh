@@ -260,6 +260,54 @@ test_abandoned_provisional_rotation_claim_is_recovered() {
   pass 'abandoned pid-less provisional rotation claim is recovered'
 }
 
+test_stale_initialized_cleanup_does_not_remove_replacement_claim() {
+  local home lock old_identity
+  home="$TMP_ROOT/stale-initialized-aba-home"
+  lock="$home/state/watchdog/.resident-rotation-resident"
+  mkdir -p "$home/state/watchdog"
+  mkdir "$lock"
+  printf '999999999\n' > "$lock/pid"
+  printf 'manual\n' > "$lock/owner"
+  printf 'old-token\n' > "$lock/token"
+  printf '2000-01-01T00:00:00Z\n' > "$lock/created_at"
+  old_identity=$(FM_HOME="$home" bash -c '. "$1"; fm_watchdog_rotation_lock_identity "$2"' _ "$ROOT/bin/fm-watchdog-lib.sh" "$lock")
+  rm -f "$lock/pid" "$lock/owner" "$lock/token" "$lock/created_at"
+  rmdir "$lock"
+  mkdir "$lock"
+  printf '%s\n' "$$" > "$lock/pid"
+  printf 'watchdog\n' > "$lock/owner"
+  printf 'replacement-token\n' > "$lock/token"
+  printf '2026-01-01T00:00:00Z\n' > "$lock/created_at"
+  if FM_HOME="$home" bash -c '. "$1"; fm_watchdog_rotation_remove_lock_if_identity "$2" "$3"' _ "$ROOT/bin/fm-watchdog-lib.sh" "$lock" "$old_identity"; then
+    fail 'stale initialized cleanup removed a replacement claim'
+  fi
+  [ "$(sed -n '1p' "$lock/token")" = replacement-token ] || fail 'replacement initialized claim token was corrupted'
+  [ "$(sed -n '1p' "$lock/pid")" = "$$" ] || fail 'replacement initialized claim pid was corrupted'
+  pass 'stale initialized cleanup is fenced from replacement claims'
+}
+
+test_abandoned_provisional_cleanup_does_not_remove_replacement_claim() {
+  local home lock old_identity
+  home="$TMP_ROOT/abandoned-provisional-aba-home"
+  lock="$home/state/watchdog/.resident-rotation-resident"
+  mkdir -p "$home/state/watchdog"
+  mkdir "$lock"
+  touch -t 200001010000 "$lock"
+  old_identity=$(FM_HOME="$home" bash -c '. "$1"; fm_watchdog_rotation_lock_identity "$2"' _ "$ROOT/bin/fm-watchdog-lib.sh" "$lock")
+  rmdir "$lock"
+  mkdir "$lock"
+  printf '%s\n' "$$" > "$lock/pid"
+  printf 'watchdog\n' > "$lock/owner"
+  printf 'replacement-token\n' > "$lock/token"
+  printf '2026-01-01T00:00:00Z\n' > "$lock/created_at"
+  if FM_HOME="$home" bash -c '. "$1"; fm_watchdog_rotation_remove_lock_if_identity "$2" "$3"' _ "$ROOT/bin/fm-watchdog-lib.sh" "$lock" "$old_identity"; then
+    fail 'abandoned provisional cleanup removed a replacement claim'
+  fi
+  [ "$(sed -n '1p' "$lock/token")" = replacement-token ] || fail 'replacement provisional claim token was corrupted'
+  [ "$(sed -n '1p' "$lock/pid")" = "$$" ] || fail 'replacement provisional claim pid was corrupted'
+  pass 'abandoned provisional cleanup is fenced from replacement claims'
+}
+
 test_refuses_no_live_resident() {
   local fixture home fakebin sessions out
   fixture=$(make_fixture missing); home=$(printf '%s\n' "$fixture" | sed -n '1p'); fakebin=$(printf '%s\n' "$fixture" | sed -n '2p'); sessions=$(printf '%s\n' "$fixture" | sed -n '3p')
@@ -351,6 +399,8 @@ test_recovers_stale_resident_rotation_claim
 test_rotation_claim_token_fences_reacquired_lock
 test_provisional_rotation_claim_blocks_contenders
 test_abandoned_provisional_rotation_claim_is_recovered
+test_stale_initialized_cleanup_does_not_remove_replacement_claim
+test_abandoned_provisional_cleanup_does_not_remove_replacement_claim
 test_refuses_no_live_resident
 test_invokes_shared_successor_helper
 test_mutating_rotation_locks_before_liveness_lookup
