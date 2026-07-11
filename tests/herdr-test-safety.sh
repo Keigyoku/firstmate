@@ -15,3 +15,7 @@ herdr_refuse_if_default() { # <session>
 herdr_safe_stop_and_delete() { # <session>
   fm_herdr_lab_teardown "$1"
 }
+
+herdr_real_shell_io_ready() {
+  return 0
+}

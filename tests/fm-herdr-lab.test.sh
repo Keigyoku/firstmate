@@ -20,18 +20,14 @@ cat > "$FAKEBIN/herdr" <<'SH'
 set -eu
 printf '%s\n' "$*" >> "$FM_FAKE_HERDR_LOG"
 state=$FM_FAKE_HERDR_STATE
-last=
-for arg in "$@"; do
-  previous=$last
-  last=$arg
-done
-[ "${previous:-}" = --session ] || { echo "fake herdr: missing trailing --session" >&2; exit 90; }
-session=$last
+[ "${1:-}" = --session ] || { echo "fake herdr: missing leading --session" >&2; exit 90; }
+session=${2:-}
+[ -n "$session" ] || { echo "fake herdr: missing session name" >&2; exit 90; }
 default_socket=$(cat "$state/default-socket")
 lab_state=absent
 [ ! -f "$state/$session" ] || lab_state=$(cat "$state/$session")
 
-case "$1 ${2:-}" in
+case "${3:-} ${4:-}" in
   "session list")
     if [ "$lab_state" = absent ] || [ "$lab_state" = deleted ]; then
       jq -nc --arg socket "$default_socket" '{sessions:[{default:true,name:"default",running:true,socket_path:$socket}]}'
@@ -42,7 +38,7 @@ case "$1 ${2:-}" in
         '{sessions:[{default:true,name:"default",running:true,socket_path:$socket},{default:false,name:$name,running:$running,socket_path:("/tmp/" + $name + ".sock")}]}'
     fi
     ;;
-  "server --session")
+  "server ")
     if [ "${FM_FAKE_HERDR_SERVER_DELAY:-0}" != 0 ]; then
       "$FM_FAKE_HERDR_REAL_SLEEP" "$FM_FAKE_HERDR_SERVER_DELAY"
     fi
@@ -56,11 +52,11 @@ case "$1 ${2:-}" in
     fi
     ;;
   "session stop")
-    [ "$3" = "$session" ] || exit 91
+    [ "$5" = "$session" ] || exit 91
     printf '%s\n' stopped > "$state/$session"
     ;;
   "session delete")
-    [ "$3" = "$session" ] || exit 92
+    [ "$5" = "$session" ] || exit 92
     [ "${FM_FAKE_HERDR_DELETE_FAIL:-}" != 1 ] || exit 93
     printf '%s\n' deleted > "$state/$session"
     ;;
@@ -136,19 +132,19 @@ test_provision_run_and_guarded_teardown() {
 
   while IFS= read -r line; do
     case "$line" in
-      *"--session $name") : ;;
-      *) fail "Herdr call lacks a trailing lab session: $line" ;;
+      "--session $name "*) : ;;
+      *) fail "Herdr call lacks a leading lab session: $line" ;;
     esac
   done < "$FAKE_LOG"
   line_count=$(wc -l < "$FAKE_LOG" | tr -d ' ')
-  stop_line=$(grep -n "^session stop $name --json --session $name$" "$FAKE_LOG" | cut -d: -f1)
-  delete_line=$(grep -n "^session delete $name --json --session $name$" "$FAKE_LOG" | cut -d: -f1)
+  stop_line=$(grep -n "^--session $name session stop $name --json$" "$FAKE_LOG" | cut -d: -f1)
+  delete_line=$(grep -n "^--session $name session delete $name --json$" "$FAKE_LOG" | cut -d: -f1)
   if [ -z "$stop_line" ] || [ -z "$delete_line" ] || [ "$line_count" -le "$delete_line" ]; then
     fail "teardown did not emit explicit stop/delete followed by the after tripwire"
   fi
-  sed -n "$((stop_line - 1))p" "$FAKE_LOG" | grep -F "session list --json --session $name" >/dev/null \
+  sed -n "$((stop_line - 1))p" "$FAKE_LOG" | grep -F -- "--session $name session list --json" >/dev/null \
     || fail "stop was not immediately preceded by a fresh refuse-default session list"
-  sed -n "$((delete_line - 1))p" "$FAKE_LOG" | grep -F "session list --json --session $name" >/dev/null \
+  sed -n "$((delete_line - 1))p" "$FAKE_LOG" | grep -F -- "--session $name session list --json" >/dev/null \
     || fail "delete was not immediately preceded by a fresh refuse-default session list"
   pass "fm-herdr-lab: provisioning, scoped calls, guarded teardown, and fleet tripwire are deterministic"
 }

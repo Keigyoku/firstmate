@@ -427,7 +427,7 @@ test_watch_restart_reports_healthy_peer_without_attaching() {
   state="$dir/state"
   fakebin="$dir/fakebin"
   out="$dir/restart.out"
-  node -e 'process.on("SIGTERM", () => {}); setTimeout(() => {}, 300000)' &
+  bash -c 'trap "" TERM; while :; do sleep 60; done' &
   peer=$!
   identity=$(FM_STATE_OVERRIDE="$state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$peer") || fail "could not identify peer pid"
   mkdir "$state/.watch.lock"

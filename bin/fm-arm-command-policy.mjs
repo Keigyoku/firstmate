@@ -6,6 +6,7 @@
 // sourcing, or running any byte of the submitted command.
 
 import path from "node:path";
+import fs from "node:fs";
 
 const REASONS = {
   "watcher-background": "a protected watcher command cannot run in an asynchronous shell list or through nohup/disown",
@@ -847,7 +848,39 @@ function analyzeProgram(command, context, depth = 0) {
 function xModePathAllowed(value, home) {
   if (value === "config/x-mode.env" || value === "./config/x-mode.env") return true;
   if (!path.isAbsolute(value)) return false;
-  return path.normalize(value) === path.join(path.normalize(home), "config/x-mode.env");
+  const expected = path.join(path.normalize(home), "config/x-mode.env");
+  if (path.normalize(value) === expected) return true;
+  return samePathSpelling(value, expected);
+}
+
+function samePathSpelling(a, b) {
+  const aResolved = resolveExistingPrefix(a);
+  const bResolved = resolveExistingPrefix(b);
+  return Boolean(aResolved && bResolved && aResolved === bResolved);
+}
+
+function resolveExistingPrefix(candidate) {
+  let prefix = path.normalize(candidate);
+  const rest = [];
+  while (prefix && prefix !== path.dirname(prefix)) {
+    if (fs.existsSync(prefix)) {
+      try {
+        return path.join(fs.realpathSync.native(prefix), ...rest);
+      } catch {
+        return "";
+      }
+    }
+    rest.unshift(path.basename(prefix));
+    prefix = path.dirname(prefix);
+  }
+  if (fs.existsSync(prefix)) {
+    try {
+      return path.join(fs.realpathSync.native(prefix), ...rest);
+    } catch {
+      return "";
+    }
+  }
+  return "";
 }
 
 function ordinaryWordsOnly(tokens) {

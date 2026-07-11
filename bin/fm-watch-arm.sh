@@ -149,6 +149,10 @@ if [ "$mode" = restart ]; then
         sleep 0.1
         i=$((i + 1))
       done
+      if healthy_watcher; then
+        report_healthy
+        exit 0
+      fi
     else
       clear_stale_recorded_watcher_lock
     fi
