@@ -355,6 +355,7 @@ fm_watchdog_codex_rollout_matches_session() {
 
 fm_watchdog_latest_claude_checkpoint_for_session() {
   local session_id=$1 dir=${FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR:-$HOME/.claude/token-optimizer/checkpoints}
+  fm_watchdog_wake_lib_source
   local file mtime best_file='' best_mtime=-1
   [ -d "$dir" ] || return 1
   while IFS= read -r -d '' file; do
@@ -374,6 +375,7 @@ fm_watchdog_latest_claude_checkpoint_for_session() {
 
 fm_watchdog_latest_codex_rollout_for_session() {
   local session_id=$1 dir=${FM_WATCHDOG_CODEX_SESSION_DIR:-$HOME/.codex/sessions}
+  fm_watchdog_wake_lib_source
   local file mtime best_file='' best_mtime=-1
   [ -d "$dir" ] || return 1
   while IFS= read -r -d '' file; do
