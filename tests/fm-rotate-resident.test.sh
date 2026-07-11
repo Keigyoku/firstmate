@@ -36,9 +36,15 @@ EOF
   fi
   cat > "$fakebin/tmux" <<EOF
 #!/usr/bin/env bash
+if [ "\$1|\${*: -1}" = 'display-message|#{pane_current_command}' ]; then
+  if [ -n "\${FM_TEST_EXPECT_LOCK_FILE:-}" ] && [ ! -d "\$FM_TEST_EXPECT_LOCK_FILE" ]; then
+    printf 'missing rotation lock before liveness lookup\n' > "\$FM_TEST_LOCK_LOG"
+  fi
+  printf '$command\n'
+  exit 0
+fi
 case "\$1|\${*: -1}" in
   'display-message|#{session_name}:#{window_name}') printf 'session:fm-resident\n' ;;
-  'display-message|#{pane_current_command}') printf '$command\n' ;;
   *) printf '$command\n' ;;
 esac
 EOF
@@ -123,6 +129,35 @@ EOF
   pass 'manual trigger invokes the shared watchdog handoff and successor helper'
 }
 
+test_mutating_rotation_locks_before_liveness_lookup() {
+  local fixture home fakebin sessions mock log lock_log
+  fixture=$(make_fixture early-lock); home=$(printf '%s\n' "$fixture" | sed -n '1p'); fakebin=$(printf '%s\n' "$fixture" | sed -n '2p'); sessions=$(printf '%s\n' "$fixture" | sed -n '3p')
+  mock="$TMP_ROOT/early-lock-successor"
+  log="$TMP_ROOT/early-lock-successor.log"
+  lock_log="$TMP_ROOT/early-lock.log"
+  cat > "$mock" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n%s\n' "$1" "$2" > "$FM_TEST_SUCCESSOR_LOG"
+EOF
+  chmod +x "$mock"
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_RESIDENT_TARGET=session:fm-resident FM_WATCHDOG_CLAUDE_SESSION_DIR="$sessions" \
+    FM_WATCHDOG_SUCCESSOR_CMD="$mock" FM_TEST_SUCCESSOR_LOG="$log" \
+    FM_TEST_EXPECT_LOCK_FILE="$home/state/watchdog/.resident-rotation-resident" FM_TEST_LOCK_LOG="$lock_log" \
+    "$ROOT/bin/fm-rotate-resident.sh" >/dev/null
+  [ ! -s "$lock_log" ] || fail "$(cat "$lock_log")"
+  pass 'mutating rotation claims the resident before liveness lookup'
+}
+
+test_refuses_unsupported_resident_kind() {
+  local fixture home fakebin sessions out
+  fixture=$(make_fixture unsupported); home=$(printf '%s\n' "$fixture" | sed -n '1p'); fakebin=$(printf '%s\n' "$fixture" | sed -n '2p'); sessions=$(printf '%s\n' "$fixture" | sed -n '3p')
+  sed -i.bak 's/^kind=ship$/kind=secondmate/' "$home/state/resident.meta"
+  if out=$(run_fixture "$home" "$fakebin" "$sessions" claude 2>&1); then fail 'unsupported resident kind was accepted'; fi
+  assert_contains "$out" 'unsupported kind secondmate' 'unsupported-kind refusal was unclear'
+  [ ! -e "$home/fm-state" ] || fail 'unsupported kind created handoff state'
+  pass 'unsupported resident kinds are refused before handoff creation'
+}
+
 test_codex_dry_run_does_not_write_rollout_cache() {
   local fixture home fakebin sessions out
   fixture=$(make_fixture codex-dry codex)
@@ -141,5 +176,7 @@ test_refuses_halted_watchdog
 test_refuses_rotation_in_flight
 test_refuses_no_live_resident
 test_invokes_shared_successor_helper
+test_mutating_rotation_locks_before_liveness_lookup
+test_refuses_unsupported_resident_kind
 test_codex_dry_run_does_not_write_rollout_cache
 echo "PASS: $PASS tests"

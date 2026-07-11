@@ -52,12 +52,17 @@ TASK=''
 HARNESS=''
 BACKEND=''
 FILE=''
+LOCK=''
 for META in "$STATE"/*.meta; do
   [ -f "$META" ] || continue
   CANDIDATE_TASK=$(basename "$META" .meta)
   CANDIDATE_BACKEND=$(fm_backend_of_meta "$META")
   CANDIDATE_TARGET=$(fm_backend_resolve_selector "$CANDIDATE_TASK" "$STATE" 2>/dev/null || true)
   [ "$CANDIDATE_TARGET" = "$TARGET" ] || continue
+  case "$(fm_meta_get "$META" kind)" in
+    ship|scout) ;;
+    *) fail "refusing rotation: resident $CANDIDATE_TASK has unsupported kind $(fm_meta_get "$META" kind)" ;;
+  esac
   [ -z "$TASK" ] || fail "refusing rotation: multiple resident records match endpoint $TARGET"
   TASK=$CANDIDATE_TASK
   BACKEND=$CANDIDATE_BACKEND
@@ -65,6 +70,14 @@ for META in "$STATE"/*.meta; do
 done
 [ -n "$TASK" ] || fail "refusing rotation: no live resident record matches endpoint $TARGET"
 KEY=$(fm_watchdog_marker_key "$TASK")
+if [ "$DRY_RUN" -eq 0 ]; then
+  LOCK="$STATE/watchdog/.resident-rotation-$KEY"
+  mkdir -p "$(dirname "$LOCK")"
+  if ! mkdir "$LOCK" 2>/dev/null; then
+    fail "refusing rotation: rotation already in flight ($LOCK)"
+  fi
+  trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+fi
 for MARKER in \
   "$STATE/watchdog/.clear-steering-$KEY" \
   "$STATE/watchdog/.compact-steering-$KEY" \
@@ -72,6 +85,7 @@ for MARKER in \
   "$STATE/watchdog/.compact-pending-$KEY" \
   "$STATE/watchdog/.resident-rotation-$KEY"
 do
+  [ -n "$LOCK" ] && [ "$MARKER" = "$LOCK" ] && continue
   [ ! -e "$MARKER" ] || fail "refusing rotation: rotation already in flight ($MARKER)"
 done
 [ "$(fm_backend_agent_alive "$BACKEND" "$TARGET" 2>/dev/null || printf unknown)" = alive ] \
@@ -95,11 +109,5 @@ if [ "$DRY_RUN" -eq 1 ]; then
   exit 0
 fi
 
-LOCK="$STATE/watchdog/.resident-rotation-$KEY"
-mkdir -p "$(dirname "$LOCK")"
-if ! mkdir "$LOCK" 2>/dev/null; then
-  fail "refusing rotation: rotation already in flight ($LOCK)"
-fi
-trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 printf 'fm-rotate-resident: rotating task=%s sid=%s endpoint=%s\n' "$TASK" "$SID" "$TARGET"
 fm_watchdog_start_successor "$TASK" manual manual_resident_rotation
