@@ -691,6 +691,50 @@ SH
   pass "watcher skips stale meta records with missing backend targets"
 }
 
+test_resident_rotation_lock_blocks_compact_steer() {
+  local home config session_dir worktree double log status event timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping resident-rotation lock coverage"
+    return
+  fi
+  home="$TMP_ROOT/resident-lock-home"
+  config="$TMP_ROOT/resident-lock-config"
+  session_dir="$TMP_ROOT/resident-lock-sessions"
+  worktree="$TMP_ROOT/resident-lock-worktree"
+  double="$TMP_ROOT/resident-lock-double"
+  log="$TMP_ROOT/resident-lock.log"
+  mkdir -p "$home/state/watchdog" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  write_codex_rollout "$session_dir/rollout-arm.jsonl" "$worktree" 0 armed-sid
+  make_success_double "$double" "$log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial resident-lock watcher pass should arm the session"
+
+  sleep 1
+  write_codex_rollout "$session_dir/rollout-high.jsonl" "$worktree" 900 high-sid
+  mkdir "$home/state/watchdog/.resident-rotation-demo"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "resident-lock watcher pass should keep polling"
+  [ ! -s "$log" ] || fail "resident rotation lock should block compact steer delivery"
+  event="$home/fm-state/watchdog.events"
+  if [ -e "$event" ] && grep -q '"type":"compact_threshold"' "$event"; then
+    fail "resident rotation lock should block compact threshold processing"
+  fi
+  pass "resident rotation lock blocks compact steer threshold work"
+}
+
 test_success_delivers_exact_text_and_event
 test_require_target_exists_blocks_delivery
 test_require_target_exists_uses_task_label_for_zellij
@@ -705,5 +749,6 @@ test_stale_pending_retries_without_rotation
 test_metrics_collection_failure_is_visible_and_throttled
 test_unsupported_harness_skips_watchdog_metrics
 test_stale_meta_skips_watchdog_threshold_scan
+test_resident_rotation_lock_blocks_compact_steer
 
 echo "# all watchdog steer tests passed"

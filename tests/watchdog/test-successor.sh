@@ -946,6 +946,49 @@ test_steer_rc4_escalates_to_successor() {
   pass "steer rc4 escalates to successor and halts on spawn failure"
 }
 
+test_resident_rotation_lock_blocks_pending_clear_successor() {
+  local home config session_dir worktree spawn_log spawn_double old_sig event status timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping resident-rotation pending coverage"
+    return
+  fi
+  home="$TMP_ROOT/resident-lock-clear-home"
+  config="$TMP_ROOT/resident-lock-clear-config"
+  session_dir="$TMP_ROOT/resident-lock-clear-sessions"
+  worktree="$TMP_ROOT/resident-lock-clear-worktree"
+  spawn_log="$TMP_ROOT/resident-lock-clear-spawn.log"
+  spawn_double="$TMP_ROOT/resident-lock-clear-spawn-double"
+  mkdir -p "$home/state/watchdog" "$home/data/demo" "$worktree"
+  printf 'resident lock pending clear objective.\n' > "$home/data/demo/brief.md"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$worktree" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_successor_config "$config" 90 95
+  write_codex_rollout "$session_dir/rollout-old.jsonl" "$worktree" 960 old-sid
+  old_sig=$(FM_HOME="$home" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    bash -c '. "$1"; file=$(fm_watchdog_session_file codex demo); fm_watchdog_file_identity "$file"' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  printf '%s\n%s\n%s\n%s\n' "$old_sig" old-sid 96 '' > "$home/state/watchdog/.clear-pending-demo"
+  make_spawn_double "$spawn_double" "$spawn_log" 23
+
+  sleep 1
+  write_codex_rollout "$session_dir/rollout-new.jsonl" "$worktree" 100 new-sid
+  mkdir "$home/state/watchdog/.resident-rotation-demo"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_SUCCESSOR_ID=demo-lock-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "resident-lock clear-pending watcher pass should keep polling"
+  [ ! -s "$spawn_log" ] || fail "resident rotation lock should block pending clear successor spawn"
+  assert_present "$home/state/watchdog/.clear-pending-demo" "resident rotation lock should leave clear pending marker untouched"
+  event="$home/fm-state/watchdog.events"
+  if [ -e "$event" ] && grep -Eq '"type":"(clear_rotated|successor_threshold)"' "$event"; then
+    fail "resident rotation lock should block pending clear successor events"
+  fi
+  pass "resident rotation lock blocks pending clear successor work"
+}
+
 test_successor_spawns_with_handoff_brief_and_retires_predecessor
 test_successor_preserves_scout_and_pr_metadata
 test_successor_carries_predecessor_check_script
@@ -965,5 +1008,6 @@ test_watch_loop_clear_rotation_starts_successor_and_exits_when_halted
 test_watch_loop_skips_orca_successor_threshold
 test_watch_loop_clear_rotation_detects_claude_same_file_compaction
 test_steer_rc4_escalates_to_successor
+test_resident_rotation_lock_blocks_pending_clear_successor
 
 echo "# all watchdog successor tests passed"

@@ -453,7 +453,7 @@ watchdog_successor_supported() {
 }
 
 watchdog_threshold_scan() {
-  local config compact successor embargo_5hr embargo_7d pending_retry failure_interval meta task harness metrics context five seven five_reset seven_reset file sig sid generation key handled pending inflight clear_pending clear_inflight err_file embargo_reason unsupported_marker
+  local config compact successor embargo_5hr embargo_7d pending_retry failure_interval meta task harness metrics context five seven five_reset seven_reset file sig sid generation key handled pending inflight clear_pending clear_inflight manual_rotation err_file embargo_reason unsupported_marker
   watchdog_halted && exit 0
   config=$(fm_watchdog_thresholds 2>/dev/null) || return 0
   compact=$(printf '%s' "$config" | jq -r '.thresholds.compact_at_context_pct // empty' 2>/dev/null || true)
@@ -484,6 +484,8 @@ watchdog_threshold_scan() {
     inflight="$STATE/watchdog/.compact-steering-$key"
     clear_pending="$STATE/watchdog/.clear-pending-$key"
     clear_inflight="$STATE/watchdog/.clear-steering-$key"
+    manual_rotation="$STATE/watchdog/.resident-rotation-$key"
+    [ -e "$manual_rotation" ] && continue
     watchdog_check_rotation "$task" "$harness" "$pending"
     watchdog_check_clear_rotation "$task" "$harness" "$clear_pending"
     watchdog_pending_active "$clear_pending" "$task" "$pending_retry" "$key" clear && continue
