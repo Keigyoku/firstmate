@@ -168,7 +168,7 @@ carry_task_metadata() {
 }
 
 carry_x_link() {
-  local predecessor_meta=$1 successor=$2 request request_ts followups
+  local predecessor_meta=$1 successor=$2 request request_ts followups platform reply_max
   request=$(meta_value "$predecessor_meta" x_request)
   [ -n "$request" ] || return 0
   request_ts=$(meta_value "$predecessor_meta" x_request_ts)
@@ -177,7 +177,15 @@ carry_x_link() {
     echo "predecessor X link is incomplete" >&2
     return 1
   fi
-  "$SCRIPT_DIR/fm-x-link.sh" "$successor" "$request" --carry-count "$followups" --carry-ts "$request_ts" >/dev/null
+  # Relink requires carried reply context (fm-x-link.sh); forward the
+  # predecessor's platform/budget, defaulting a pre-platform link to the X
+  # default budget rather than halting the successor.
+  platform=$(meta_value "$predecessor_meta" x_platform)
+  case "$platform" in discord|x) ;; *) platform=x ;; esac
+  reply_max=$(meta_value "$predecessor_meta" x_reply_max_chars)
+  set -- "$successor" "$request" --carry-count "$followups" --carry-ts "$request_ts" --carry-platform "$platform"
+  case "$reply_max" in ''|*[!0-9]*) ;; *) set -- "$@" --carry-max "$reply_max" ;; esac
+  "$SCRIPT_DIR/fm-x-link.sh" "$@" >/dev/null
 }
 
 validate_x_link() {
