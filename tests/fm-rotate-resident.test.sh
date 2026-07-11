@@ -100,6 +100,39 @@ test_refuses_rotation_in_flight() {
   pass 'rotation already in flight is refused'
 }
 
+test_refuses_live_resident_rotation_claim() {
+  local fixture home fakebin sessions out lock
+  fixture=$(make_fixture live-claim); home=$(printf '%s\n' "$fixture" | sed -n '1p'); fakebin=$(printf '%s\n' "$fixture" | sed -n '2p'); sessions=$(printf '%s\n' "$fixture" | sed -n '3p')
+  lock="$home/state/watchdog/.resident-rotation-resident"
+  mkdir "$lock"
+  printf '%s\n' "$$" > "$lock/pid"
+  printf 'manual\n' > "$lock/owner"
+  if out=$(run_fixture "$home" "$fakebin" "$sessions" claude 2>&1); then fail 'live resident rotation claim was accepted'; fi
+  assert_contains "$out" 'rotation already in flight' 'live-claim refusal was unclear'
+  pass 'live resident rotation claim is refused'
+}
+
+test_recovers_stale_resident_rotation_claim() {
+  local fixture home fakebin sessions mock log lock
+  fixture=$(make_fixture stale-claim); home=$(printf '%s\n' "$fixture" | sed -n '1p'); fakebin=$(printf '%s\n' "$fixture" | sed -n '2p'); sessions=$(printf '%s\n' "$fixture" | sed -n '3p')
+  lock="$home/state/watchdog/.resident-rotation-resident"
+  mkdir "$lock"
+  printf '999999999\n' > "$lock/pid"
+  printf 'stale\n' > "$lock/owner"
+  mock="$TMP_ROOT/stale-claim-successor"
+  log="$TMP_ROOT/stale-claim-successor.log"
+  cat > "$mock" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n%s\n' "$1" "$2" > "$FM_TEST_SUCCESSOR_LOG"
+EOF
+  chmod +x "$mock"
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_RESIDENT_TARGET=session:fm-resident FM_WATCHDOG_CLAUDE_SESSION_DIR="$sessions" \
+    FM_WATCHDOG_SUCCESSOR_CMD="$mock" FM_TEST_SUCCESSOR_LOG="$log" "$ROOT/bin/fm-rotate-resident.sh" >/dev/null
+  [ "$(sed -n '1p' "$log")" = resident ] || fail 'stale claim recovery did not delegate successor'
+  [ ! -e "$lock" ] || fail 'stale resident rotation claim survived successful delegation'
+  pass 'stale resident rotation claim is recovered'
+}
+
 test_refuses_no_live_resident() {
   local fixture home fakebin sessions out
   fixture=$(make_fixture missing); home=$(printf '%s\n' "$fixture" | sed -n '1p'); fakebin=$(printf '%s\n' "$fixture" | sed -n '2p'); sessions=$(printf '%s\n' "$fixture" | sed -n '3p')
@@ -158,6 +191,15 @@ test_refuses_unsupported_resident_kind() {
   pass 'unsupported resident kinds are refused before handoff creation'
 }
 
+test_legacy_missing_kind_defaults_to_ship() {
+  local fixture home fakebin sessions out
+  fixture=$(make_fixture legacy-kind); home=$(printf '%s\n' "$fixture" | sed -n '1p'); fakebin=$(printf '%s\n' "$fixture" | sed -n '2p'); sessions=$(printf '%s\n' "$fixture" | sed -n '3p')
+  sed -i.bak '/^kind=/d' "$home/state/resident.meta"
+  out=$(run_fixture "$home" "$fakebin" "$sessions" claude --dry-run)
+  assert_contains "$out" 'predecessor task=resident sid=resident-session' 'legacy missing kind did not default to ship'
+  pass 'legacy missing kind defaults to ship'
+}
+
 test_codex_dry_run_does_not_write_rollout_cache() {
   local fixture home fakebin sessions out
   fixture=$(make_fixture codex-dry codex)
@@ -174,9 +216,12 @@ test_codex_dry_run_does_not_write_rollout_cache() {
 test_resident_resolution_and_dry_run
 test_refuses_halted_watchdog
 test_refuses_rotation_in_flight
+test_refuses_live_resident_rotation_claim
+test_recovers_stale_resident_rotation_claim
 test_refuses_no_live_resident
 test_invokes_shared_successor_helper
 test_mutating_rotation_locks_before_liveness_lookup
 test_refuses_unsupported_resident_kind
+test_legacy_missing_kind_defaults_to_ship
 test_codex_dry_run_does_not_write_rollout_cache
 echo "PASS: $PASS tests"

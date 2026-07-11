@@ -720,8 +720,10 @@ test_resident_rotation_lock_blocks_compact_steer() {
   expect_code 124 "$status" "initial resident-lock watcher pass should arm the session"
 
   sleep 1
-  write_codex_rollout "$session_dir/rollout-high.jsonl" "$worktree" 900 high-sid
+  write_codex_rollout "$session_dir/rollout-arm.jsonl" "$worktree" 900 armed-sid
   mkdir "$home/state/watchdog/.resident-rotation-demo"
+  printf '%s\n' "$$" > "$home/state/watchdog/.resident-rotation-demo/pid"
+  printf 'manual\n' > "$home/state/watchdog/.resident-rotation-demo/owner"
   "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
     FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
     "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
@@ -771,13 +773,15 @@ case "\$*" in
   *'.context_pct // empty'*)
     mkdir -p "$home/state/watchdog"
     mkdir "$home/state/watchdog/.resident-rotation-demo" 2>/dev/null || true
+    printf '%s\n' "$$" > "$home/state/watchdog/.resident-rotation-demo/pid"
+    printf 'manual\n' > "$home/state/watchdog/.resident-rotation-demo/owner"
     ;;
 esac
 exec "$real_jq" "\$@"
 SH
   chmod +x "$fakebin/jq"
   sleep 1
-  write_codex_rollout "$session_dir/rollout-high.jsonl" "$worktree" 900 high-sid
+  write_codex_rollout "$session_dir/rollout-arm.jsonl" "$worktree" 900 armed-sid
   PATH="$fakebin:$PATH" "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
     FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
     "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
@@ -789,6 +793,50 @@ SH
     fail "resident rotation lock created after metrics should block compact threshold event"
   fi
   pass "resident rotation lock recheck blocks compact threshold work"
+}
+
+test_stale_resident_rotation_lock_allows_compact_steer() {
+  local home config session_dir worktree double log status event timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping stale resident-rotation lock coverage"
+    return
+  fi
+  home="$TMP_ROOT/stale-resident-lock-home"
+  config="$TMP_ROOT/stale-resident-lock-config"
+  session_dir="$TMP_ROOT/stale-resident-lock-sessions"
+  worktree="$TMP_ROOT/stale-resident-lock-worktree"
+  double="$TMP_ROOT/stale-resident-lock-double"
+  log="$TMP_ROOT/stale-resident-lock.log"
+  mkdir -p "$home/state/watchdog" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  write_codex_rollout "$session_dir/rollout-arm.jsonl" "$worktree" 0 armed-sid
+  make_success_double "$double" "$log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial stale-resident-lock watcher pass should arm the session"
+
+  sleep 1
+  write_codex_rollout "$session_dir/rollout-arm.jsonl" "$worktree" 900 armed-sid
+  mkdir "$home/state/watchdog/.resident-rotation-demo"
+  printf '999999999\n' > "$home/state/watchdog/.resident-rotation-demo/pid"
+  printf 'manual\n' > "$home/state/watchdog/.resident-rotation-demo/owner"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "stale resident-lock watcher pass should keep polling after steering"
+  [ -s "$log" ] || fail "stale resident rotation lock should not block compact steer delivery"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"type":"compact_threshold"' "stale resident lock recovery should allow compact threshold processing"
+  pass "stale resident rotation lock allows compact steer"
 }
 
 test_success_delivers_exact_text_and_event
@@ -807,5 +855,6 @@ test_unsupported_harness_skips_watchdog_metrics
 test_stale_meta_skips_watchdog_threshold_scan
 test_resident_rotation_lock_blocks_compact_steer
 test_resident_rotation_lock_blocks_compact_after_metrics
+test_stale_resident_rotation_lock_allows_compact_steer
 
 echo "# all watchdog steer tests passed"

@@ -607,6 +607,69 @@ fm_watchdog_marker_key() {
   printf '%s' "$1" | tr ':/.' '___'
 }
 
+fm_watchdog_rotation_lock_path() {
+  local task=$1
+  printf '%s/.resident-rotation-%s\n' "$(fm_watchdog_metrics_dir)" "$(fm_watchdog_marker_key "$task")"
+}
+
+fm_watchdog_rotation_claim() {
+  local task=$1 owner=${2:-watchdog} lock pid
+  lock=$(fm_watchdog_rotation_lock_path "$task")
+  mkdir -p "$(dirname "$lock")"
+  while ! mkdir "$lock" 2>/dev/null; do
+    pid=$(sed -n '1p' "$lock/pid" 2>/dev/null || true)
+    case "$pid" in
+      ''|*[!0-9]*)
+        rm -f "$lock/pid" "$lock/owner" "$lock/created_at"
+        rmdir "$lock" 2>/dev/null || return 1
+        ;;
+      *)
+        kill -0 "$pid" 2>/dev/null || {
+          rm -f "$lock/pid" "$lock/owner" "$lock/created_at"
+          rmdir "$lock" 2>/dev/null || return 1
+          continue
+        }
+        return 1
+        ;;
+    esac
+  done
+  printf '%s\n' "$$" > "$lock/pid"
+  printf '%s\n' "$owner" > "$lock/owner"
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$lock/created_at"
+}
+
+fm_watchdog_rotation_set_pid() {
+  local task=$1 pid=$2 lock
+  lock=$(fm_watchdog_rotation_lock_path "$task")
+  [ -d "$lock" ] || return 1
+  printf '%s\n' "$pid" > "$lock/pid"
+}
+
+fm_watchdog_rotation_release() {
+  local task=$1 lock
+  lock=$(fm_watchdog_rotation_lock_path "$task")
+  rm -f "$lock/pid" "$lock/owner" "$lock/created_at"
+  rmdir "$lock" 2>/dev/null || true
+}
+
+fm_watchdog_rotation_active() {
+  local task=$1 lock pid
+  lock=$(fm_watchdog_rotation_lock_path "$task")
+  [ -e "$lock" ] || return 1
+  pid=$(sed -n '1p' "$lock/pid" 2>/dev/null || true)
+  case "$pid" in
+    ''|*[!0-9]*)
+      rm -f "$lock/pid" "$lock/owner" "$lock/created_at"
+      rmdir "$lock" 2>/dev/null || return 0
+      return 1
+      ;;
+  esac
+  kill -0 "$pid" 2>/dev/null && return 0
+  rm -f "$lock/pid" "$lock/owner" "$lock/created_at"
+  rmdir "$lock" 2>/dev/null || return 0
+  return 1
+}
+
 fm_watchdog_halt_file() {
   printf '%s/fm-state/watchdog.halt\n' "$FM_HOME"
 }

@@ -52,16 +52,17 @@ TASK=''
 HARNESS=''
 BACKEND=''
 FILE=''
-LOCK=''
 for META in "$STATE"/*.meta; do
   [ -f "$META" ] || continue
   CANDIDATE_TASK=$(basename "$META" .meta)
   CANDIDATE_BACKEND=$(fm_backend_of_meta "$META")
   CANDIDATE_TARGET=$(fm_backend_resolve_selector "$CANDIDATE_TASK" "$STATE" 2>/dev/null || true)
   [ "$CANDIDATE_TARGET" = "$TARGET" ] || continue
-  case "$(fm_meta_get "$META" kind)" in
+  KIND=$(fm_meta_get "$META" kind)
+  [ -n "$KIND" ] || KIND=ship
+  case "$KIND" in
     ship|scout) ;;
-    *) fail "refusing rotation: resident $CANDIDATE_TASK has unsupported kind $(fm_meta_get "$META" kind)" ;;
+    *) fail "refusing rotation: resident $CANDIDATE_TASK has unsupported kind $KIND" ;;
   esac
   [ -z "$TASK" ] || fail "refusing rotation: multiple resident records match endpoint $TARGET"
   TASK=$CANDIDATE_TASK
@@ -71,21 +72,19 @@ done
 [ -n "$TASK" ] || fail "refusing rotation: no live resident record matches endpoint $TARGET"
 KEY=$(fm_watchdog_marker_key "$TASK")
 if [ "$DRY_RUN" -eq 0 ]; then
-  LOCK="$STATE/watchdog/.resident-rotation-$KEY"
-  mkdir -p "$(dirname "$LOCK")"
-  if ! mkdir "$LOCK" 2>/dev/null; then
-    fail "refusing rotation: rotation already in flight ($LOCK)"
+  if ! fm_watchdog_rotation_claim "$TASK" manual; then
+    fail "refusing rotation: rotation already in flight ($(fm_watchdog_rotation_lock_path "$TASK"))"
   fi
-  trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+  trap 'fm_watchdog_rotation_release "$TASK"' EXIT
+elif [ -e "$(fm_watchdog_rotation_lock_path "$TASK")" ]; then
+  fail "refusing rotation: rotation already in flight ($(fm_watchdog_rotation_lock_path "$TASK"))"
 fi
 for MARKER in \
   "$STATE/watchdog/.clear-steering-$KEY" \
   "$STATE/watchdog/.compact-steering-$KEY" \
   "$STATE/watchdog/.clear-pending-$KEY" \
-  "$STATE/watchdog/.compact-pending-$KEY" \
-  "$STATE/watchdog/.resident-rotation-$KEY"
+  "$STATE/watchdog/.compact-pending-$KEY"
 do
-  [ -n "$LOCK" ] && [ "$MARKER" = "$LOCK" ] && continue
   [ ! -e "$MARKER" ] || fail "refusing rotation: rotation already in flight ($MARKER)"
 done
 [ "$(fm_backend_agent_alive "$BACKEND" "$TARGET" 2>/dev/null || printf unknown)" = alive ] \

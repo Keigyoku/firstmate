@@ -975,6 +975,8 @@ test_resident_rotation_lock_blocks_pending_clear_successor() {
   sleep 1
   write_codex_rollout "$session_dir/rollout-new.jsonl" "$worktree" 100 new-sid
   mkdir "$home/state/watchdog/.resident-rotation-demo"
+  printf '%s\n' "$$" > "$home/state/watchdog/.resident-rotation-demo/pid"
+  printf 'manual\n' > "$home/state/watchdog/.resident-rotation-demo/owner"
   "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
     FM_SUCCESSOR_ID=demo-lock-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
     FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
