@@ -20,7 +20,17 @@ if [ -n "$findings" ] && [ -f "$allowlist" ]; then
   trap 'rm -f "$rules"' EXIT
   sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' "$allowlist" > "$rules"
   if [ -s "$rules" ]; then
-    findings=$(printf '%s\n' "$findings" | grep -E -v -f "$rules" || true)
+    if filtered=$(grep -E -v -f "$rules" <<< "$findings"); then
+      findings=$filtered
+    else
+      status=$?
+      if [ "$status" -eq 1 ]; then
+        findings=
+      else
+        printf 'Invalid personal-reference allowlist regex in %s.\n' "$allowlist" >&2
+        exit "$status"
+      fi
+    fi
   fi
 fi
 
