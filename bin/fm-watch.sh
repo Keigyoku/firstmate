@@ -336,6 +336,9 @@ watchdog_resident_rotation_claim() {
 }
 
 watchdog_resident_rotation_set_pid() {
+  if [ -n "${FM_WATCHDOG_BEFORE_ROTATION_SET_PID:-}" ]; then
+    "$FM_WATCHDOG_BEFORE_ROTATION_SET_PID" "$1" "$2"
+  fi
   fm_watchdog_rotation_set_pid "$1" "$2"
 }
 
@@ -413,9 +416,12 @@ watchdog_start_compact_steer() {
     rm -f "$inflight"
   ) >/dev/null 2>&1 &
   pid=$!
-  watchdog_resident_rotation_set_pid "$task" "$pid"
-  printf '%s\n' "$pid" > "$inflight"
-  fm_watchdog_event compact_steer_started "$task" "pid=$pid" "context_pct=$context threshold=$compact key=$key"
+  if watchdog_resident_rotation_set_pid "$task" "$pid"; then
+    printf '%s\n' "$pid" > "$inflight"
+    fm_watchdog_event compact_steer_started "$task" "pid=$pid" "context_pct=$context threshold=$compact key=$key"
+  elif kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
 }
 
 watchdog_start_clear_steer() {
@@ -437,9 +443,12 @@ watchdog_start_clear_steer() {
     rm -f "$inflight"
   ) >/dev/null 2>&1 &
   pid=$!
-  watchdog_resident_rotation_set_pid "$task" "$pid"
-  printf '%s\n' "$pid" > "$inflight"
-  fm_watchdog_event clear_steer_started "$task" "pid=$pid" "context_pct=$context threshold=$threshold key=$key"
+  if watchdog_resident_rotation_set_pid "$task" "$pid"; then
+    printf '%s\n' "$pid" > "$inflight"
+    fm_watchdog_event clear_steer_started "$task" "pid=$pid" "context_pct=$context threshold=$threshold key=$key"
+  elif kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
 }
 
 watchdog_halt_file() {

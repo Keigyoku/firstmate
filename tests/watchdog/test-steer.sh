@@ -795,6 +795,61 @@ SH
   pass "resident rotation lock recheck blocks compact threshold work"
 }
 
+test_fast_steer_completion_does_not_exit_watcher() {
+  local home config session_dir worktree double log status event timeout_cmd hook pending
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping fast resident-rotation handoff coverage"
+    return
+  fi
+  home="$TMP_ROOT/fast-steer-completion-home"
+  config="$TMP_ROOT/fast-steer-completion-config"
+  session_dir="$TMP_ROOT/fast-steer-completion-sessions"
+  worktree="$TMP_ROOT/fast-steer-completion-worktree"
+  double="$TMP_ROOT/fast-steer-completion-double"
+  log="$TMP_ROOT/fast-steer-completion.log"
+  hook="$TMP_ROOT/fast-steer-completion-hook"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  mkdir -p "$home/state/watchdog" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  write_codex_rollout "$session_dir/rollout-arm.jsonl" "$worktree" 0 armed-sid
+  make_success_double "$double" "$log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial fast-steer watcher pass should arm the session"
+
+  cat > "$hook" <<'SH'
+#!/usr/bin/env bash
+lock="$FM_HOME/state/watchdog/.resident-rotation-demo"
+i=0
+while [ -d "$lock" ] && [ "$i" -lt 200 ]; do
+  i=$((i + 1))
+  sleep 0.01
+done
+exit 0
+SH
+  chmod +x "$hook"
+  sleep 1
+  write_codex_rollout "$session_dir/rollout-arm.jsonl" "$worktree" 900 armed-sid
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_WATCHDOG_BEFORE_ROTATION_SET_PID="$hook" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "fast completed steer should not make watcher exit through set -e"
+  [ -s "$pending" ] || fail "fast completed steer should still write compact pending marker"
+  [ ! -e "$home/state/watchdog/.compact-steering-demo" ] || fail "fast completed steer should not leave a stale steering marker"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"type":"compact_threshold"' "fast completed steer should record threshold event"
+  pass "fast completed compact steer handoff does not exit watcher"
+}
+
 test_stale_resident_rotation_lock_allows_compact_steer() {
   local home config session_dir worktree double log status event timeout_cmd
   if command -v timeout >/dev/null 2>&1; then
@@ -855,6 +910,7 @@ test_unsupported_harness_skips_watchdog_metrics
 test_stale_meta_skips_watchdog_threshold_scan
 test_resident_rotation_lock_blocks_compact_steer
 test_resident_rotation_lock_blocks_compact_after_metrics
+test_fast_steer_completion_does_not_exit_watcher
 test_stale_resident_rotation_lock_allows_compact_steer
 
 echo "# all watchdog steer tests passed"
