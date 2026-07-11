@@ -192,8 +192,8 @@ test_unknown_harness_is_observe_only_tolerant() {
 
 test_claude_project_key_matches_cli_normalization() {
   local out
-  out=$(bash -c '. "$1"; fm_watchdog_claude_project_key "/var/home/mlight/.treehouse/firstmate-7bab20/1/firstmate"' _ "$ROOT/bin/fm-watchdog-lib.sh")
-  [ "$out" = "-var-home-mlight--treehouse-firstmate-7bab20-1-firstmate" ] \
+  out=$(bash -c '. "$1"; fm_watchdog_claude_project_key "/var/home/test-user/.treehouse/firstmate-7bab20/1/firstmate"' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  [ "$out" = "-var-home-test-user--treehouse-firstmate-7bab20-1-firstmate" ] \
     || fail "claude project key should replace every non-alphanumeric byte, got $out"
   pass "claude project key matches Claude CLI normalization"
 }

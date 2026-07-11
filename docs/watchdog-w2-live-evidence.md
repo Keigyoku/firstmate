@@ -1,7 +1,7 @@
 # Watchdog W2 Live Evidence
 
 Date: 2026-07-08.
-Worktree: `/var/home/mlight/.treehouse/firstmate-7bab20/1/firstmate`.
+Worktree: `<home>/.treehouse/firstmate-7bab20/1/firstmate`.
 Claude Code: `2.1.193`.
 tmux: `3.6b`.
 
@@ -22,7 +22,7 @@ Observed `fm-state/watchdog.events` lines:
 ```json
 {"type":"compact_threshold","sid":"w2-live","status":"triggered","detail":"context_pct=9.8 threshold=1 sid=2838f062-8ce5-4909-b39c-40182e43e1f5","ts":"2026-07-08T17:42:42Z"}
 {"type":"steer","sid":"w2-live","status":"delivered","detail":"backend=tmux attempts=1","ts":"2026-07-08T17:42:42Z"}
-{"type":"compact_rotated","sid":"w2-live","status":"rearmed","detail":"old_sid=2838f062-8ce5-4909-b39c-40182e43e1f5 new_sid=e7090117-43e0-45cd-8634-efb890c55220 file=/home/mlight/.claude/projects/-var-home-mlight--treehouse-firstmate-7bab20-1-firstmate/e7090117-43e0-45cd-8634-efb890c55220.jsonl","ts":"2026-07-08T17:42:45Z"}
+{"type":"compact_rotated","sid":"w2-live","status":"rearmed","detail":"old_sid=2838f062-8ce5-4909-b39c-40182e43e1f5 new_sid=e7090117-43e0-45cd-8634-efb890c55220 file=<home>/.claude/projects/<claude-project-key>/e7090117-43e0-45cd-8634-efb890c55220.jsonl","ts":"2026-07-08T17:42:45Z"}
 ```
 
 Observed pane excerpt:
