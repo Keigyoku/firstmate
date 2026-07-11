@@ -26,7 +26,7 @@ resident_endpoint() {
   if [ -n "${FM_RESIDENT_TARGET:-}" ]; then
     printf '%s\n' "$FM_RESIDENT_TARGET"
   elif [ -n "${TMUX_PANE:-}" ]; then
-    printf '%s\n' "$TMUX_PANE"
+    tmux display-message -p -t "$TMUX_PANE" '#{session_name}:#{window_name}'
   elif [ "${HERDR_ENV:-}" = 1 ] && [ -n "${HERDR_PANE_ID:-}" ]; then
     printf '%s:%s\n' "${HERDR_SESSION:-default}" "$HERDR_PANE_ID"
   else
@@ -64,16 +64,26 @@ for META in "$STATE"/*.meta; do
   HARNESS=$(fm_meta_get "$META" harness)
 done
 [ -n "$TASK" ] || fail "refusing rotation: no live resident record matches endpoint $TARGET"
+KEY=$(fm_watchdog_marker_key "$TASK")
+for MARKER in \
+  "$STATE/watchdog/.clear-steering-$KEY" \
+  "$STATE/watchdog/.compact-steering-$KEY" \
+  "$STATE/watchdog/.clear-pending-$KEY" \
+  "$STATE/watchdog/.compact-pending-$KEY" \
+  "$STATE/watchdog/.resident-rotation-$KEY"
+do
+  [ ! -e "$MARKER" ] || fail "refusing rotation: rotation already in flight ($MARKER)"
+done
 [ "$(fm_backend_agent_alive "$BACKEND" "$TARGET" 2>/dev/null || printf unknown)" = alive ] \
   || fail "refusing rotation: resident $TASK is not confidently live at $TARGET"
-FILE=$(fm_watchdog_session_file "$HARNESS" "$TASK" 2>/dev/null || true)
+if [ "$DRY_RUN" -eq 1 ]; then
+  FILE=$(fm_watchdog_session_file "$HARNESS" "$TASK" no-write 2>/dev/null || true)
+else
+  FILE=$(fm_watchdog_session_file "$HARNESS" "$TASK" 2>/dev/null || true)
+fi
 [ -f "$FILE" ] || fail "refusing rotation: session file for resident $TASK cannot be resolved"
 SID=$(fm_watchdog_session_id_from_file "$HARNESS" "$FILE" 2>/dev/null || true)
 [ -n "$SID" ] || fail "refusing rotation: session id for resident $TASK cannot be resolved"
-KEY=$(fm_watchdog_marker_key "$TASK")
-for MARKER in "$STATE/watchdog/.clear-inflight-$KEY" "$STATE/watchdog/.compact-inflight-$KEY" "$STATE/watchdog/.resident-rotation-$KEY"; do
-  [ ! -e "$MARKER" ] || fail "refusing rotation: rotation already in flight ($MARKER)"
-done
 HANDOFF_PLAN="$FM_HOME/fm-state/handoffs/handoff-${KEY}-<UTC>-<pid>.md"
 
 if [ "$DRY_RUN" -eq 1 ]; then

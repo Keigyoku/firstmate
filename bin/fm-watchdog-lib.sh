@@ -491,7 +491,7 @@ fm_watchdog_codex_cached_rollout() {
 }
 
 fm_watchdog_latest_codex_rollout_for_worktree() {
-  local worktree=$1 task=${2:-} dir=${FM_WATCHDOG_CODEX_SESSION_DIR:-$HOME/.codex/sessions}
+  local worktree=$1 task=${2:-} cache_mode=${3:-write-cache} dir=${FM_WATCHDOG_CODEX_SESSION_DIR:-$HOME/.codex/sessions}
   local cache='' cached='' file cwd mtime best_file='' best_mtime=-1 search_dir seen_dirs=''
   [ -d "$dir" ] || return 1
   fm_watchdog_wake_lib_source
@@ -530,7 +530,7 @@ fm_watchdog_latest_codex_rollout_for_worktree() {
     fi
   )
   [ -n "$best_file" ] || return 1
-  [ -n "$cache" ] && fm_watchdog_codex_rollout_cache_write "$cache" "$best_file" "$worktree"
+  [ -n "$cache" ] && [ "$cache_mode" != no-write ] && fm_watchdog_codex_rollout_cache_write "$cache" "$best_file" "$worktree"
   printf '%s\n' "$best_file"
 }
 
@@ -544,13 +544,13 @@ fm_watchdog_task_worktree() {
 }
 
 fm_watchdog_session_file() {
-  local harness=$1 task=${2:-} worktree
+  local harness=$1 task=${2:-} cache_mode=${3:-write-cache} worktree
   if [ -n "$task" ]; then
     worktree=$(fm_watchdog_task_worktree "$task" 2>/dev/null || true)
     [ -n "$worktree" ] || return 1
     case "$harness" in
       claude) fm_watchdog_latest_claude_jsonl_for_worktree "$worktree"; return $? ;;
-      codex) fm_watchdog_latest_codex_rollout_for_worktree "$worktree" "$task"; return $? ;;
+      codex) fm_watchdog_latest_codex_rollout_for_worktree "$worktree" "$task" "$cache_mode"; return $? ;;
       *) return 1 ;;
     esac
   fi
