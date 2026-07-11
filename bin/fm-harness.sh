@@ -2,13 +2,10 @@
 # Detect the agent harness this process tree runs on.
 # Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|grok|cursor|hermes|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
-#                                        (config/crew-harness; "default" resolves to own)
+#                                        (config/crew-harness or own, then watchdog rotation)
 #        fm-harness.sh secondmate       print the harness the PRIMARY uses to launch
-#                                        SECONDMATE agents: config/secondmate-harness ->
-#                                        config/crew-harness -> own. "default" or absent
-#                                        defers to the crew resolution, so an unset
-#                                        secondmate-harness behaves exactly as the crew
-#                                        harness did before this knob existed.
+#                                        SECONDMATE agents: config/secondmate-harness,
+#                                        then active crew harness when unset/default.
 #        fm-harness.sh secondmate-model    print the optional MODEL token from
 #                                        config/secondmate-harness, or empty when absent.
 #        fm-harness.sh secondmate-effort   print the optional EFFORT token from
@@ -25,7 +22,10 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+# shellcheck source=bin/fm-watchdog-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-watchdog-lib.sh"
 
 detect_own() {
   # Layer 1: environment markers for verified harnesses.
@@ -79,11 +79,15 @@ detect_own() {
 }
 
 # Resolve the effective crewmate harness: config/crew-harness (a bare adapter
-# name) wins; absent or "default" mirrors firstmate's own harness.
+# name) wins; absent or "default" starts from firstmate's own harness, then
+# watchdog rotation may select a non-embargoed fallback.
 resolve_crew() {
   local crew=
   [ -f "$CONFIG/crew-harness" ] && crew=$(tr -d '[:space:]' < "$CONFIG/crew-harness" || true)
-  if [ -z "$crew" ] || [ "$crew" = "default" ]; then detect_own; else echo "$crew"; fi
+  if [ -z "$crew" ] || [ "$crew" = "default" ]; then
+    crew=$(detect_own)
+  fi
+  fm_watchdog_rotate_harness "$crew"
 }
 
 # Print the first non-empty, non-comment line of config/secondmate-harness
@@ -119,12 +123,11 @@ secondmate_field() {
   esac
 }
 
-# Resolve the harness the PRIMARY uses to launch SECONDMATE agents: a fallback
-# chain config/secondmate-harness -> config/crew-harness -> own. An absent or
-# "default" secondmate-harness token defers to the crew resolution, so an unset
-# secondmate-harness behaves exactly as before this knob existed (a secondmate
-# launched on the crew harness). config/secondmate-harness is the PRIMARY's own
-# setting and is never inherited downstream - secondmates do not spawn secondmates.
+# Resolve the harness the PRIMARY uses to launch SECONDMATE agents:
+# config/secondmate-harness first, then the active crew harness. An absent or
+# "default" secondmate-harness token defers to crew resolution, including
+# watchdog rotation. config/secondmate-harness is the PRIMARY's own setting and
+# is never inherited downstream - secondmates do not spawn secondmates.
 resolve_secondmate() {
   local sm
   sm=$(secondmate_field 1)

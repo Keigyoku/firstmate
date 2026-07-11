@@ -474,14 +474,18 @@ watchdog_successor_supported() {
 }
 
 watchdog_threshold_scan() {
-  local config compact successor pending_retry failure_interval meta task harness metrics context file sig sid generation key handled pending inflight clear_pending clear_inflight err_file unsupported_marker
+  local config compact successor embargo_5hr embargo_7d pending_retry failure_interval meta task harness metrics context five seven five_reset seven_reset file sig sid generation key handled pending inflight clear_pending clear_inflight err_file embargo_reason unsupported_marker
   watchdog_halted && exit 0
   config=$(fm_watchdog_thresholds 2>/dev/null) || return 0
   compact=$(printf '%s' "$config" | jq -r '.thresholds.compact_at_context_pct // empty' 2>/dev/null || true)
   successor=$(printf '%s' "$config" | jq -r '.thresholds.successor_at_context_pct // empty' 2>/dev/null || true)
+  embargo_5hr=$(printf '%s' "$config" | jq -r '.thresholds.embargo_at_5hr_pct // empty' 2>/dev/null || true)
+  embargo_7d=$(printf '%s' "$config" | jq -r '.thresholds.embargo_at_7d_pct // empty' 2>/dev/null || true)
   case "$compact" in ''|null|*[!0-9.]* ) compact= ;; esac
   case "$successor" in ''|null|*[!0-9.]* ) successor= ;; esac
-  [ -n "$compact$successor" ] || return 0
+  case "$embargo_5hr" in ''|null|*[!0-9.]* ) embargo_5hr= ;; esac
+  case "$embargo_7d" in ''|null|*[!0-9.]* ) embargo_7d= ;; esac
+  [ -n "$compact$successor$embargo_5hr$embargo_7d" ] || return 0
   pending_retry=$(printf '%s' "$config" | jq -r '.compact_pending_retry_sec // empty' 2>/dev/null || true)
   failure_interval=$(printf '%s' "$config" | jq -r '.metrics_failure_event_interval_sec // empty' 2>/dev/null || true)
   for meta in "$STATE"/*.meta; do
@@ -536,6 +540,25 @@ watchdog_threshold_scan() {
     rm -f "$STATE/watchdog/.metrics-failure-$key"
     rm -f "$err_file"
     [ -n "$metrics" ] || continue
+    fm_watchdog_embargo_auto_lift "$harness" "$task" "$metrics"
+    five=$(jq -r '.five_hr_pct // empty' "$metrics" 2>/dev/null || true)
+    seven=$(jq -r '.seven_day_pct // empty' "$metrics" 2>/dev/null || true)
+    five_reset=$(jq -r '.five_hr_reset_at // empty' "$metrics" 2>/dev/null || true)
+    seven_reset=$(jq -r '.seven_day_reset_at // empty' "$metrics" 2>/dev/null || true)
+    embargo_reason=
+    if [ -n "$embargo_5hr" ]; then
+      case "$five" in
+        ''|null|*[!0-9.]* ) : ;;
+        *) awk "BEGIN { exit !($five >= $embargo_5hr) }" && ! fm_watchdog_reset_crossed "$five_reset" && embargo_reason="five_hr_pct>=$embargo_5hr" ;;
+      esac
+    fi
+    if [ -z "$embargo_reason" ] && [ -n "$embargo_7d" ]; then
+      case "$seven" in
+        ''|null|*[!0-9.]* ) : ;;
+        *) awk "BEGIN { exit !($seven >= $embargo_7d) }" && ! fm_watchdog_reset_crossed "$seven_reset" && embargo_reason="seven_day_pct>=$embargo_7d" ;;
+      esac
+    fi
+    [ -z "$embargo_reason" ] || fm_watchdog_write_embargo "$harness" "$task" "$five" "$seven" "$five_reset" "$seven_reset" "$embargo_reason"
     context=$(jq -r '.context_pct // empty' "$metrics" 2>/dev/null || true)
     case "$context" in ''|null|*[!0-9.]* ) continue ;; esac
     if [ -n "$compact" ] && awk "BEGIN { exit !($context < $compact) }"; then

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout] [--adopt-worktree [--adopt-worktree-path <path>] [--mode <mode>] [--yolo <on|off>]]
-#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
+# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout] [--dry-run] [--adopt-worktree [--adopt-worktree-path <path>] [--mode <mode>] [--yolo <on|off>]]
+#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--dry-run] --secondmate
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
@@ -31,7 +31,7 @@
 #   config/crew-dispatch.json is absent. When that file exists, crewmate/scout
 #   spawns require an explicit harness so firstmate cannot silently skip dispatch
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
-#   harness (config/secondmate-harness -> config/crew-harness -> own), so the
+#   harness from config/secondmate-harness or the active crew harness, so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
 #   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|grok|cursor|hermes)
 #   overrides it for this spawn (either kind). A non-flag string containing
@@ -53,6 +53,9 @@
 #   --scout records kind=scout in the task's meta (report deliverable, scratch worktree;
 #   see AGENTS.md task lifecycle); --secondmate records kind=secondmate and launches in a
 #   provisioned firstmate home; the default is kind=ship.
+#   --dry-run resolves the entry harness and exits before creating windows or
+#   worktrees; it still enforces the embargo gate and returns rc 7 when the
+#   resolved harness is embargoed.
 #   --adopt-worktree is for watchdog successors only: the spawn skips treehouse get
 #   and resumes an existing isolated task worktree.
 #   When paired with --adopt-worktree-path, <project-dir> remains the original
@@ -110,6 +113,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-config-inherit-lib.sh"
 # shellcheck source=bin/fm-backend.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-watchdog-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-watchdog-lib.sh"
 # Skip the watcher guard when re-exec'd for one pair of a batch (FM_SPAWN_NO_GUARD is
 # set by the batch loop below), so the guard runs once for the batch, not once per pair.
 [ -n "${FM_SPAWN_NO_GUARD:-}" ] || "$FM_ROOT/bin/fm-guard.sh" || true
@@ -120,6 +125,7 @@ EFFORT=
 BACKEND_ARG=
 ADOPT_WORKTREE=0
 ADOPT_WORKTREE_PATH=
+DRY_RUN=0
 MODE_OVERRIDE=
 YOLO_OVERRIDE=
 HARNESS_SET=0
@@ -150,6 +156,7 @@ for a in "$@"; do
     --scout) KIND=scout ;;
     --secondmate) KIND=secondmate ;;
     --adopt-worktree) ADOPT_WORKTREE=1 ;;
+    --dry-run) DRY_RUN=1 ;;
     --harness) want_value=harness ;;
     --harness=*) HARNESS_ARG=${a#--harness=}; HARNESS_SET=1 ;;
     --model) want_value=model ;;
@@ -280,6 +287,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
+  [ "$DRY_RUN" -eq 0 ] || shared_args+=(--dry-run)
   for pair in "${POS[@]}"; do
     case "$pair" in
       *=*) : ;;
@@ -403,7 +411,7 @@ case "$ARG3" in
     ;;
   '')
     # No explicit harness: resolve from config. A secondmate AGENT launches on the
-    # secondmate harness (config/secondmate-harness -> config/crew-harness -> own);
+    # secondmate harness, falling through to the active crew harness when unset;
     # every other kind uses the crew harness only when no dispatch profile file is
     # active. Resolving here on every spawn is what makes the split DURABLE - a
     # respawn (recovery, /updatefirstmate, restart) re-resolves, so
@@ -449,6 +457,15 @@ if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
       esac
     fi
   fi
+fi
+
+if fm_watchdog_harness_embargoed "$HARNESS"; then
+  echo "error: harness '$HARNESS' is under watchdog budget embargo; spawn refused at entry" >&2
+  exit 7
+fi
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo "dry-run: spawn $ID harness=$HARNESS kind=$KIND backend=$BACKEND"
+  exit 0
 fi
 
 secondmate_registry_value() {
@@ -1002,9 +1019,33 @@ exclude_path() {
   mkdir -p "$(dirname "$EXCL")"
   grep -qxF "$rel" "$EXCL" 2>/dev/null || echo "$rel" >> "$EXCL"
 }
+TURNEND_BACKUP_DIR=
+adopt_hook_backup() {
+  local rel=$1 target backup
+  [ "$ADOPT_WORKTREE" -eq 1 ] || return 0
+  case "$rel" in
+    /*|*'..'*) return 1 ;;
+  esac
+  if [ -z "$TURNEND_BACKUP_DIR" ]; then
+    TURNEND_BACKUP_DIR="$STATE/watchdog/adopt-hook-backups/$ID"
+    rm -rf "$TURNEND_BACKUP_DIR"
+    mkdir -p "$TURNEND_BACKUP_DIR/files"
+    printf '%s\n' "$WT" > "$TURNEND_BACKUP_DIR/worktree"
+  fi
+  target="$WT/$rel"
+  backup="$TURNEND_BACKUP_DIR/files/$rel"
+  if [ -e "$target" ]; then
+    mkdir -p "$(dirname "$backup")"
+    cp -p "$target" "$backup"
+    printf 'file\t%s\n' "$rel" >> "$TURNEND_BACKUP_DIR/manifest"
+  else
+    printf 'absent\t%s\n' "$rel" >> "$TURNEND_BACKUP_DIR/manifest"
+  fi
+}
 if [ "$KIND" != secondmate ]; then
   case "$HARNESS" in
     claude*)
+      adopt_hook_backup '.claude/settings.local.json'
       mkdir -p "$WT/.claude"
       cat > "$WT/.claude/settings.local.json" <<EOF
 {"hooks":{"Stop":[{"hooks":[{"type":"command","command":"touch '$TURNEND'"}]}]}}
@@ -1012,6 +1053,7 @@ EOF
       exclude_path '.claude/settings.local.json'
       ;;
     opencode*)
+      adopt_hook_backup '.opencode/plugins/fm-turn-end.js'
       mkdir -p "$WT/.opencode/plugins"
       cat > "$WT/.opencode/plugins/fm-turn-end.js" <<EOF
 export const FmTurnEnd = async ({ \$ }) => ({
@@ -1086,6 +1128,7 @@ EOF
       chmod +x "$GROK_HOOKS_DIR/fm-turn-end.sh"
       hook_command=$(json_escape "bash $(shell_quote "$GROK_HOOKS_DIR/fm-turn-end.sh")")
       printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"%s"}]}]}}\n' "$hook_command" > "$GROK_HOOKS_DIR/fm-turn-end.json"
+      adopt_hook_backup '.fm-grok-turnend'
       printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-grok-turnend"
       exclude_path '.fm-grok-turnend'
       ;;

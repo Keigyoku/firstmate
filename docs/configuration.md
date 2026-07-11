@@ -119,11 +119,11 @@ The verified adapter knowledge - busy signatures, interrupt and exit commands, s
 Launch mechanics, including the verified command templates, live in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh).
 Primary-session turn-end guard integrations for verified harnesses are tracked as repo-level hook files and documented in [`docs/turnend-guard.md`](turnend-guard.md).
 `config/crew-harness` is a local, gitignored file containing one adapter name for crewmate and scout launches.
-When it is absent or contains `default`, crewmates mirror the firstmate's own harness.
+When it is absent or contains `default`, crewmates start from the firstmate's own harness, then watchdog rotation can move them to the first non-embargoed `rotate_to` entry.
 `config/secondmate-harness` is a separate local, gitignored file containing the adapter the primary uses to launch secondmate agents, optionally followed by model and effort tokens on the same line.
 The first non-empty, non-comment line is parsed as `<harness> [<model>] [<effort>]`.
 A bare `<harness>` preserves the previous behavior: harness only, with no model or effort launch flag.
-When the harness token is absent or `default`, secondmate launch falls back through `config/crew-harness` and then the primary's own harness, and no model or effort is read from that file.
+When the harness token is absent or `default`, secondmate launch falls back through the active crew harness, including watchdog rotation, and no model or effort is read from that file.
 `fm-harness.sh secondmate-model` and `fm-harness.sh secondmate-effort` expose only the optional tokens from `config/secondmate-harness`; `config/crew-harness` remains a bare adapter-name file.
 An explicit harness argument to `fm-spawn.sh` still overrides either config file for that spawn only.
 An explicit `--model` or `--effort` overrides the matching token from `config/secondmate-harness`; an explicit harness or raw launch command starts with clean model and effort defaults unless those flags are also passed.
@@ -144,7 +144,7 @@ See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a star
 When the file exists, bootstrap validates it with `jq`.
 Valid files produce a `CREW_DISPATCH: active config/crew-dispatch.json` block that lists each rule and prints `default:` when present.
 Malformed JSON, an unverified harness, a malformed array profile, an unknown `select`, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`; missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
-If no dispatch rule fits, firstmate uses the dispatch profile `default` when present, then falls back to `config/crew-harness`.
+If no dispatch rule fits, firstmate uses the dispatch profile `default` when present, then falls back through `fm-harness.sh crew`, including watchdog rotation.
 Because the spawn backstop is gated by file presence, any fallback path after a missing match, validation error, or missing `jq` still passes a resolved harness explicitly until the file is fixed or removed.
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
 
@@ -156,11 +156,14 @@ When it is absent, `bin/fm-watchdog-lib.sh` uses the same defaults as the exampl
 Set `FM_WATCHDOG_CONFIG` to point at a different JSON file, `FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR` to override Claude checkpoint discovery, or `FM_WATCHDOG_CODEX_SESSION_DIR` to override Codex rollout discovery.
 Metrics parsing supports Claude token-optimizer checkpoints, Codex rollout files, and an unknown-harness fallback record.
 When it is malformed, bootstrap reports `WATCHDOG: invalid config/watchdog.json - malformed JSON; using defaults`, and the watcher records a `watchdog_config` event before falling back to defaults.
-The active fields are `poll_interval_sec`, `thresholds.compact_at_context_pct`, `thresholds.successor_at_context_pct`, `steer_retries`, `steer_timeout_sec`, `compact_pending_retry_sec`, `metrics_failure_event_interval_sec`, and `parser_version`.
-The `reserved_w4` fields `embargo_at_5hr_pct`, `embargo_at_7d_pct`, and `rotate_to` in the example are reserved for W4 budget rotation and are ignored by W3 successor spawning, which reuses the predecessor harness.
+The active fields are `poll_interval_sec`, `thresholds.compact_at_context_pct`, `thresholds.successor_at_context_pct`, `thresholds.embargo_at_5hr_pct`, `thresholds.embargo_at_7d_pct`, `rotate_to`, `steer_retries`, `steer_timeout_sec`, `compact_pending_retry_sec`, `metrics_failure_event_interval_sec`, and `parser_version`.
 `poll_interval_sec` becomes the watcher's default poll cadence when `FM_POLL` is unset.
 When a non-secondmate Claude or Codex task reaches `thresholds.compact_at_context_pct`, `fm-watch.sh` records a `compact_threshold` event and starts `fm-steer.sh` to ask the task to complete its current unit and run `/compact`.
 When the task reaches `thresholds.successor_at_context_pct`, `fm-watch.sh` records a `clear_threshold` event and asks the task to complete its current unit and run `/clear`.
+When a harness reaches either budget embargo threshold, the watcher writes `fm-state/watchdog/embargo-<harness>` atomically and records an `embargo` event.
+`fm-spawn.sh` checks that flag only at entry and exits 7 for new spawns on the embargoed harness, so in-flight work continues.
+`fm-harness.sh crew` rotates to the first non-embargoed entry in `rotate_to` when the configured crew harness is embargoed.
+`fm-embargo-lift --harness <name>` removes a flag manually, and the watcher also lifts a flag after a recorded provider reset timestamp crosses.
 After a proven clear rotation, or after compact or clear steering becomes undeliverable, the watcher writes a unique handoff under `fm-state/handoffs/`, refreshes `fm-state/handoff-latest.md` as a convenience pointer, and invokes `fm-successor.sh` with the unique handoff path.
 The successor adopts the predecessor worktree instead of creating a new one, reuses the predecessor project, backend, harness, model, effort, mode, and yolo metadata, carries `pr=` and `pr_head=`, carries any X-mode follow-up link without resetting its counter or timestamp, and retires the predecessor endpoint only after successor ownership is proven.
 If spawn, metadata carry, X-link carry, or readiness proof fails, `fm-successor.sh` writes `fm-state/watchdog.halt` and a `fm-state/steer-failure-<ts>.md` artifact; `fm-guard.sh` surfaces the halt, and the watcher exits instead of retrying until the artifact is inspected and the halt file is deliberately removed.
@@ -315,6 +318,7 @@ FM_STEER_SEND_SETTLE=0  # fm-send settle delay used by fm-steer delivery; defaul
 FM_SUCCESSOR_ID=        # test/diagnostic override for the watchdog successor task id; normally generated from the predecessor id and UTC time
 FM_SUCCESSOR_READY_TIMEOUT=30      # seconds fm-successor waits for readiness proof before halting the watchdog
 FM_SUCCESSOR_SPAWN_CMD= # test/diagnostic override for the fm-successor spawn command; receives the fm-spawn-compatible argument vector
+FM_SUCCESSOR_RETIRE_CMD= # test/diagnostic override for fm-successor's predecessor endpoint retirement command
 GROK_HOME=              # optional Grok config home for firstmate's global grok turn-end hook; defaults to ~/.grok
 FM_SEND_RETRIES=3       # fm-send Enter-retry attempts after typing the line once
 FM_SEND_SLEEP=0.4       # seconds between fm-send submit checks

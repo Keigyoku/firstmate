@@ -74,7 +74,8 @@ tests/fm-wake-queue.test.sh               # durable wake queue losslessness, cat
 tests/fm-watcher-lock.test.sh             # watcher singleton, lock-race, PID identity stability, watch-arm liveness, and guard-warning tests
 tests/fm-turnend-guard.test.sh            # shared supervision predicate plus Claude Stop-hook scoping, loop guard, fail-open, and live watcher health tests
 tests/fm-watch-triage.test.sh             # always-on watcher triage: benign absorb, actionable surface, stale status-log override, wedge threshold, repeated wedge demand marker, heartbeat backstop, and afk one-shot coherence
-tests/watchdog/test-metrics.sh            # watchdog metrics and threshold config: Claude/Codex session scoping, checkpoint/rollout parsing, malformed config fallback, reserved W4 defaults, and JSONL event concurrency
+tests/watchdog/test-metrics.sh            # watchdog metrics and threshold config: Claude/Codex session scoping, checkpoint/rollout parsing, active W4 defaults, and JSONL event concurrency
+tests/watchdog/test-embargo.sh            # watchdog budget embargo behavior: threshold raise, spawn gating, harness rotation, manual lift, provider-reset auto-lift, and reset timestamp parsing
 tests/watchdog/test-steer.sh              # watchdog steer helper: bounded retry delivery, target-exists guard, backend-label verification, undeliverable rc4 events, and timeout-tool fallback
 tests/watchdog/test-successor.sh          # watchdog successor lifecycle: clear/compact handoff triggers, adopted-worktree spawn, metadata and X-link carry, predecessor retirement, unsupported backend skip, and halt-on-failure discipline
 tests/watchdog/w3-isolation-harness.sh    # manual W3 live-proof harness that isolates FM_HOME, Claude config, checkpoint/session sources, and tmux server state

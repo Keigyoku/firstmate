@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Lift a watchdog budget embargo for one harness.
+set -eu
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+mkdir -p "$STATE"
+
+# shellcheck source=bin/fm-watchdog-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-watchdog-lib.sh"
+
+usage() {
+  sed -n '2,4p' "$0" | sed 's/^# \{0,1\}//'
+  echo "Usage: fm-embargo-lift --harness <name>"
+}
+
+harness=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --harness)
+      shift
+      [ "$#" -gt 0 ] || { echo "error: --harness requires a value" >&2; exit 2; }
+      harness=$1
+      ;;
+    --harness=*)
+      harness=${1#--harness=}
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "error: unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+[ -n "$harness" ] || { echo "error: --harness is required" >&2; usage >&2; exit 2; }
+fm_watchdog_safe_harness "$harness" >/dev/null || { echo "error: invalid harness name: $harness" >&2; exit 2; }
+fm_watchdog_lift_embargo "$harness" "$harness" manual

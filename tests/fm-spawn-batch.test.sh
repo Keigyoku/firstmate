@@ -69,6 +69,20 @@ ROWS
   pass "batch detection: single pair batches, non-pair rejected, single-task and slash-id stay single"
 }
 
+test_batch_forwards_dry_run() {
+  local out status
+  out=$(run_spawn dry-batch-a-z9=projects/none-a dry-batch-b-z10=projects/none-b --harness codex --dry-run)
+  status=$?
+  expect_code 0 "$status" "batch dry-run should succeed before missing brief checks"
+  printf '%s\n' "$out" | grep -F 'dry-run: spawn dry-batch-a-z9 harness=codex kind=ship backend=tmux' >/dev/null \
+    || fail "first pair did not receive --dry-run"
+  printf '%s\n' "$out" | grep -F 'dry-run: spawn dry-batch-b-z10 harness=codex kind=ship backend=tmux' >/dev/null \
+    || fail "second pair did not receive --dry-run"
+  printf '%s\n' "$out" | grep -F 'batch: FAILED' >/dev/null \
+    && fail "batch dry-run fell through to real spawn attempts"
+  pass "batch dispatch forwards --dry-run to every pair"
+}
+
 # A projects/ path is resolved through the firstmate home, never the caller cwd,
 # before the missing-brief check. One row per home-scoping override.
 test_projects_path_scoping() {
@@ -104,4 +118,5 @@ ROWS
 
 test_batch_dispatches_every_pair
 test_batch_mode_boundaries
+test_batch_forwards_dry_run
 test_projects_path_scoping

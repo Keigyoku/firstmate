@@ -31,6 +31,7 @@ The same watcher also runs a local session-metrics watchdog before normal wake s
 It reads optional `config/watchdog.json` thresholds, collects Claude token-optimizer checkpoint metrics and Codex rollout token-count metrics where available, writes snapshots under `state/watchdog/`, and records JSONL events under `fm-state/watchdog.events`.
 When a non-secondmate task's `context_pct` reaches `thresholds.compact_at_context_pct`, the watcher starts one bounded backend-aware `fm-steer.sh` delivery that asks the task to complete the current unit and compact, then waits for a new Claude or Codex transcript identity before considering the compact handled.
 When `context_pct` reaches `thresholds.successor_at_context_pct`, the watcher first asks the task to complete the current unit and clear; a proven transcript rotation then writes a unique handoff under `fm-state/handoffs/`, spawns a successor with `fm-successor.sh`, carries the predecessor worktree, project, backend, harness, mode, yolo, PR, and X-link metadata, and retires the predecessor only after successor readiness is proven.
+When five-hour or seven-day budget usage reaches its embargo threshold, the watcher writes `fm-state/watchdog/embargo-<harness>`, new spawns on that harness exit 7 at entry, and crew harness resolution rotates through `rotate_to` until a non-embargoed harness is found.
 If successor spawning or readiness proof fails, the watchdog writes `fm-state/watchdog.halt` plus a `fm-state/steer-failure-<ts>.md` artifact and exits instead of busy-loop retrying.
 Pending compact and clear steers are rate-limited by `compact_pending_retry_sec`, metrics-parser failures are throttled by `metrics_failure_event_interval_sec`, and malformed watchdog config falls back to defaults after a bootstrap `WATCHDOG:` diagnostic.
 Optional X mode rides the same check path: the locked session-start bootstrap step drops a local `state/x-watch.check.sh` shim only after the user opts in with `FMX_PAIRING_TOKEN`, and non-X homes keep the default watcher behavior.
@@ -96,7 +97,7 @@ Ship tasks change projects and ship by project mode (`no-mistakes`, `direct-PR`,
 
 ## Dispatch profiles
 
-Crewmate and scout dispatch can stay on the static crewmate harness resolved by `config/crew-harness`, or it can use local dispatch profiles in `config/crew-dispatch.json`.
+Crewmate and scout dispatch can stay on the active crewmate harness resolved by `fm-harness.sh crew`, including watchdog rotation, or it can use local dispatch profiles in `config/crew-dispatch.json`.
 The dispatch file is intentionally judgment-based: firstmate reads the natural-language rules at intake, chooses the best matching rule, resolves that rule directly or through a supported selector, and passes only concrete `--harness`, `--model`, and `--effort` axes to `fm-spawn.sh`.
 The shell scripts validate the JSON shape and verified harness/effort combinations, and `fm-dispatch-select.sh` owns deterministic selector behavior, but they do not parse task intent or match the natural-language rules.
 The session-start bootstrap step surfaces either the active rule block or a concise invalid-config line at startup.
@@ -139,7 +140,7 @@ Secondmate spawn also propagates the same inheritable config before launch.
 Secondmate agents can run on a different verified harness than crewmates.
 `config/secondmate-harness` controls the primary's secondmate launch harness and may also carry optional model and effort tokens as `<harness> [<model>] [<effort>]` on the first non-empty, non-comment line.
 A bare harness line remains harness-only, so existing `config/secondmate-harness` files keep their previous behavior.
-When the harness token is unset or `default`, launch falls back to `config/crew-harness`, then to the primary's own harness, and the model and effort tokens are ignored.
+When the harness token is unset or `default`, launch falls back through the active crew harness, including watchdog rotation, and the model and effort tokens are ignored.
 Those optional tokens are re-read on every secondmate spawn or respawn and are overridden by explicit per-spawn `--model` or `--effort` flags.
 An explicit per-spawn harness or raw launch command does not inherit model or effort tokens from `config/secondmate-harness`.
 `config/crew-harness` remains the crewmate harness and is inherited into secondmate homes.

@@ -1,16 +1,27 @@
 #!/usr/bin/env bash
-# Session metrics, config, transcript, and event helpers for the firstmate watchdog.
+# Session metrics, config, transcript, embargo, and event helpers for the firstmate watchdog.
 #
 # fm_watchdog_collect_metrics <harness> <task-id> writes one metrics snapshot
 # to $STATE/watchdog/metrics-<task-id>.json.
 # The path is under state/watchdog so watchdog artifacts stay with firstmate's
 # existing runtime signals without mixing into the watcher's own dotfile internals.
+# Budget embargo flags live under $FM_HOME/fm-state/watchdog because they are
+# persistent provider-state gates owned by the spawner, not per-task runtime signals.
 
 FM_WATCHDOG_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=bin/fm-wake-lib.sh disable=SC1091
-. "$FM_WATCHDOG_LIB_DIR/fm-wake-lib.sh"
+FM_WATCHDOG_DEFAULT_ROOT="$(cd "$FM_WATCHDOG_LIB_DIR/.." && pwd)"
+FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_WATCHDOG_DEFAULT_ROOT}}"
+FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"
 
 FM_WATCHDOG_PARSER_VERSION=1
+
+fm_watchdog_wake_lib_source() {
+  [ -n "${_FM_WATCHDOG_WAKE_LIB_SOURCED:-}" ] && return 0
+  # shellcheck source=bin/fm-wake-lib.sh disable=SC1091
+  . "$FM_WATCHDOG_LIB_DIR/fm-wake-lib.sh"
+  _FM_WATCHDOG_WAKE_LIB_SOURCED=1
+}
 
 fm_watchdog_default_config() {
   cat <<'JSON'
@@ -18,17 +29,15 @@ fm_watchdog_default_config() {
   "poll_interval_sec": 30,
   "thresholds": {
     "compact_at_context_pct": 85,
-    "successor_at_context_pct": 95
+    "successor_at_context_pct": 95,
+    "embargo_at_5hr_pct": 85,
+    "embargo_at_7d_pct": 85
   },
   "steer_retries": 3,
   "steer_timeout_sec": 120,
   "compact_pending_retry_sec": 900,
   "metrics_failure_event_interval_sec": 300,
-  "reserved_w4": {
-    "embargo_at_5hr_pct": 85,
-    "embargo_at_7d_pct": 85,
-    "rotate_to": ["codex", "opencode"]
-  },
+  "rotate_to": ["codex", "opencode"],
   "parser_version": 1
 }
 JSON
@@ -54,11 +63,38 @@ fm_watchdog_events_path() {
   printf '%s/fm-state/watchdog.events\n' "$FM_HOME"
 }
 
+fm_watchdog_embargo_dir() {
+  printf '%s/fm-state/watchdog\n' "$FM_HOME"
+}
+
+fm_watchdog_safe_harness() {
+  local harness=$1
+  case "$harness" in
+    ''|*[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  printf '%s\n' "$harness"
+}
+
+fm_watchdog_embargo_path() {
+  local harness safe
+  harness=$1
+  safe=$(fm_watchdog_safe_harness "$harness") || return 1
+  printf '%s/embargo-%s\n' "$(fm_watchdog_embargo_dir)" "$safe"
+}
+
+fm_watchdog_harness_embargoed() {
+  local path
+  path=$(fm_watchdog_embargo_path "$1") || return 1
+  [ -e "$path" ]
+}
+
 fm_watchdog_event() {
-  local type=$1 sid=$2 status=${3:-} detail=${4:-} path dir tmp rc lock
+  local type=$1 sid=$2 status=${3:-} detail=${4:-} path dir tmp rc lock state_dir
   path=$(fm_watchdog_events_path)
   dir=$(dirname "$path")
   mkdir -p "$dir"
+  state_dir=${STATE:-${FM_STATE_OVERRIDE:-$FM_HOME/state}}
+  mkdir -p "$state_dir"
   tmp=$(mktemp "$dir/.watchdog-event.XXXXXX")
   jq -cn \
     --arg type "$type" \
@@ -71,13 +107,176 @@ fm_watchdog_event() {
       rm -f "$tmp"
       return "$rc"
     }
-  lock="$STATE/.watchdog-events.lock"
+  lock="$state_dir/.watchdog-events.lock"
+  fm_watchdog_wake_lib_source
   fm_lock_acquire_wait "$lock"
   rc=0
   cat "$tmp" >> "$path" || rc=$?
   fm_lock_release "$lock"
   rm -f "$tmp"
   return "$rc"
+}
+
+fm_watchdog_write_embargo() {
+  local harness=$1 sid=$2 five=${3:-} seven=${4:-} five_reset=${5:-} seven_reset=${6:-} reason=${7:-threshold} path dir tmp
+  path=$(fm_watchdog_embargo_path "$harness") || return 1
+  [ ! -e "$path" ] || return 0
+  dir=$(dirname "$path")
+  mkdir -p "$dir"
+  tmp=$(mktemp "$dir/.embargo-${harness}.XXXXXX")
+  {
+    printf 'harness=%s\n' "$harness"
+    printf 'sid=%s\n' "$sid"
+    printf 'reason=%s\n' "$reason"
+    printf 'five_hr_pct=%s\n' "$five"
+    printf 'seven_day_pct=%s\n' "$seven"
+    printf 'five_hr_reset_at=%s\n' "$five_reset"
+    printf 'seven_day_reset_at=%s\n' "$seven_reset"
+    printf 'created_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$tmp"
+  if mv -n "$tmp" "$path" 2>/dev/null; then
+    fm_watchdog_event embargo "$sid" raised "harness=$harness five_hr_pct=$five seven_day_pct=$seven reason=$reason"
+  else
+    rm -f "$tmp"
+  fi
+}
+
+fm_watchdog_lift_embargo() {
+  local harness=$1 sid=${2:-$1} reason=${3:-manual} path
+  path=$(fm_watchdog_embargo_path "$harness") || return 1
+  [ -e "$path" ] || return 0
+  rm -f "$path"
+  fm_watchdog_event embargo "$sid" lifted "harness=$harness reason=$reason"
+}
+
+fm_watchdog_reset_epoch() {
+  local value=$1
+  case "$value" in
+    ''|null) return 1 ;;
+    *[!0-9]*)
+      perl -MTime::Piece -e '
+        my $value = shift;
+        $value =~ s/\.\d+//;
+        $value =~ s/Z$/+0000/;
+        $value =~ s/([+-]\d\d):(\d\d)$/$1$2/;
+        for my $format ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S%z") {
+          my $t = eval { Time::Piece->strptime($value, $format) };
+          if ($t) {
+            print $t->epoch, "\n";
+            exit 0;
+          }
+        }
+        exit 1;
+      ' "$value" 2>/dev/null || return 1
+      ;;
+    *)
+      if [ "$value" -gt 9999999999 ]; then
+        printf '%s\n' "$((value / 1000))"
+      else
+        printf '%s\n' "$value"
+      fi
+      ;;
+  esac
+}
+
+fm_watchdog_reset_crossed() {
+  local value=$1 now=${2:-}
+  case "$now" in ''|*[!0-9]*) now=$(date -u +%s) ;; esac
+  local reset
+  reset=$(fm_watchdog_reset_epoch "$value" 2>/dev/null) || return 1
+  [ "$now" -ge "$reset" ]
+}
+
+fm_watchdog_embargo_reset_value() {
+  local bucket=$1 flag=$2 metrics=${3:-} value
+  if [ -n "$metrics" ] && [ -f "$metrics" ]; then
+    case "$bucket" in
+      five_hr) value=$(jq -r '.five_hr_reset_at // empty' "$metrics" 2>/dev/null || true) ;;
+      seven_day) value=$(jq -r '.seven_day_reset_at // empty' "$metrics" 2>/dev/null || true) ;;
+      *) return 1 ;;
+    esac
+    [ -n "$value" ] && [ "$value" != null ] && { printf '%s\n' "$value"; return 0; }
+  fi
+  case "$bucket" in
+    five_hr) sed -n 's/^five_hr_reset_at=//p' "$flag" | head -1 ;;
+    seven_day) sed -n 's/^seven_day_reset_at=//p' "$flag" | head -1 ;;
+    *) return 1 ;;
+  esac
+}
+
+fm_watchdog_metric_bucket_blocks_embargo() {
+  local metrics=$1 bucket=$2 threshold=$3 now=$4 pct reset
+  [ -n "$metrics" ] && [ -f "$metrics" ] || return 1
+  case "$threshold" in ''|null|*[!0-9.]* ) return 1 ;; esac
+  case "$bucket" in
+    five_hr)
+      pct=$(jq -r '.five_hr_pct // empty' "$metrics" 2>/dev/null || true)
+      reset=$(jq -r '.five_hr_reset_at // empty' "$metrics" 2>/dev/null || true)
+      ;;
+    seven_day)
+      pct=$(jq -r '.seven_day_pct // empty' "$metrics" 2>/dev/null || true)
+      reset=$(jq -r '.seven_day_reset_at // empty' "$metrics" 2>/dev/null || true)
+      ;;
+    *) return 1 ;;
+  esac
+  case "$pct" in ''|null|*[!0-9.]* ) return 1 ;; esac
+  awk "BEGIN { exit !($pct >= $threshold) }" || return 1
+  fm_watchdog_reset_crossed "$reset" "$now" && return 1
+  return 0
+}
+
+fm_watchdog_embargo_auto_lift() {
+  local harness=$1 sid=$2 metrics=$3 path now reason config embargo_5hr embargo_7d bucket reset has_reason_bucket=1
+  path=$(fm_watchdog_embargo_path "$harness") || return 1
+  [ -e "$path" ] || return 0
+  now=$(date -u +%s)
+  config=$(fm_watchdog_thresholds 2>/dev/null || true)
+  embargo_5hr=$(printf '%s' "$config" | jq -r '.thresholds.embargo_at_5hr_pct // empty' 2>/dev/null || true)
+  embargo_7d=$(printf '%s' "$config" | jq -r '.thresholds.embargo_at_7d_pct // empty' 2>/dev/null || true)
+  if fm_watchdog_metric_bucket_blocks_embargo "$metrics" five_hr "$embargo_5hr" "$now" \
+    || fm_watchdog_metric_bucket_blocks_embargo "$metrics" seven_day "$embargo_7d" "$now"; then
+    return 0
+  fi
+  reason=$(sed -n 's/^reason=//p' "$path" | head -1)
+  case "$reason" in *five_hr_pct*) has_reason_bucket=0 ;; esac
+  case "$reason" in *seven_day_pct*) has_reason_bucket=0 ;; esac
+  if [ "$has_reason_bucket" -eq 0 ]; then
+    for bucket in five_hr seven_day; do
+      case "$bucket:$reason" in
+        five_hr:*five_hr_pct*|seven_day:*seven_day_pct*)
+          reset=$(fm_watchdog_embargo_reset_value "$bucket" "$path" "$metrics" 2>/dev/null || true)
+          fm_watchdog_reset_crossed "$reset" "$now" || return 0
+          ;;
+      esac
+    done
+    fm_watchdog_lift_embargo "$harness" "$sid" "provider_reset"
+    return 0
+  fi
+  if [ -n "$metrics" ] && [ -f "$metrics" ]; then
+    for bucket in five_hr seven_day; do
+      reset=$(fm_watchdog_embargo_reset_value "$bucket" "$path" "$metrics" 2>/dev/null || true)
+      fm_watchdog_reset_crossed "$reset" "$now" && { fm_watchdog_lift_embargo "$harness" "$sid" "provider_reset"; return 0; }
+    done
+  fi
+}
+
+fm_watchdog_rotate_harness() {
+  local current=$1 config candidate
+  if ! fm_watchdog_harness_embargoed "$current"; then
+    printf '%s\n' "$current"
+    return 0
+  fi
+  config=$(fm_watchdog_thresholds 2>/dev/null || true)
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    if ! fm_watchdog_harness_embargoed "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done <<EOF
+$(printf '%s' "$config" | jq -r '.rotate_to[]? // empty' 2>/dev/null || true)
+EOF
+  printf '%s\n' "$current"
 }
 
 fm_watchdog_metrics_path() {
@@ -93,6 +292,7 @@ fm_watchdog_parser_mismatch() {
 fm_watchdog_latest_file() {
   local dir=$1 pattern=$2 file mtime best_file='' best_mtime=-1
   [ -d "$dir" ] || return 1
+  fm_watchdog_wake_lib_source
   while IFS= read -r -d '' file; do
     mtime=$(fm_path_mtime "$file") || continue
     case "$mtime" in
@@ -116,6 +316,7 @@ fm_watchdog_claude_checkpoint_for_session() {
   local session_id=$1 dir=${FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR:-$HOME/.claude/token-optimizer/checkpoints}
   local file mtime best_file='' best_mtime=-1 found_sid
   [ -d "$dir" ] || return 1
+  fm_watchdog_wake_lib_source
   while IFS= read -r -d '' file; do
     found_sid=$(jq -r '.session_id // .sessionId // empty' "$file" 2>/dev/null || true)
     [ "$found_sid" = "$session_id" ] || continue
@@ -154,6 +355,7 @@ fm_watchdog_codex_rollout_matches_session() {
 
 fm_watchdog_latest_claude_checkpoint_for_session() {
   local session_id=$1 dir=${FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR:-$HOME/.claude/token-optimizer/checkpoints}
+  fm_watchdog_wake_lib_source
   local file mtime best_file='' best_mtime=-1
   [ -d "$dir" ] || return 1
   while IFS= read -r -d '' file; do
@@ -173,6 +375,7 @@ fm_watchdog_latest_claude_checkpoint_for_session() {
 
 fm_watchdog_latest_codex_rollout_for_session() {
   local session_id=$1 dir=${FM_WATCHDOG_CODEX_SESSION_DIR:-$HOME/.codex/sessions}
+  fm_watchdog_wake_lib_source
   local file mtime best_file='' best_mtime=-1
   [ -d "$dir" ] || return 1
   while IFS= read -r -d '' file; do
@@ -291,6 +494,7 @@ fm_watchdog_latest_codex_rollout_for_worktree() {
   local worktree=$1 task=${2:-} dir=${FM_WATCHDOG_CODEX_SESSION_DIR:-$HOME/.codex/sessions}
   local cache='' cached='' file cwd mtime best_file='' best_mtime=-1 search_dir seen_dirs=''
   [ -d "$dir" ] || return 1
+  fm_watchdog_wake_lib_source
   if [ -n "$task" ]; then
     cache=$(fm_watchdog_codex_rollout_cache_path "$task")
     cached=$(fm_watchdog_codex_cached_rollout "$cache" "$worktree" 2>/dev/null || true)
@@ -458,6 +662,8 @@ fm_watchdog_codex_metrics_json() {
         then (($used / $limit * 1000) | round / 10)
         else null
         end;
+      def reset_at($bucket):
+        $bucket.reset_at // $bucket.resetAt // $bucket.reset_at_ms // $bucket.resetAtMs // null;
       if session_matches
         and (last_token_event | type == "object")
         and (last_token_event.payload.info.last_token_usage.total_tokens | type == "number")
@@ -471,6 +677,8 @@ fm_watchdog_codex_metrics_json() {
             context_pct: pct($p.info.last_token_usage.total_tokens; $p.info.model_context_window),
             five_hr_pct: $p.rate_limits.primary.used_percent,
             seven_day_pct: $p.rate_limits.secondary.used_percent,
+            five_hr_reset_at: reset_at($p.rate_limits.primary),
+            seven_day_reset_at: reset_at($p.rate_limits.secondary),
             tool_calls: null,
             collected_at: $collected_at,
             parser_version: $parser_version
