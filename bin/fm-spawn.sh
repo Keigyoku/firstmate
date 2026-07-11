@@ -31,7 +31,7 @@
 #   config/crew-dispatch.json is absent. When that file exists, crewmate/scout
 #   spawns require an explicit harness so firstmate cannot silently skip dispatch
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
-#   harness (config/secondmate-harness -> config/crew-harness -> own), so the
+#   harness from config/secondmate-harness or the active crew harness, so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
 #   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|grok|cursor|hermes)
 #   overrides it for this spawn (either kind). A non-flag string containing
@@ -411,7 +411,7 @@ case "$ARG3" in
     ;;
   '')
     # No explicit harness: resolve from config. A secondmate AGENT launches on the
-    # secondmate harness (config/secondmate-harness -> config/crew-harness -> own);
+    # secondmate harness, falling through to the active crew harness when unset;
     # every other kind uses the crew harness only when no dispatch profile file is
     # active. Resolving here on every spawn is what makes the split DURABLE - a
     # respawn (recovery, /updatefirstmate, restart) re-resolves, so
