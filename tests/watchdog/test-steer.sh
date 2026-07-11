@@ -737,6 +737,54 @@ test_resident_rotation_lock_blocks_compact_steer() {
   pass "resident rotation lock blocks compact steer threshold work"
 }
 
+test_provisional_resident_rotation_lock_blocks_compact_steer() {
+  local home config session_dir worktree double log status event timeout_cmd lock contents
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping provisional resident-rotation lock coverage"
+    return
+  fi
+  home="$TMP_ROOT/provisional-resident-lock-home"
+  config="$TMP_ROOT/provisional-resident-lock-config"
+  session_dir="$TMP_ROOT/provisional-resident-lock-sessions"
+  worktree="$TMP_ROOT/provisional-resident-lock-worktree"
+  double="$TMP_ROOT/provisional-resident-lock-double"
+  log="$TMP_ROOT/provisional-resident-lock.log"
+  lock="$home/state/watchdog/.resident-rotation-demo"
+  mkdir -p "$home/state/watchdog" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  write_codex_rollout "$session_dir/rollout-arm.jsonl" "$worktree" 0 armed-sid
+  make_success_double "$double" "$log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial provisional resident-lock watcher pass should arm the session"
+
+  sleep 1
+  write_codex_rollout "$session_dir/rollout-arm.jsonl" "$worktree" 900 armed-sid
+  mkdir "$lock"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "provisional resident-lock watcher pass should keep polling"
+  [ ! -s "$log" ] || fail "provisional resident rotation lock should block compact steer delivery"
+  [ -d "$lock" ] || fail "provisional resident rotation lock should not be removed before stale age"
+  contents=$(find "$lock" -mindepth 1 -maxdepth 1 -print)
+  [ -z "$contents" ] || fail "provisional resident rotation lock should not be claimed by watcher"
+  event="$home/fm-state/watchdog.events"
+  if [ -e "$event" ] && grep -q '"type":"compact_threshold"' "$event"; then
+    fail "provisional resident rotation lock should block compact threshold processing"
+  fi
+  pass "provisional resident rotation lock blocks compact steer threshold work"
+}
+
 test_resident_rotation_lock_blocks_compact_after_metrics() {
   local home config session_dir worktree double log status event timeout_cmd fakebin real_jq
   if command -v timeout >/dev/null 2>&1; then
@@ -954,6 +1002,50 @@ test_stale_resident_rotation_lock_allows_compact_steer() {
   pass "stale resident rotation lock allows compact steer"
 }
 
+test_abandoned_provisional_resident_rotation_lock_allows_compact_steer() {
+  local home config session_dir worktree double log status event timeout_cmd lock
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping abandoned provisional resident-rotation lock coverage"
+    return
+  fi
+  home="$TMP_ROOT/abandoned-provisional-resident-lock-home"
+  config="$TMP_ROOT/abandoned-provisional-resident-lock-config"
+  session_dir="$TMP_ROOT/abandoned-provisional-resident-lock-sessions"
+  worktree="$TMP_ROOT/abandoned-provisional-resident-lock-worktree"
+  double="$TMP_ROOT/abandoned-provisional-resident-lock-double"
+  log="$TMP_ROOT/abandoned-provisional-resident-lock.log"
+  lock="$home/state/watchdog/.resident-rotation-demo"
+  mkdir -p "$home/state/watchdog" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  write_codex_rollout "$session_dir/rollout-arm.jsonl" "$worktree" 0 armed-sid
+  make_success_double "$double" "$log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial abandoned-provisional watcher pass should arm the session"
+
+  sleep 1
+  write_codex_rollout "$session_dir/rollout-arm.jsonl" "$worktree" 900 armed-sid
+  mkdir "$lock"
+  touch -t 200001010000 "$lock"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "abandoned provisional resident-lock watcher pass should keep polling after steering"
+  [ -s "$log" ] || fail "abandoned provisional resident rotation lock should not block compact steer delivery"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"type":"compact_threshold"' "abandoned provisional resident lock recovery should allow compact threshold processing"
+  pass "abandoned provisional resident rotation lock allows compact steer"
+}
+
 test_success_delivers_exact_text_and_event
 test_require_target_exists_blocks_delivery
 test_require_target_exists_uses_task_label_for_zellij
@@ -969,9 +1061,11 @@ test_metrics_collection_failure_is_visible_and_throttled
 test_unsupported_harness_skips_watchdog_metrics
 test_stale_meta_skips_watchdog_threshold_scan
 test_resident_rotation_lock_blocks_compact_steer
+test_provisional_resident_rotation_lock_blocks_compact_steer
 test_resident_rotation_lock_blocks_compact_after_metrics
 test_fast_steer_completion_does_not_exit_watcher
 test_fast_steer_handoff_does_not_corrupt_reacquired_lock
 test_stale_resident_rotation_lock_allows_compact_steer
+test_abandoned_provisional_resident_rotation_lock_allows_compact_steer
 
 echo "# all watchdog steer tests passed"

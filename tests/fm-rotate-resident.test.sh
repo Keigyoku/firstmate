@@ -155,6 +155,43 @@ test_rotation_claim_token_fences_reacquired_lock() {
   pass 'rotation claim token fences replacement lock mutations'
 }
 
+test_provisional_rotation_claim_blocks_contenders() {
+  local home lock out
+  home="$TMP_ROOT/provisional-claim-home"
+  lock="$home/state/watchdog/.resident-rotation-resident"
+  mkdir -p "$home/state/watchdog"
+  mkdir "$lock"
+  if FM_HOME="$home" bash -c '. "$1"; fm_watchdog_rotation_claim resident watchdog' _ "$ROOT/bin/fm-watchdog-lib.sh" >/dev/null; then
+    fail 'pid-less provisional rotation claim was replaced immediately'
+  fi
+  if ! FM_HOME="$home" bash -c '. "$1"; fm_watchdog_rotation_active resident' _ "$ROOT/bin/fm-watchdog-lib.sh"; then
+    fail 'pid-less provisional rotation claim was not treated as active'
+  fi
+  [ -d "$lock" ] || fail 'pid-less provisional rotation claim was removed before stale age'
+  out=$(find "$lock" -mindepth 1 -maxdepth 1 -print)
+  [ -z "$out" ] || fail 'provisional rotation claim should not be initialized by a contender'
+  pass 'pid-less provisional rotation claim blocks contenders'
+}
+
+test_abandoned_provisional_rotation_claim_is_recovered() {
+  local home lock claim
+  home="$TMP_ROOT/abandoned-provisional-home"
+  lock="$home/state/watchdog/.resident-rotation-resident"
+  mkdir -p "$home/state/watchdog"
+  mkdir "$lock"
+  touch -t 200001010000 "$lock"
+  if FM_HOME="$home" bash -c '. "$1"; fm_watchdog_rotation_active resident' _ "$ROOT/bin/fm-watchdog-lib.sh"; then
+    fail 'abandoned pid-less provisional rotation claim remained active'
+  fi
+  claim=$(FM_HOME="$home" bash -c '. "$1"; fm_watchdog_rotation_claim resident watchdog' _ "$ROOT/bin/fm-watchdog-lib.sh")
+  [ -n "$claim" ] || fail 'abandoned provisional rotation claim was not reclaimed'
+  [ -s "$lock/pid" ] || fail 'reclaimed provisional rotation claim did not write pid'
+  [ -s "$lock/token" ] || fail 'reclaimed provisional rotation claim did not write token'
+  FM_HOME="$home" bash -c '. "$1"; fm_watchdog_rotation_release resident "$2"' _ "$ROOT/bin/fm-watchdog-lib.sh" "$claim"
+  [ ! -e "$lock" ] || fail 'reclaimed provisional rotation claim did not release cleanly'
+  pass 'abandoned pid-less provisional rotation claim is recovered'
+}
+
 test_refuses_no_live_resident() {
   local fixture home fakebin sessions out
   fixture=$(make_fixture missing); home=$(printf '%s\n' "$fixture" | sed -n '1p'); fakebin=$(printf '%s\n' "$fixture" | sed -n '2p'); sessions=$(printf '%s\n' "$fixture" | sed -n '3p')
@@ -241,6 +278,8 @@ test_refuses_rotation_in_flight
 test_refuses_live_resident_rotation_claim
 test_recovers_stale_resident_rotation_claim
 test_rotation_claim_token_fences_reacquired_lock
+test_provisional_rotation_claim_blocks_contenders
+test_abandoned_provisional_rotation_claim_is_recovered
 test_refuses_no_live_resident
 test_invokes_shared_successor_helper
 test_mutating_rotation_locks_before_liveness_lookup

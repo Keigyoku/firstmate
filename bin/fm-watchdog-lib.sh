@@ -612,21 +612,49 @@ fm_watchdog_rotation_lock_path() {
   printf '%s/.resident-rotation-%s\n' "$(fm_watchdog_metrics_dir)" "$(fm_watchdog_marker_key "$task")"
 }
 
+fm_watchdog_rotation_stat_mtime() {
+  if [ "$(uname)" = Darwin ]; then
+    stat -f %m "$1" 2>/dev/null
+  else
+    stat -c %Y "$1" 2>/dev/null
+  fi
+}
+
+fm_watchdog_rotation_lock_age() {
+  local path=$1 mtime
+  mtime=$(fm_watchdog_rotation_stat_mtime "$path" 2>/dev/null || true)
+  case "$mtime" in ''|*[!0-9]*) mtime=$(date +%s) ;; esac
+  echo $(( $(date +%s) - mtime ))
+}
+
+fm_watchdog_rotation_provisional_stale_sec() {
+  local value=${FM_WATCHDOG_ROTATION_PROVISIONAL_STALE_SEC:-30}
+  case "$value" in ''|*[!0-9]*) value=30 ;; esac
+  printf '%s\n' "$value"
+}
+
+fm_watchdog_rotation_remove_lock() {
+  local lock=$1
+  rm -f "$lock/pid" "$lock/owner" "$lock/created_at" "$lock/token"
+  rmdir "$lock" 2>/dev/null
+}
+
 fm_watchdog_rotation_claim() {
-  local task=$1 owner=${2:-watchdog} lock pid token
+  local task=$1 owner=${2:-watchdog} lock pid token age stale_sec
   lock=$(fm_watchdog_rotation_lock_path "$task")
   mkdir -p "$(dirname "$lock")"
   while ! mkdir "$lock" 2>/dev/null; do
     pid=$(sed -n '1p' "$lock/pid" 2>/dev/null || true)
     case "$pid" in
       ''|*[!0-9]*)
-        rm -f "$lock/pid" "$lock/owner" "$lock/created_at" "$lock/token"
-        rmdir "$lock" 2>/dev/null || return 1
+        stale_sec=$(fm_watchdog_rotation_provisional_stale_sec)
+        age=$(fm_watchdog_rotation_lock_age "$lock")
+        [ "$age" -ge "$stale_sec" ] || return 1
+        fm_watchdog_rotation_remove_lock "$lock" || return 1
         ;;
       *)
         kill -0 "$pid" 2>/dev/null || {
-          rm -f "$lock/pid" "$lock/owner" "$lock/created_at" "$lock/token"
-          rmdir "$lock" 2>/dev/null || return 1
+          fm_watchdog_rotation_remove_lock "$lock" || return 1
           continue
         }
         return 1
@@ -634,9 +662,9 @@ fm_watchdog_rotation_claim() {
     esac
   done
   token="${owner}.${$}.${BASHPID:-$$}.$(date -u +%Y%m%dT%H%M%SZ).${RANDOM}${RANDOM}"
-  printf '%s\n' "$$" > "$lock/pid"
-  printf '%s\n' "$owner" > "$lock/owner"
   printf '%s\n' "$token" > "$lock/token"
+  printf '%s\n' "$owner" > "$lock/owner"
+  printf '%s\n' "$$" > "$lock/pid"
   date -u +%Y-%m-%dT%H:%M:%SZ > "$lock/created_at"
   printf '%s\n' "$token"
 }
@@ -658,25 +686,25 @@ fm_watchdog_rotation_release() {
   [ -n "$token" ] || return 1
   actual=$(sed -n '1p' "$lock/token" 2>/dev/null || true)
   [ "$actual" = "$token" ] || return 1
-  rm -f "$lock/pid" "$lock/owner" "$lock/created_at" "$lock/token"
-  rmdir "$lock" 2>/dev/null || true
+  fm_watchdog_rotation_remove_lock "$lock" || true
 }
 
 fm_watchdog_rotation_active() {
-  local task=$1 lock pid
+  local task=$1 lock pid age stale_sec
   lock=$(fm_watchdog_rotation_lock_path "$task")
   [ -e "$lock" ] || return 1
   pid=$(sed -n '1p' "$lock/pid" 2>/dev/null || true)
   case "$pid" in
     ''|*[!0-9]*)
-      rm -f "$lock/pid" "$lock/owner" "$lock/created_at" "$lock/token"
-      rmdir "$lock" 2>/dev/null || return 0
+      stale_sec=$(fm_watchdog_rotation_provisional_stale_sec)
+      age=$(fm_watchdog_rotation_lock_age "$lock")
+      [ "$age" -ge "$stale_sec" ] || return 0
+      fm_watchdog_rotation_remove_lock "$lock" || return 0
       return 1
       ;;
   esac
   kill -0 "$pid" 2>/dev/null && return 0
-  rm -f "$lock/pid" "$lock/owner" "$lock/created_at" "$lock/token"
-  rmdir "$lock" 2>/dev/null || return 0
+  fm_watchdog_rotation_remove_lock "$lock" || return 0
   return 1
 }
 
