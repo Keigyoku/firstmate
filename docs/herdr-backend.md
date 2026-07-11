@@ -440,7 +440,7 @@ codex --version
 Output:
 
 ```text
-{"client":{"version":"0.7.3","channel":"stable","protocol":16,"binary":"/etc/profiles/per-user/kunchen/bin/herdr","session":null},"server":{"status":"running","running":true,"version":"0.7.3","protocol":16,"capabilities":{"live_handoff":true,"detached_server_daemon":false},"compatible":true,"socket":"/Users/kunchen/.config/herdr/herdr.sock","session":null,"restart_needed":false}}
+{"client":{"version":"0.7.3","channel":"stable","protocol":16,"binary":"/etc/profiles/per-user/<user>/bin/herdr","session":null},"server":{"status":"running","running":true,"version":"0.7.3","protocol":16,"capabilities":{"live_handoff":true,"detached_server_daemon":false},"compatible":true,"socket":"<home>/.config/herdr/herdr.sock","session":null,"restart_needed":false}}
 codex-cli 0.142.1
 ```
 

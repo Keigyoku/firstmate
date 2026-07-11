@@ -91,6 +91,8 @@ The tracked `.no-mistakes.yaml` keeps test evidence outside the repo and defines
 That evidence policy is specific to the firstmate repo: target projects may legitimately commit `.no-mistakes/evidence/` from their own no-mistakes pipeline, but firstmate keeps `.no-mistakes/` local and CI rejects tracked entries under that path.
 That command requires `tmux` on `PATH`, prints `tmux -V`, runs every `tests/*.test.sh` with `bash`, and fails if any script exits non-zero.
 It intentionally mirrors the behavior-test baseline in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) instead of delegating the test step to an agent.
+CI also runs `bin/check-personal-references.sh` as a tracked-text invariant.
+When evidence must preserve a guarded local identifier, `.personal-reference-allowlist` may contain narrow extended regular expressions matched against the full `path:line:text` finding.
 
 ## Captain preferences (data/captain.md)
 

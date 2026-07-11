@@ -1,14 +1,14 @@
 # Watchdog W3 Live Evidence
 
 Date: 2026-07-08.
-Worktree: `/var/home/mlight/.treehouse/firstmate-7bab20/1/firstmate`.
+Worktree: `<home>/.treehouse/firstmate-7bab20/1/firstmate`.
 Branch: `fm/pivot-w3-successor-g6`.
 Claude Code: `2.1.193`.
 
 ## Isolation
 
-The live proof used `CLAUDE_CONFIG_DIR=/var/home/mlight/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/claude-config`.
-The live proof used `FM_HOME=/var/home/mlight/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/fm-home`.
+The live proof used `CLAUDE_CONFIG_DIR=<home>/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/claude-config`.
+The live proof used `FM_HOME=<home>/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/fm-home`.
 The live proof used `FM_WATCHDOG_CLAUDE_SESSION_DIR=$CLAUDE_CONFIG_DIR/projects`.
 The live proof used `FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR=$CLAUDE_CONFIG_DIR/token-optimizer/checkpoints`.
 The scratch Claude settings set `autoCompactEnabled=false`.
@@ -42,10 +42,10 @@ After the live growth turns, the scratch checkpoint for session `b1cc2ddb-e2c8-4
 The watchdog armed the session, triggered compact, delivered `/compact`, and then detected the compact summary generation in the same Claude JSONL.
 
 ```json
-{"type":"watchdog_session_armed","sid":"w3-compact","status":"armed","detail":"harness=claude sid=b1cc2ddb-e2c8-4fb6-b8a0-8aaa53fd2335 file=/var/home/mlight/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/claude-config/projects/-var-home-mlight--treehouse-firstmate-7bab20-1-firstmate/b1cc2ddb-e2c8-4fb6-b8a0-8aaa53fd2335.jsonl","ts":"2026-07-08T21:19:09Z"}
+{"type":"watchdog_session_armed","sid":"w3-compact","status":"armed","detail":"harness=claude sid=b1cc2ddb-e2c8-4fb6-b8a0-8aaa53fd2335 file=<home>/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/claude-config/projects/<claude-project-key>/b1cc2ddb-e2c8-4fb6-b8a0-8aaa53fd2335.jsonl","ts":"2026-07-08T21:19:09Z"}
 {"type":"compact_threshold","sid":"w3-compact","status":"triggered","detail":"context_pct=31 threshold=30 sid=b1cc2ddb-e2c8-4fb6-b8a0-8aaa53fd2335","ts":"2026-07-08T21:20:24Z"}
 {"type":"steer","sid":"w3-compact","status":"delivered","detail":"backend=tmux attempts=1","ts":"2026-07-08T21:20:24Z"}
-{"type":"compact_rotated","sid":"w3-compact","status":"rearmed","detail":"old_sid=b1cc2ddb-e2c8-4fb6-b8a0-8aaa53fd2335 new_sid=b1cc2ddb-e2c8-4fb6-b8a0-8aaa53fd2335 file=/var/home/mlight/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/claude-config/projects/-var-home-mlight--treehouse-firstmate-7bab20-1-firstmate/b1cc2ddb-e2c8-4fb6-b8a0-8aaa53fd2335.jsonl compact_generation=afd3c454-7eb0-45ab-8c60-ae7ad2d9a940","ts":"2026-07-08T21:22:06Z"}
+{"type":"compact_rotated","sid":"w3-compact","status":"rearmed","detail":"old_sid=b1cc2ddb-e2c8-4fb6-b8a0-8aaa53fd2335 new_sid=b1cc2ddb-e2c8-4fb6-b8a0-8aaa53fd2335 file=<home>/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/claude-config/projects/<claude-project-key>/b1cc2ddb-e2c8-4fb6-b8a0-8aaa53fd2335.jsonl compact_generation=afd3c454-7eb0-45ab-8c60-ae7ad2d9a940","ts":"2026-07-08T21:22:06Z"}
 ```
 
 The pane showed the watchdog-delivered command and Claude's compact result.
@@ -70,10 +70,10 @@ The watchdog armed the session, triggered clear, delivered `/clear`, observed a 
 The first detection pass happened after the scratch retry window had expired, so the scratch config was widened to `compact_pending_retry_sec=900` and the next pass recorded the already-present rotation.
 
 ```json
-{"type":"watchdog_session_armed","sid":"w3-clear","status":"armed","detail":"harness=claude sid=b1cc2ddb-e2c8-4fb6-b8a0-8aaa53fd2335 file=/var/home/mlight/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/claude-config/projects/-var-home-mlight--treehouse-firstmate-7bab20-1-firstmate/b1cc2ddb-e2c8-4fb6-b8a0-8aaa53fd2335.jsonl","ts":"2026-07-08T21:24:35Z"}
+{"type":"watchdog_session_armed","sid":"w3-clear","status":"armed","detail":"harness=claude sid=b1cc2ddb-e2c8-4fb6-b8a0-8aaa53fd2335 file=<home>/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/claude-config/projects/<claude-project-key>/b1cc2ddb-e2c8-4fb6-b8a0-8aaa53fd2335.jsonl","ts":"2026-07-08T21:24:35Z"}
 {"type":"clear_threshold","sid":"w3-clear","status":"triggered","detail":"context_pct=66 threshold=65 sid=b1cc2ddb-e2c8-4fb6-b8a0-8aaa53fd2335","ts":"2026-07-08T21:24:40Z"}
 {"type":"steer","sid":"w3-clear","status":"delivered","detail":"backend=tmux attempts=1","ts":"2026-07-08T21:24:40Z"}
-{"type":"clear_rotated","sid":"w3-clear","status":"successor_takeover","detail":"old_sid=b1cc2ddb-e2c8-4fb6-b8a0-8aaa53fd2335 new_sid=3ef87fdb-e3d5-4744-92c7-29630a2c6b17 file=/var/home/mlight/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/claude-config/projects/-var-home-mlight--treehouse-firstmate-7bab20-1-firstmate/3ef87fdb-e3d5-4744-92c7-29630a2c6b17.jsonl","ts":"2026-07-08T21:26:15Z"}
+{"type":"clear_rotated","sid":"w3-clear","status":"successor_takeover","detail":"old_sid=b1cc2ddb-e2c8-4fb6-b8a0-8aaa53fd2335 new_sid=3ef87fdb-e3d5-4744-92c7-29630a2c6b17 file=<home>/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/claude-config/projects/<claude-project-key>/3ef87fdb-e3d5-4744-92c7-29630a2c6b17.jsonl","ts":"2026-07-08T21:26:15Z"}
 {"type":"successor_complete","sid":"w3-clear","status":"succeeded","detail":"reason=clear_rotated","ts":"2026-07-08T21:26:15Z"}
 ```
 
@@ -95,8 +95,8 @@ Current production code writes each trigger to `fm-state/handoffs/handoff-<task>
 Successor spawn must consume the unique per-trigger handoff file, not the shared latest pointer.
 
 ```json
-{"type":"successor_spawn","sid":"w3-successor","status":"started","detail":"successor=w3-successor-next handoff=/var/home/mlight/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/fm-home/fm-state/handoff-latest.md brief=/var/home/mlight/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/fm-home/data/w3-successor-next/brief.md","ts":"2026-07-08T21:10:49Z"}
-{"type":"successor_spawn","sid":"w3-successor","status":"succeeded","detail":"successor=w3-successor-next handoff=/var/home/mlight/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/fm-home/fm-state/handoff-latest.md","ts":"2026-07-08T21:10:49Z"}
+{"type":"successor_spawn","sid":"w3-successor","status":"started","detail":"successor=w3-successor-next handoff=<home>/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/fm-home/fm-state/handoff-latest.md brief=<home>/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/fm-home/data/w3-successor-next/brief.md","ts":"2026-07-08T21:10:49Z"}
+{"type":"successor_spawn","sid":"w3-successor","status":"succeeded","detail":"successor=w3-successor-next handoff=<home>/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/fm-home/fm-state/handoff-latest.md","ts":"2026-07-08T21:10:49Z"}
 {"type":"predecessor_retired","sid":"w3-successor","status":"closed","detail":"successor=w3-successor-next","ts":"2026-07-08T21:10:49Z"}
 {"type":"successor_complete","sid":"w3-successor","status":"succeeded","detail":"reason=steer_undeliverable","ts":"2026-07-08T21:10:49Z"}
 ```
@@ -107,7 +107,7 @@ The prompt still demonstrates that the successor received and read the handoff c
 ```text
 You are a successor session for `w3-successor-next`.
 Read and continue from this handoff artifact:
-`/var/home/mlight/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/fm-home/fm-state/handoff-latest.md`.
+`<home>/.treehouse/firstmate-7bab20/1/firstmate/fm-scratch/w3-live/fm-home/fm-state/handoff-latest.md`.
 Predecessor: `w3-successor`.
 Reason: steer_undeliverable.
 Context percent: 50.

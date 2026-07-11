@@ -51,6 +51,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Tracked text must not contain personal references
+        run: bin/check-personal-references.sh
       - name: Symlinks must stay intact
         run: |
           set -eu
