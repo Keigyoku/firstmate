@@ -254,7 +254,7 @@ recorded_windows() {
 }
 
 watchdog_marker_key() {
-  printf '%s' "$1" | tr ':/.' '___'
+  fm_watchdog_marker_key "$1"
 }
 
 watchdog_check_rotation() {  # <task> <harness> <marker-file>
@@ -414,7 +414,7 @@ watchdog_start_clear_steer() {
 }
 
 watchdog_halt_file() {
-  printf '%s/fm-state/watchdog.halt\n' "$FM_HOME"
+  fm_watchdog_halt_file
 }
 
 watchdog_halted() {
@@ -426,44 +426,14 @@ watchdog_halted() {
 }
 
 watchdog_start_successor() {
-  local task=$1 context=$2 reason=$3 rc=${4:-} handoff latest tmp safe_task ts brief_path meta backend
+  local task=$1 context=$2 reason=$3 rc=${4:-} meta backend
   meta="$STATE/$task.meta"
   if [ -f "$meta" ] && ! watchdog_successor_supported "$meta"; then
     backend=$(fm_backend_of_meta "$meta")
     fm_watchdog_event successor_threshold "$task" skipped "context_pct=$context reason=$reason backend=$backend rc=$rc"
     return 0
   fi
-  safe_task=$(watchdog_marker_key "$task")
-  ts=$(date -u +%Y%m%dT%H%M%SZ)
-  handoff="$FM_HOME/fm-state/handoffs/handoff-${safe_task}-${ts}-${$}.md"
-  latest="$FM_HOME/fm-state/handoff-latest.md"
-  brief_path="$FM_HOME/data/$task/brief.md"
-  mkdir -p "$(dirname "$handoff")"
-  tmp=$(mktemp "${handoff}.tmp.XXXXXX")
-  {
-    printf '# Watchdog Handoff\n\n'
-    printf "Predecessor: \`%s\`.\n" "$task"
-    printf 'Reason: %s.\n' "$reason"
-    printf 'Context percent: %s.\n' "$context"
-    [ -z "$rc" ] || printf 'Steer rc: %s.\n' "$rc"
-    printf "Created: \`%s\`.\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    printf '\n## Original Brief\n\n'
-    if [ -f "$brief_path" ]; then
-      printf "Original brief path: \`%s\`.\n\n" "$brief_path"
-      printf '~~~~markdown\n'
-      cat "$brief_path"
-      printf '\n~~~~\n'
-    else
-      printf "Original brief path: \`%s\` was not present when this handoff was generated.\n" "$brief_path"
-    fi
-  } > "$tmp"
-  mv "$tmp" "$handoff"
-  cp "$handoff" "$latest" 2>/dev/null || true
-  fm_watchdog_event successor_threshold "$task" triggered "context_pct=$context reason=$reason handoff=$handoff rc=$rc"
-  if "$SCRIPT_DIR/fm-successor.sh" "$task" "$handoff"; then
-    fm_watchdog_event successor_complete "$task" succeeded "reason=$reason"
-  else
-    fm_watchdog_event successor_complete "$task" failed "reason=$reason"
+  if ! fm_watchdog_start_successor "$task" "$context" "$reason" "$rc"; then
     [ -s "$(watchdog_halt_file)" ] && exit 0
   fi
 }

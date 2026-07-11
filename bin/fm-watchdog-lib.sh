@@ -603,6 +603,52 @@ fm_watchdog_compact_generation() {
   esac
 }
 
+fm_watchdog_marker_key() {
+  printf '%s' "$1" | tr ':/.' '___'
+}
+
+fm_watchdog_halt_file() {
+  printf '%s/fm-state/watchdog.halt\n' "$FM_HOME"
+}
+
+fm_watchdog_start_successor() {
+  local task=$1 context=$2 reason=$3 rc=${4:-} handoff latest tmp safe_task ts brief_path successor_cmd
+  safe_task=$(fm_watchdog_marker_key "$task")
+  ts=$(date -u +%Y%m%dT%H%M%SZ)
+  handoff="$FM_HOME/fm-state/handoffs/handoff-${safe_task}-${ts}-${$}.md"
+  latest="$FM_HOME/fm-state/handoff-latest.md"
+  brief_path="$FM_HOME/data/$task/brief.md"
+  successor_cmd=${FM_WATCHDOG_SUCCESSOR_CMD:-$SCRIPT_DIR/fm-successor.sh}
+  mkdir -p "$(dirname "$handoff")"
+  tmp=$(mktemp "${handoff}.tmp.XXXXXX")
+  {
+    printf '# Watchdog Handoff\n\n'
+    printf "Predecessor: \`%s\`.\n" "$task"
+    printf 'Reason: %s.\n' "$reason"
+    printf 'Context percent: %s.\n' "$context"
+    [ -z "$rc" ] || printf 'Steer rc: %s.\n' "$rc"
+    printf "Created: \`%s\`.\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '\n## Original Brief\n\n'
+    if [ -f "$brief_path" ]; then
+      printf "Original brief path: \`%s\`.\n\n" "$brief_path"
+      printf '~~~~markdown\n'
+      cat "$brief_path"
+      printf '\n~~~~\n'
+    else
+      printf "Original brief path: \`%s\` was not present when this handoff was generated.\n" "$brief_path"
+    fi
+  } > "$tmp"
+  mv "$tmp" "$handoff"
+  cp "$handoff" "$latest" 2>/dev/null || true
+  fm_watchdog_event successor_threshold "$task" triggered "context_pct=$context reason=$reason handoff=$handoff rc=$rc"
+  if "$successor_cmd" "$task" "$handoff"; then
+    fm_watchdog_event successor_complete "$task" succeeded "reason=$reason"
+  else
+    fm_watchdog_event successor_complete "$task" failed "reason=$reason"
+    return 1
+  fi
+}
+
 fm_watchdog_write_metrics() {
   local path=$1 json=$2 tmp
   mkdir -p "$(dirname "$path")"
