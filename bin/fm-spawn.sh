@@ -287,6 +287,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
+  [ "$DRY_RUN" -eq 0 ] || shared_args+=(--dry-run)
   for pair in "${POS[@]}"; do
     case "$pair" in
       *=*) : ;;
