@@ -16,6 +16,7 @@ When tasks are in flight and there is no live identity-matched watcher with a fr
 ## Shared Predicate
 
 The guard first scopes itself to the real primary checkout.
+When `CLAUDE_PROJECT_DIR` is empty, it falls back to the hook process's physical working directory only after verifying that directory contains `AGENTS.md` and `bin/fm-turnend-guard.sh`.
 It is inert in secondmate homes because `.fm-secondmate-home` exists there.
 It is inert in crewmate and scout worktrees because firstmate provisions them as linked git worktrees, where `git rev-parse --git-dir` differs from `git rev-parse --git-common-dir`.
 It also requires `AGENTS.md`, `bin/`, and the effective state directory to exist.
@@ -24,6 +25,7 @@ For an in-scope primary checkout, it counts in-flight work from `state/*.meta`.
 If no task is in flight, it exits silently.
 If work is in flight, it requires `fm_watcher_healthy <state-dir> <watch-path> [grace-seconds] [home]` from `bin/fm-wake-lib.sh`.
 That is the same identity-matched live lock and fresh beacon check used by `bin/fm-watch-arm.sh`.
+Home and watcher paths are compared by physical identity so logical and physical spellings of the same symlinked directory match.
 A stale beacon blocks even if a watcher pid is still live.
 A fresh leftover beacon blocks if the watcher lock is missing, dead, or identity-mismatched.
 
@@ -35,7 +37,7 @@ If `jq` is missing or hook stdin is empty, the guard fails open and exits 0 beca
 
 All verified primary harnesses have a tracked integration:
 
-- `claude`: `.claude/settings.json` registers a `Stop` hook command anchored through `"$CLAUDE_PROJECT_DIR"/bin/fm-turnend-guard.sh`.
+- `claude`: `.claude/settings.json` registers a `Stop` hook command anchored through `CLAUDE_PROJECT_DIR`, with the same verified physical-working-directory fallback as the shared guard.
 - `codex`: `.codex/hooks.json` registers a `Stop` hook that reads the hook payload once, anchors the executable to the hook command process working directory, verifies that root is firstmate-shaped and hook-bearing, and pipes the original payload to that checkout's `bin/fm-turnend-guard.sh`.
 - `opencode`: `.opencode/plugins/fm-primary-turnend-guard.js` listens for `session.idle`, runs the shared guard, and uses `client.session.promptAsync` to force one follow-up prompt when the guard returns 2.
 - `pi`: `.pi/extensions/fm-primary-turnend-guard.ts` listens for `turn_end`, runs the shared guard, and uses `pi.sendUserMessage(..., { deliverAs: "followUp" })` to force one follow-up prompt when the guard returns 2.
@@ -102,6 +104,6 @@ If Grok declines to load project hooks, this primary guard fails open and `fm-gu
 
 ## Tests
 
-`tests/fm-turnend-guard.test.sh` covers the shared predicate, primary scoping, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, loop-safety, fail-open behavior without `jq`, tracked hook registration for all five harnesses, and the Grok adapter's forced-resume loop guard and permission-mode regression.
+`tests/fm-turnend-guard.test.sh` covers the shared predicate, primary scoping, unset `CLAUDE_PROJECT_DIR` fallback, physical identity matching for symlinked home paths, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, loop-safety, fail-open behavior without `jq`, tracked hook registration for all five harnesses, and the Grok adapter's forced-resume loop guard and permission-mode regression.
 These tests do not invoke live harnesses.
 Live harness validation is the empirical evidence recorded above.

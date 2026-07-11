@@ -136,7 +136,14 @@ make_crewmate_worktree_dir() {
 run_hook() {
   local dir=$1 stop_active=$2 home
   home=$(cd "$dir" && pwd)
-  printf '{"stop_hook_active":%s}' "$stop_active" | FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1
+  printf '{"stop_hook_active":%s}' "$stop_active" | CLAUDE_PROJECT_DIR="$home" FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1
+}
+
+run_hook_without_project_dir() {
+  local dir=$1 stop_active=$2
+  printf '{"stop_hook_active":%s}' "$stop_active" | (
+    cd "$dir" && env -u CLAUDE_PROJECT_DIR -u FM_HOME -u FM_ROOT_OVERRIDE -u FM_STATE_OVERRIDE bash bin/fm-turnend-guard.sh
+  ) 2>&1
 }
 
 nonexistent_pid() {
@@ -217,6 +224,67 @@ test_hook_silent_with_live_lock_and_fresh_beacon() {
   pass "fm-turnend-guard: silent no-op with a live watcher lock and fresh beacon"
 }
 
+test_hook_unset_project_dir_silent_with_healthy_watcher() {
+  local dir pid identity out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-unset-project-live")
+  : > "$dir/state/task1.meta"
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$dir" "$pid") || {
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    fail "could not identify live watcher holder"
+  }
+  record_watcher_lock "$dir" "$pid" "$identity"
+  touch "$dir/state/.last-watcher-beat"
+  out=$(run_hook_without_project_dir "$dir" false); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 0 "$status" "hook must derive the primary root from physical pwd when CLAUDE_PROJECT_DIR is unset"
+  [ -z "$out" ] || fail "hook produced output with an unset project dir and healthy watcher: $out"
+  pass "fm-turnend-guard: unset CLAUDE_PROJECT_DIR uses the verified physical hook cwd"
+}
+
+test_hook_unset_project_dir_blocks_with_dead_watcher() {
+  local dir dead out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-unset-project-dead")
+  dead=$(nonexistent_pid)
+  : > "$dir/state/task1.meta"
+  record_watcher_lock "$dir" "$dead" "dead watcher identity"
+  touch "$dir/state/.last-watcher-beat"
+  out=$(run_hook_without_project_dir "$dir" false); status=$?
+  expect_code 2 "$status" "hook must still block for a dead watcher when CLAUDE_PROJECT_DIR is unset"
+  assert_contains "$out" "$REQUIRED_REASON" "unset-project-dir dead watcher must retain the required alarm"
+  pass "fm-turnend-guard: unset CLAUDE_PROJECT_DIR still blocks for a dead watcher"
+}
+
+test_hook_accepts_logical_lock_paths_for_physical_home() {
+  local real logical pid identity out status
+  real=$(make_primary_dir "$TMP_ROOT/hook-physical-home")
+  logical="$TMP_ROOT/hook-logical-home"
+  ln -s "$real" "$logical"
+  : > "$real/state/task1.meta"
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$real" "$pid") || {
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    fail "could not identify live watcher holder"
+  }
+  mkdir -p "$real/state/.watch.lock"
+  printf '%s\n' "$pid" > "$real/state/.watch.lock/pid"
+  printf '%s\n' "$logical" > "$real/state/.watch.lock/fm-home"
+  printf '%s\n' "$logical/bin/fm-watch.sh" > "$real/state/.watch.lock/watcher-path"
+  printf '%s\n' "$identity" > "$real/state/.watch.lock/pid-identity"
+  touch "$real/state/.last-watcher-beat"
+  out=$(run_hook_without_project_dir "$real" false); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 0 "$status" "logical and physical spellings of the same home must identity-match"
+  [ -z "$out" ] || fail "hook produced output for equivalent logical and physical lock paths: $out"
+  pass "fm-turnend-guard: logical and physical home spellings share watcher identity"
+}
+
 test_hook_blocks_with_live_lock_and_stale_beacon() {
   local dir pid identity out status
   dir=$(make_primary_dir "$TMP_ROOT/hook-live-lock-stale")
@@ -255,7 +323,7 @@ test_hook_blocks_from_fm_home_state() {
   home="$TMP_ROOT/hook-fm-home-op"
   mkdir -p "$home/state"
   : > "$home/state/task1.meta"
-  out=$(printf '{"stop_hook_active":false}' | FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1); status=$?
+  out=$(printf '{"stop_hook_active":false}' | CLAUDE_PROJECT_DIR="$dir" FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1); status=$?
   expect_code 2 "$status" "hook must inspect the active FM_HOME state dir"
   assert_contains "$out" "$REQUIRED_REASON" "block reason must contain the exact required instruction"
   pass "fm-turnend-guard: blocks from active FM_HOME state, not only repo-root state"
@@ -267,7 +335,7 @@ test_hook_ignores_repo_state_when_fm_home_set() {
   home="$TMP_ROOT/hook-fm-home-quiet"
   mkdir -p "$home/state"
   : > "$dir/state/task1.meta"
-  out=$(printf '{"stop_hook_active":false}' | FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1); status=$?
+  out=$(printf '{"stop_hook_active":false}' | CLAUDE_PROJECT_DIR="$dir" FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1); status=$?
   expect_code 0 "$status" "hook must ignore repo-root state when FM_HOME selects another state dir"
   [ -z "$out" ] || fail "hook produced output from stale repo-root state despite FM_HOME: $out"
   pass "fm-turnend-guard: ignores stale repo-root state when FM_HOME is set"
@@ -280,7 +348,7 @@ test_hook_uses_state_override() {
   state="$TMP_ROOT/hook-state-override-active"
   mkdir -p "$home/state" "$state"
   : > "$state/task1.meta"
-  out=$(printf '{"stop_hook_active":false}' | FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$dir/bin/fm-turnend-guard.sh" 2>&1); status=$?
+  out=$(printf '{"stop_hook_active":false}' | CLAUDE_PROJECT_DIR="$dir" FM_HOME="$home" FM_STATE_OVERRIDE="$state" bash "$dir/bin/fm-turnend-guard.sh" 2>&1); status=$?
   expect_code 2 "$status" "hook must let FM_STATE_OVERRIDE win over FM_HOME/state"
   assert_contains "$out" "$REQUIRED_REASON" "block reason must contain the exact required instruction"
   pass "fm-turnend-guard: uses FM_STATE_OVERRIDE ahead of FM_HOME/state"
@@ -374,7 +442,7 @@ test_grok_adapter_forces_one_resume_when_unhealthy() {
 } >> "$log"
 EOF
   chmod +x "$fakebin/grok"
-  out=$(printf '{"sessionId":"session-test","hookEventName":"stop"}' | PATH="$fakebin:$PATH" GROK_WORKSPACE_ROOT="$dir" bash "$dir/bin/fm-turnend-guard-grok.sh" 2>&1); status=$?
+  out=$(printf '{"sessionId":"session-test","hookEventName":"stop"}' | (cd "$dir" && env -u CLAUDE_PROJECT_DIR PATH="$fakebin:$PATH" GROK_WORKSPACE_ROOT="$dir" bash "$dir/bin/fm-turnend-guard-grok.sh") 2>&1); status=$?
   expect_code 0 "$status" "grok adapter must fail open after queuing a forced resume"
   [ -z "$out" ] || fail "grok adapter printed output: $out"
   assert_contains "$(cat "$log")" 'active=1' "grok adapter must mark its forced resume as loop-guarded"
@@ -397,7 +465,7 @@ test_grok_adapter_loop_guard_skips_resume() {
 printf 'called\n' >> "$log"
 EOF
   chmod +x "$fakebin/grok"
-  out=$(printf '{"sessionId":"session-test","hookEventName":"stop"}' | PATH="$fakebin:$PATH" GROK_WORKSPACE_ROOT="$dir" GROK_TURNEND_GUARD_ACTIVE=1 bash "$dir/bin/fm-turnend-guard-grok.sh" 2>&1); status=$?
+  out=$(printf '{"sessionId":"session-test","hookEventName":"stop"}' | (cd "$dir" && env -u CLAUDE_PROJECT_DIR PATH="$fakebin:$PATH" GROK_WORKSPACE_ROOT="$dir" GROK_TURNEND_GUARD_ACTIVE=1 bash "$dir/bin/fm-turnend-guard-grok.sh") 2>&1); status=$?
   expect_code 0 "$status" "grok adapter must allow its own forced resume turn to end"
   [ -z "$out" ] || fail "grok adapter printed output while loop-guarded: $out"
   [ ! -e "$log" ] || fail "grok adapter spawned another resume while loop-guarded: $(cat "$log")"
@@ -411,13 +479,15 @@ test_settings_hook_uses_claude_project_dir() {
   command=$(jq -r '.hooks.Stop[0].hooks[0].command // empty' "$settings")
   [ -n "$command" ] || fail "Stop hook command is missing from .claude/settings.json"
   assert_contains "$command" 'CLAUDE_PROJECT_DIR' "Stop hook must resolve via CLAUDE_PROJECT_DIR, not a cwd-relative path"
+  assert_contains "$command" 'pwd -P' "Stop hook must fall back to the physical hook cwd when CLAUDE_PROJECT_DIR is unset"
+  assert_contains "$command" 'AGENTS.md' "Stop hook must verify the fallback root is firstmate-shaped"
   assert_contains "$command" 'fm-turnend-guard.sh' "Stop hook must still invoke fm-turnend-guard.sh"
   case "$command" in
     bin/fm-turnend-guard.sh|./bin/fm-turnend-guard.sh)
       fail "Stop hook must not use a bare relative path (cwd-dependent): $command"
       ;;
   esac
-  pass ".claude/settings.json: Stop hook uses CLAUDE_PROJECT_DIR-anchored command"
+  pass ".claude/settings.json: Stop hook uses CLAUDE_PROJECT_DIR with a verified physical-cwd fallback"
 }
 
 test_codex_hook_invokes_shared_guard() {
@@ -586,6 +656,9 @@ test_hook_silent_when_no_work_in_flight
 test_hook_blocks_when_fresh_beacon_has_no_live_lock
 test_hook_blocks_when_dead_lock_has_fresh_beacon
 test_hook_silent_with_live_lock_and_fresh_beacon
+test_hook_unset_project_dir_silent_with_healthy_watcher
+test_hook_unset_project_dir_blocks_with_dead_watcher
+test_hook_accepts_logical_lock_paths_for_physical_home
 test_hook_blocks_with_live_lock_and_stale_beacon
 test_hook_blocks_when_unhealthy_in_primary
 test_hook_blocks_from_fm_home_state
