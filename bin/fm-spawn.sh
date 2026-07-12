@@ -1025,6 +1025,19 @@ fi
 TASK_TMP="/tmp/fm-$ID"
 mkdir -p "$TASK_TMP/gotmp"
 
+# Crew/scout process-signal guard. The checker and PATH shims live in the
+# per-task temp root, so secondmate-owned crew spawns and every runtime backend
+# use the same installation without depending on the primary home's path.
+KILL_GUARD="$TASK_TMP/fm-crew-kill-guard.sh"
+KILL_SHIMS="$TASK_TMP/killguard-bin"
+if [ "$KIND" != secondmate ]; then
+  install -m 0700 "$FM_ROOT/bin/fm-crew-kill-guard.sh" "$KILL_GUARD"
+  mkdir -p "$KILL_SHIMS"
+  for kill_tool in pkill killall fuser; do
+    install -m 0700 "$FM_ROOT/bin/fm-crew-kill-shim.sh" "$KILL_SHIMS/$kill_tool"
+  done
+fi
+
 # Per-harness turn-end hook: a file that touches state/<id>.turn-ended when the
 # agent finishes a turn. Worktree-resident hooks are kept out of git's view so
 # they never block teardown's dirty check or leak into a commit.
@@ -1067,15 +1080,36 @@ if [ "$KIND" != secondmate ]; then
       adopt_hook_backup '.claude/settings.local.json'
       mkdir -p "$WT/.claude"
       cat > "$WT/.claude/settings.local.json" <<EOF
-{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"touch '$TURNEND'"}]}]}}
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"'$KILL_GUARD' --claude"}]}],"Stop":[{"hooks":[{"type":"command","command":"touch '$TURNEND'"}]}]}}
 EOF
       exclude_path '.claude/settings.local.json'
+      ;;
+    codex*)
+      adopt_hook_backup '.codex/hooks.json'
+      mkdir -p "$WT/.codex"
+      cat > "$WT/.codex/hooks.json" <<EOF
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"'$KILL_GUARD'","timeout":10}]}]}}
+EOF
+      exclude_path '.codex/hooks.json'
       ;;
     opencode*)
       adopt_hook_backup '.opencode/plugins/fm-turn-end.js'
       mkdir -p "$WT/.opencode/plugins"
       cat > "$WT/.opencode/plugins/fm-turn-end.js" <<EOF
+import { spawn } from "node:child_process";
+const check = (command) => new Promise((resolve) => {
+  const child = spawn("$KILL_GUARD", ["--command", command], { stdio: ["ignore", "ignore", "pipe"] });
+  let stderr = "";
+  child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+  child.on("error", () => resolve({ code: 2, stderr: "crew kill guard unavailable" }));
+  child.on("close", (code) => resolve({ code: code ?? 2, stderr }));
+});
 export const FmTurnEnd = async ({ \$ }) => ({
+  "tool.execute.before": async (input, output) => {
+    if (input?.tool !== "bash" || typeof output?.args?.command !== "string") return;
+    const result = await check(output.args.command);
+    if (result.code !== 0) throw new Error(result.stderr.trim() || "crew kill guard denied the command");
+  },
   event: async ({ event }) => {
     if (event.type === "session.idle") await \$\`touch $TURNEND\`
   },
@@ -1092,14 +1126,18 @@ EOF
 // Use "turn_end" (fires after each turn the agent finishes), not "agent_end"
 // (fires once, only when the whole run exits): the watcher needs a signal at
 // every turn boundary so an idle crewmate is surfaced, not just at shutdown.
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 export default function (pi: any) {
+  pi.on("tool_call", (event: any) => {
+    if (event.type !== "tool_call" || event.toolName !== "bash") return {};
+    const command = String(event.input?.command ?? "");
+    const result = spawnSync("$KILL_GUARD", ["--command", command], { encoding: "utf8" });
+    if (result.status === 0) return {};
+    return { block: true, reason: result.stderr.trim() || "crew kill guard denied the command" };
+  });
   pi.on("turn_end", () => execFile("touch", ["$TURNEND"]));
 }
 EOF
-      ;;
-    codex*)
-      # codex: turn-end rides the launch command via -c notify=[...] and __TURNEND__.
       ;;
     grok*)
       # grok fires a Stop hook at every turn boundary (verified, grok 0.2.73), the
@@ -1150,6 +1188,39 @@ EOF
       adopt_hook_backup '.fm-grok-turnend'
       printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-grok-turnend"
       exclude_path '.fm-grok-turnend'
+
+      # PreToolUse uses the same always-trusted global-hook plus opaque per-task
+      # pointer shape as turn-end. The registry entry contains only this task's
+      # copied checker path and is removed by teardown.
+      GROK_KILL_AUTH_DIR="$GROK_HOOKS_DIR/fm-kill-guard.d"
+      mkdir -p "$GROK_KILL_AUTH_DIR"
+      old_umask=$(umask)
+      umask 077
+      kill_auth_file=$(mktemp "$GROK_KILL_AUTH_DIR/fm.XXXXXXXXXXXX")
+      umask "$old_umask"
+      printf '%s\n' "$KILL_GUARD" > "$kill_auth_file"
+      printf '%s\n' "${kill_auth_file##*/}" > "$STATE/$ID.grok-killguard-token"
+      sq_grok_kill_auth_dir=$(shell_quote "$GROK_KILL_AUTH_DIR")
+      cat > "$GROK_HOOKS_DIR/fm-kill-guard.sh" <<EOF
+#!/usr/bin/env bash
+set -u
+auth_dir=$sq_grok_kill_auth_dir
+workspace=\${GROK_WORKSPACE_ROOT:-}
+[ -n "\$workspace" ] || exit 2
+p="\$workspace/.fm-grok-killguard"
+[ -f "\$p" ] || exit 2
+IFS= read -r token < "\$p" || exit 2
+case "\$token" in fm.????????????) : ;; *) exit 2 ;; esac
+checker=\$(cat "\$auth_dir/\$token" 2>/dev/null) || exit 2
+case "\$checker" in /tmp/fm-*/fm-crew-kill-guard.sh) : ;; *) exit 2 ;; esac
+exec "\$checker"
+EOF
+      chmod +x "$GROK_HOOKS_DIR/fm-kill-guard.sh"
+      hook_command=$(json_escape "bash $(shell_quote "$GROK_HOOKS_DIR/fm-kill-guard.sh")")
+      printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"%s"}]}]}}\n' "$hook_command" > "$GROK_HOOKS_DIR/fm-kill-guard.json"
+      adopt_hook_backup '.fm-grok-killguard'
+      printf '%s\n' "${kill_auth_file##*/}" > "$WT/.fm-grok-killguard"
+      exclude_path '.fm-grok-killguard'
       ;;
     cursor*)
       # cursor: no turn-end hook is wired. cursor-agent is Claude-Code-compatible but
@@ -1253,7 +1324,11 @@ fi
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
-spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
+if [ "$KIND" = secondmate ]; then
+  spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
+else
+  spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp PATH=$KILL_SHIMS:\$PATH"
+fi
 sleep 0.3
 spawn_send_literal "$T" "$LAUNCH"
 sleep 0.3
