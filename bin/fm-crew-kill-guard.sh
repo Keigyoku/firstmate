@@ -394,86 +394,6 @@ normalize_simple_command_words() {
   done
 }
 
-quote_remove_word() {
-  local src=$1 out='' i=0 char='' next='' quote='' hex='' oct=''
-  local len=${#src}
-  while [ "$i" -lt "$len" ]; do
-    char=${src:i:1}
-    if [ -z "$quote" ]; then
-      case "$char" in
-        "'") quote="'"; i=$((i + 1)); continue ;;
-        '"') quote='"'; i=$((i + 1)); continue ;;
-        '$')
-          if [ $((i + 1)) -lt "$len" ]; then
-            next=${src:i+1:1}
-            case "$next" in
-              "'") quote=ansi; i=$((i + 2)); continue ;;
-              '"') quote='"'; i=$((i + 2)); continue ;;
-            esac
-          fi
-          ;;
-        "\\")
-          if [ $((i + 1)) -lt "$len" ]; then
-            out+=${src:i+1:1}
-            i=$((i + 2))
-            continue
-          fi
-          ;;
-      esac
-    elif [ "$quote" = "'" ]; then
-      if [ "$char" = "'" ]; then quote=; i=$((i + 1)); continue; fi
-    elif [ "$quote" = ansi ]; then
-      if [ "$char" = "'" ]; then quote=; i=$((i + 1)); continue; fi
-      if [ "$char" = "\\" ] && [ $((i + 1)) -lt "$len" ]; then
-        next=${src:i+1:1}
-        case "$next" in
-          n) out+=$'\n'; i=$((i + 2)); continue ;;
-          r) out+=$'\r'; i=$((i + 2)); continue ;;
-          t) out+=$'\t'; i=$((i + 2)); continue ;;
-          a) out+=$'\a'; i=$((i + 2)); continue ;;
-          b) out+=$'\b'; i=$((i + 2)); continue ;;
-          e|E) out+=$'\e'; i=$((i + 2)); continue ;;
-          f) out+=$'\f'; i=$((i + 2)); continue ;;
-          v) out+=$'\v'; i=$((i + 2)); continue ;;
-          "\\"|"'"|'"'|\?) out+=$next; i=$((i + 2)); continue ;;
-          x)
-            hex=${src:i+2:2}
-            [[ $hex =~ ^[0-9A-Fa-f]{1,2}$ ]] || return 1
-            printf -v next '%b' "\\x$hex"
-            out+=$next
-            i=$((i + 2 + ${#hex}))
-            continue
-            ;;
-          [0-7])
-            oct=${src:i+1:3}
-            oct=${oct%%[!0-7]*}
-            printf -v next '%b' "\\$oct"
-            out+=$next
-            i=$((i + 1 + ${#oct}))
-            continue
-            ;;
-        esac
-        return 1
-      fi
-    else
-      if [ "$char" = '"' ]; then quote=; i=$((i + 1)); continue; fi
-      if [ "$char" = "\\" ] && [ $((i + 1)) -lt "$len" ]; then
-        next=${src:i+1:1}
-        case "$next" in '$'|'`'|'"'|"\\"|$'\n')
-          [ "$next" = $'\n' ] || out+=$next
-          i=$((i + 2))
-          continue
-          ;;
-        esac
-      fi
-    fi
-    out+=$char
-    i=$((i + 1))
-  done
-  [ -z "$quote" ] || return 1
-  printf '%s\n' "$out"
-}
-
 skip_sudo_options() {
   local -n _words=$1
   local i=$2 arg opt
@@ -887,19 +807,26 @@ line_heredoc_feeds_shell_interpreter() {
 }
 
 redact_non_shell_heredocs() {
-  local src=$1 out='' line='' after='' delimiter='' comparable='' strip_tabs=0 keep_body=0
+  local src=$1 out='' line='' delimiter='' comparable='' strip_tabs=0 keep_body=0
+  local idx=0 tok='' delimiter_idx=-1
   while IFS= read -r line || [ -n "$line" ]; do
     out+="$line"$'\n'
-    [[ $line == *'<<'* && $line != *'<<<'* ]] || continue
-    after=${line#*<<}
+    tokenize_command "$line" || continue
+    delimiter_idx=-1
     strip_tabs=0
-    if [[ $after == -* ]]; then
-      strip_tabs=1
-      after=${after#-}
-    fi
-    after=${after#"${after%%[![:space:]]*}"}
-    delimiter=${after%%[[:space:];&|()<>]*}
-    delimiter=$(quote_remove_word "$delimiter") || continue
+    idx=0
+    while [ "$idx" -lt "${#TOKENS[@]}" ]; do
+      tok=${TOKENS[$idx]}
+      if [ "$tok" = '<<' ] || [ "$tok" = '<<-' ]; then
+        delimiter_idx=$((idx + 1))
+        [ "$tok" = '<<-' ] && strip_tabs=1
+        break
+      fi
+      idx=$((idx + 1))
+    done
+    [ "$delimiter_idx" -ge 0 ] || continue
+    [ "$delimiter_idx" -lt "${#TOKENS[@]}" ] || continue
+    delimiter=${TOKENS[$delimiter_idx]}
     [ -n "$delimiter" ] || continue
     keep_body=1
     line_heredoc_feeds_shell_interpreter "$line" || keep_body=0
