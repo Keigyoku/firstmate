@@ -688,7 +688,54 @@ xargs_payload_is_denied() {
   xargs_cmd_subs=("${_subs[@]:$i}")
   # shellcheck disable=SC2034
   xargs_cmd_globs=("${_globs[@]:$i}")
+  xargs_payload_resolves_to_kill xargs_cmd_words xargs_cmd_subs xargs_cmd_globs && return 0
   command_words_are_denied xargs_cmd_words xargs_cmd_subs xargs_cmd_globs
+}
+
+is_test_builtin_name() {
+  case "$1" in '['|'[[') return 0 ;; *) return 1 ;; esac
+}
+
+xargs_payload_resolves_to_kill() {
+  local words_name=$1 subs_name=$2 globs_name=$3
+  local -n _words=$words_name
+  local -n _subs=$subs_name
+  local -n _globs=$globs_name
+  local normalized_words=()
+  local normalized_subs=()
+  local normalized_globs=()
+  local i=0 name
+  normalize_simple_command_words _words _subs normalized_words normalized_subs _globs normalized_globs
+  while [ "$i" -lt "${#normalized_words[@]}" ]; do
+    [[ ${normalized_words[$i]} == *=* && ${normalized_words[$i]} != /* ]] || break
+    i=$((i + 1))
+  done
+  while [ "$i" -lt "${#normalized_words[@]}" ] && is_reserved_intro "${normalized_words[$i]}"; do i=$((i + 1)); done
+  while [ "$i" -lt "${#normalized_words[@]}" ]; do
+    word_is_dynamic "${normalized_words[$i]}" && return 1
+    [ "${normalized_globs[$i]:-0}" -eq 0 ] || return 1
+    word_has_brace_expansion "${normalized_words[$i]}" && return 1
+    name=$(base_name "${normalized_words[$i]}")
+    case "$name" in
+      command) i=$(skip_command_options normalized_words $((i + 1))); continue ;;
+      builtin) i=$(skip_builtin_options normalized_words $((i + 1))); continue ;;
+      sudo) i=$(skip_sudo_options normalized_words $((i + 1))); i=$(skip_env_assignments normalized_words "$i"); continue ;;
+      env) i=$(skip_env_options normalized_words $((i + 1))); continue ;;
+      exec) i=$(skip_exec_options normalized_words $((i + 1))); continue ;;
+      busybox|toybox)
+        i=$((i + 1))
+        [ "$i" -lt "${#normalized_words[@]}" ] && [ "${normalized_words[$i]}" = -- ] && i=$((i + 1))
+        continue
+        ;;
+      time|gtime|nohup|setsid|timeout|gtimeout|nice|ionice|chrt|stdbuf|unbuffer)
+        i=$(skip_wrapper_options normalized_words $((i + 1)) "$name")
+        continue
+        ;;
+    esac
+    [ "$name" = kill ]
+    return
+  done
+  return 1
 }
 
 validate_kill_args() {
@@ -974,10 +1021,12 @@ command_words_are_denied() {
   while [ "$i" -lt "${#_cmd_words[@]}" ] && is_reserved_intro "${_cmd_words[$i]}"; do i=$((i + 1)); done
   [ "$i" -lt "${#_cmd_words[@]}" ] || return 1
   while [ "$i" -lt "${#_cmd_words[@]}" ]; do
-    word_is_dynamic "${_cmd_words[$i]}" && return 0
-    [ "${_cmd_globs[$i]:-0}" -eq 0 ] || return 0
-    word_has_brace_expansion "${_cmd_words[$i]}" && return 0
     name=$(base_name "${_cmd_words[$i]}")
+    if ! is_test_builtin_name "$name"; then
+      word_is_dynamic "${_cmd_words[$i]}" && return 0
+      [ "${_cmd_globs[$i]:-0}" -eq 0 ] || return 0
+      word_has_brace_expansion "${_cmd_words[$i]}" && return 0
+    fi
     case "$name" in
       shopt)
         if [ -n "$alias_expand_name" ]; then
@@ -1040,10 +1089,12 @@ command_words_are_denied() {
     break
   done
   [ "$i" -lt "${#_cmd_words[@]}" ] || return 1
-  word_is_dynamic "${_cmd_words[$i]}" && return 0
-  [ "${_cmd_globs[$i]:-0}" -eq 0 ] || return 0
-  word_has_brace_expansion "${_cmd_words[$i]}" && return 0
   name=$(base_name "${_cmd_words[$i]}")
+  if ! is_test_builtin_name "$name"; then
+    word_is_dynamic "${_cmd_words[$i]}" && return 0
+    [ "${_cmd_globs[$i]:-0}" -eq 0 ] || return 0
+    word_has_brace_expansion "${_cmd_words[$i]}" && return 0
+  fi
   if [ -n "$alias_expand_name" ] && [ -n "$alias_names_name" ] && [ -n "$alias_payloads_name" ]; then
     local -n _alias_expand_ref=$alias_expand_name
     local -n _alias_names_ref=$alias_names_name

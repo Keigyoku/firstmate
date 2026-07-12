@@ -184,6 +184,7 @@ pkill -f app
 EOF'
 expect_deny 'ps ax | grep gamescope | xargs -0 kill -9'
 expect_deny 'printf "%s\0" 123 | xargs -0 kill'
+expect_deny 'printf "%s\n" -1 | xargs kill -9 123'
 expect_deny 'printf "%s\n" 123 | xargs -I{} kill -9 {}'
 expect_deny 'xargs -a /tmp/pids kill -9'
 expect_deny 'xargs --arg-file=/tmp/pids kill'
@@ -267,6 +268,8 @@ expect_allow 'hash -p /bin/kill x; x 123'
 expect_allow 'hash -p /usr/bin/printf x; x "%s\n" pkill'
 expect_allow 'printf "%s\n" "alias x='"'"'pkill -f app'"'"'"'
 expect_allow $'# <<EOF\necho ok\nEOF'
+expect_allow '[[ -f AGENTS.md ]] && echo ok'
+expect_allow '[ -f AGENTS.md ] && echo ok'
 pass 'command policy denies sweeps and allows only explicit numeric PID kills'
 
 claude_out=$(printf '{"tool_input":{"command":"pkill -f tauri-driver"}}' | "$CHECK" --claude 2>"$TMP_ROOT/claude.err")
