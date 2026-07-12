@@ -104,6 +104,12 @@ Before changing it, inspect the current file and rewrite or prune the matching b
 Fleet-local operational facts and gotchas live locally in `data/learnings.md`; it is gitignored and printed right after `data/captain.md` in the session-start context digest.
 The file is created lazily on first learning and follows the same dated, evidence-backed, curated style as `data/captain.md`: inspect the current file first, then rewrite or prune stale entries instead of appending forever.
 
+## Marketing Crew Northstar pointer (data/marketing-crew-northstar.md)
+
+Marketing Crew uses `data/marketing-crew-northstar.md` as the optional fleet-local pointer to the machine-specific local clone of the Marketing Skills Northstar catalog.
+The file is gitignored and should name the absolute path to the local `marketingskills` clone, with any provenance note such as the upstream URL kept there instead of in tracked host-specific configuration.
+When the pointer is absent or the named path is missing, a Marketing Crew dispatch escalates `blocked: marketing Northstar path not configured` instead of guessing a host path.
+
 ## Secondmate routes (data/secondmates.md)
 
 Persistent secondmate routes live locally in `data/secondmates.md`.
