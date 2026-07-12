@@ -91,6 +91,6 @@ For a detailed supervisor return beyond the status line, write a doc under the h
 ## Non-negotiable safety rules
 
 - Never merge a PR.
-- Never rewrite or force-push the branch under review outside an authorized review-fix fix half.
+- Never rewrite or force-push the branch under review outside an authorized review-fix half.
 - Never claim GREEN from process or check names alone; findings and the verdict must match the actual head under review.
 - Never address the captain directly; escalate through firstmate via the status path the brief names.
