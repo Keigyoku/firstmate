@@ -73,8 +73,8 @@ fi
 
 # Every actual kill command must contain only signal options and literal numeric PIDs.
 rest=$flat
-while [[ $rest =~ (^|[\;\&\|\(][[:space:]]*|[[:space:]](then|do)[[:space:]]+)(command[[:space:]]+|sudo[[:space:]]+([^[:space:]]+[[:space:]]+)*)?([^[:space:]]*/)?kill([[:space:]]+[^\;\&\|\)]*)? ]]; do
-  args=${BASH_REMATCH[6]:-}
+while [[ $rest =~ (^|[\;\&\|\(][[:space:]]*|[[:space:]](then|do)[[:space:]]+)((command|builtin)[[:space:]]+|sudo[[:space:]]+([^[:space:]]+[[:space:]]+)*)?([^[:space:]]*/)?kill([[:space:]]+[^\;\&\|\)]*)? ]]; do
+  args=${BASH_REMATCH[7]:-}
   args=${args#"${args%%[![:space:]]*}"}
   [ -n "$args" ] || deny
   end_options=0

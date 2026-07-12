@@ -392,6 +392,9 @@ cleanup_successor_after_failure() {
   for residue in "$STATE/$successor.status" "$STATE/$successor.turn-ended" "$STATE/$successor.check.sh" "$STATE/$successor.pi-ext.ts" "$STATE/$successor.grok-turnend-token" "$STATE/$successor.grok-killguard-token"; do
     [ ! -e "$residue" ] || restore_needed=1
   done
+  if [ -f "$STATE/watchdog/adopt-hook-backups/$successor/manifest" ]; then
+    restore_needed=1
+  fi
   if [ -n "$predecessor_meta" ] && [ -n "$worktree" ] && successor_hook_points_to_id "$successor" "$predecessor_meta" "$worktree"; then
     restore_needed=1
   fi

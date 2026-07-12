@@ -187,6 +187,34 @@ if [ "${FM_SUCCESSOR_DOUBLE_CREATE_META:-0}" = 1 ]; then
         ;;
     esac
   fi
+  if [ "${FM_SUCCESSOR_DOUBLE_WRITE_HOOKS_WITHOUT_META:-0}" = 1 ]; then
+    id=$1
+    worktree=$2
+    harness=codex
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --adopt-worktree-path) shift; worktree=$1 ;;
+        --harness) shift; harness=$1 ;;
+      esac
+      shift
+    done
+    backup_dir="$FM_HOME/state/watchdog/adopt-hook-backups/$id"
+    mkdir -p "$backup_dir/files"
+    case "$harness" in
+      codex*)
+        target="$worktree/.codex/hooks.json"
+        if [ -e "$target" ]; then
+          mkdir -p "$backup_dir/files/.codex"
+          cp -p "$target" "$backup_dir/files/.codex/hooks.json"
+          printf 'file\t%s\n' '.codex/hooks.json' >> "$backup_dir/manifest"
+        else
+          printf 'absent\t%s\n' '.codex/hooks.json' >> "$backup_dir/manifest"
+        fi
+        mkdir -p "$worktree/.codex"
+        printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"'\''/tmp/fm-%s/fm-crew-kill-guard.sh'\''","timeout":10}]}]}}\n' "$id" > "$worktree/.codex/hooks.json"
+        ;;
+    esac
+  fi
   case "${FM_SUCCESSOR_DOUBLE_READY:-}" in
     status) printf 'working: accepted successor handoff\n' > "$FM_HOME/state/$id.status" ;;
     turn) : > "$FM_HOME/state/$id.turn-ended" ;;
@@ -762,6 +790,38 @@ test_partial_spawn_failure_cleans_successor_and_restores_hook() {
   pass "partial spawn failure cleans successor and restores hook"
 }
 
+test_partial_codex_spawn_failure_restores_from_backup_manifest() {
+  local home project worktree spawn_log spawn_double handoff status hooks halt artifact
+  home="$TMP_ROOT/partial-codex-failure-home"
+  project="$TMP_ROOT/partial-codex-failure-project"
+  worktree="$TMP_ROOT/partial-codex-failure-worktree"
+  spawn_log="$TMP_ROOT/partial-codex-failure-spawn.log"
+  spawn_double="$TMP_ROOT/partial-codex-failure-spawn-double"
+  mkdir -p "$home/state" "$home/fm-state" "$project" "$worktree/.codex"
+  handoff="$home/fm-state/handoff-partial-codex-failure.md"
+  printf 'handoff for partial Codex failing spawn\n' > "$handoff"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$project" "worktree=$worktree" "backend=tmux" "harness=codex" "mode=no-mistakes" "yolo=off"
+  hooks="$worktree/.codex/hooks.json"
+  printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"'\''/tmp/fm-demo/fm-crew-kill-guard.sh'\''","timeout":10}]}]}}\n' > "$hooks"
+  make_spawn_double "$spawn_double" "$spawn_log" 23
+
+  FM_HOME="$home" FM_SUCCESSOR_ID=demo-partial-codex-fails FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_SUCCESSOR_DOUBLE_WRITE_HOOKS_WITHOUT_META=1 \
+    "$ROOT/bin/fm-successor.sh" demo "$handoff" >/dev/null 2>&1
+  status=$?
+  expect_code 1 "$status" "partial failed Codex successor spawn should exit 1"
+  assert_present "$home/state/demo.meta" "predecessor meta should remain active after partial Codex spawn failure"
+  assert_absent "$home/state/demo-partial-codex-fails.meta" "partial Codex successor meta should not be required for cleanup"
+  halt="$home/fm-state/watchdog.halt"
+  assert_present "$halt" "partial Codex failed successor should set halt flag"
+  artifact=$(sed -n 's/^artifact=//p' "$halt")
+  assert_grep "spawn failed" "$artifact" "failure artifact should explain partial Codex spawn failure"
+  assert_grep '/tmp/fm-demo/fm-crew-kill-guard.sh' "$hooks" "Codex hook should be restored from backup manifest"
+  assert_no_grep '/tmp/fm-demo-partial-codex-fails/fm-crew-kill-guard.sh' "$hooks" "Codex hook should not remain targeted at failed successor"
+  assert_absent "$home/state/watchdog/adopt-hook-backups/demo-partial-codex-fails/manifest" "restored backup manifest should be consumed"
+  pass "partial Codex spawn failure restores from backup manifest"
+}
+
 test_invalid_x_link_halts_before_spawn() {
   local home spawn_log spawn_double handoff status halt artifact
   home="$TMP_ROOT/invalid-xlink-home"
@@ -1116,6 +1176,7 @@ test_successor_carries_x_followup_link
 test_successor_halts_when_predecessor_retire_fails
 test_spawn_failure_writes_halt_flag_and_failure_artifact
 test_partial_spawn_failure_cleans_successor_and_restores_hook
+test_partial_codex_spawn_failure_restores_from_backup_manifest
 test_invalid_x_link_halts_before_spawn
 test_watch_loop_clear_rotation_starts_successor_and_exits_when_halted
 test_watch_loop_skips_orca_successor_threshold

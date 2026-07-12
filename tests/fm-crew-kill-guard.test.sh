@@ -51,10 +51,13 @@ expect_deny 'bash -lc "kill $PID"'
 expect_deny '/usr/bin/env kill -9 -1'
 expect_deny '/usr/bin/env kill 123'
 expect_deny 'exec kill 123'
+expect_deny 'builtin kill -9 -1'
+expect_deny 'builtin kill -- 0'
 
 expect_allow 'kill 123'
 expect_allow 'kill -9 123 456'
 expect_allow 'command kill -TERM -- 789'
+expect_allow 'builtin kill -TERM -- 789'
 expect_allow 'printf "%s\n" "pkill is documented here"'
 pass 'command policy denies sweeps and allows only explicit numeric PID kills'
 
