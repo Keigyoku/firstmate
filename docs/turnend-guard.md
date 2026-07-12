@@ -12,7 +12,7 @@ The primary can otherwise end a turn after handling wakes without resuming super
 On 2026-07-04, that exact gap left a parked no-mistakes gate unwatched for about nine hours.
 
 `bin/fm-turnend-guard.sh` closes the gap by checking the primary's own turn-end path.
-When tasks are in flight and there is no live identity-matched watcher with a fresh beacon, a harness hook must either block the turn end or force a bounded follow-up turn that tells the primary to resume the session-start supervision protocol for its harness.
+When tasks are in flight and there is no live identity-matched watcher with a fresh beacon, or already-delivered wakes remain queued, a harness hook must either block the turn end or force a bounded follow-up turn that tells the primary to resume the session-start supervision protocol for its harness.
 
 ## Shared Predicate
 
@@ -39,6 +39,7 @@ The record includes the relevant hook environment, resolved roots, lock contents
 
 `FM_STATE_OVERRIDE` wins over `FM_HOME/state`, and `FM_HOME` wins over repo-root `state/`.
 `FM_GUARD_GRACE` controls the beacon freshness window and defaults to 300 seconds.
+`FM_TURNEND_LOCK_SETTLE` controls the bounded lock-publication settle window and defaults to 1 second.
 The local gitignored file `config/turnend-guard` disables the guard only when its value is exactly `off`.
 If `jq` is missing or hook stdin is empty, the guard fails open and exits 0 because it cannot safely read loop-guard fields.
 
@@ -141,6 +142,6 @@ See `docs/arm-pretool-check.md`'s "Harness wiring" section for the same Grok exp
 
 ## Tests
 
-`tests/fm-turnend-guard.test.sh` covers the shared predicate, primary scoping, unset `CLAUDE_PROJECT_DIR` fallback, physical identity matching for symlinked home paths, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, Pi logical-run latch behavior for no-tool and multi-tool runs, fail-open behavior without `jq`, tracked hook registration for all five harnesses, and the Grok adapter's forced-resume loop guard and permission-mode regression.
+`tests/fm-turnend-guard.test.sh` covers the shared predicate, primary scoping, unset `CLAUDE_PROJECT_DIR` fallback, physical identity matching for symlinked home paths, the bounded watcher-lock publication settle window, pending-wake blocking diagnostics, local `config/turnend-guard` disable behavior, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, Pi logical-run latch behavior for no-tool and multi-tool runs, fail-open behavior without `jq`, tracked hook registration for all five harnesses, and the Grok adapter's forced-resume loop guard and permission-mode regression.
 The default behavior suite does not invoke live language-model harnesses.
 `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` opts into the isolated interactive Pi regression recorded above.

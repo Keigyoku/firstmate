@@ -6,7 +6,8 @@
 #                used by fm-guard.sh and by the hook's banner details.
 #   HOOK       - bin/fm-turnend-guard.sh, the shared primary hook predicate that
 #                scopes in-flight work to the PRIMARY checkout only and requires
-#                a live, identity-matched watcher lock plus a fresh beacon.
+#                a live, identity-matched watcher lock, a fresh beacon, and no
+#                pending queued wakes.
 # All hermetic over temp dirs; no real agent session is invoked.
 set -u
 
