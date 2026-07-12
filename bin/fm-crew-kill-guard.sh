@@ -327,6 +327,10 @@ redirection_has_attached_operand() {
   [[ $1 =~ ^[0-9]+(<|>|>>|<\&|>\&|<>|>\||<<|<<-|<<<).+ ]]
 }
 
+numeric_fd_prefix_word() {
+  [[ $1 =~ ^[0-9]+$ ]]
+}
+
 normalize_simple_command_words() {
   local -n _in_words=$1
   local -n _in_subs=$2
@@ -337,6 +341,16 @@ normalize_simple_command_words() {
   _out_subs=()
   while [ "$i" -lt "${#_in_words[@]}" ]; do
     word=${_in_words[$i]}
+    if numeric_fd_prefix_word "$word" && [ $((i + 1)) -lt "${#_in_words[@]}" ]; then
+      if redirection_needs_operand "${_in_words[$((i + 1))]}"; then
+        i=$((i + 3))
+        continue
+      fi
+      if redirection_has_attached_operand "${_in_words[$((i + 1))]}"; then
+        i=$((i + 2))
+        continue
+      fi
+    fi
     if redirection_needs_operand "$word"; then
       i=$((i + 2))
       continue
@@ -741,6 +755,12 @@ line_heredoc_feeds_shell_interpreter() {
     if [ "$tok" = '<<' ] || [ "$tok" = '<<-' ]; then
       heredoc_idx=$idx
       delimiter_idx=$((idx + 1))
+      words+=("$tok")
+      subs+=("${TOKEN_SUBS[$idx]:-0}")
+      if [ "$delimiter_idx" -lt "${#TOKENS[@]}" ]; then
+        words+=("${TOKENS[$delimiter_idx]}")
+        subs+=("${TOKEN_SUBS[$delimiter_idx]:-0}")
+      fi
       break
     fi
     if is_command_separator "$tok"; then

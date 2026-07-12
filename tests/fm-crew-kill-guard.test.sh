@@ -108,7 +108,11 @@ expect_deny 'printf "pkill -f app" | bash'
 expect_deny "printf 'kill -9 -1' | bash"
 expect_deny 'bash <<< "kill -9 -1"'
 expect_deny 'bash<<<"kill -9 -1"'
+expect_deny "0<<<'pkill -f app' bash"
 expect_deny 'bash <<EOF
+pkill -f app
+EOF'
+expect_deny '0<<EOF bash
 pkill -f app
 EOF'
 expect_deny 'bash <<EOF; cat
@@ -192,6 +196,9 @@ expect_allow 'cat <<'"'EOF'"'; bash -c "echo ok"
 pkill -f app
 EOF'
 expect_allow '<<EOF cat
+pkill -f app
+EOF'
+expect_allow '0<<EOF cat
 pkill -f app
 EOF'
 expect_allow 'cat <<'"'EOF'"'
