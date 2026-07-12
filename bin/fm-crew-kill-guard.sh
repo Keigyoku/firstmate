@@ -385,31 +385,79 @@ skip_wrapper_options() {
   printf '%s\n' "$i"
 }
 
+skip_command_options() {
+  local -n _words=$1
+  local i=$2 arg
+  while [ "$i" -lt "${#_words[@]}" ]; do
+    arg=${_words[$i]}
+    [ "$arg" = -- ] && { printf '%s\n' $((i + 1)); return; }
+    case "$arg" in
+      -p) i=$((i + 1)); continue ;;
+      -v|-V) printf '%s\n' "${#_words[@]}"; return ;;
+      -*) printf '%s\n' "${#_words[@]}"; return ;;
+      *) break ;;
+    esac
+  done
+  printf '%s\n' "$i"
+}
+
+skip_exec_options() {
+  local -n _words=$1
+  local i=$2 arg
+  while [ "$i" -lt "${#_words[@]}" ]; do
+    arg=${_words[$i]}
+    [ "$arg" = -- ] && { printf '%s\n' $((i + 1)); return; }
+    case "$arg" in
+      -a) i=$((i + 2)); continue ;;
+      -c|-l) i=$((i + 1)); continue ;;
+      -*) printf '%s\n' "${#_words[@]}"; return ;;
+      *) break ;;
+    esac
+  done
+  printf '%s\n' "$i"
+}
+
 literal_payload_after_shell_c() {
   local -n _words=$1
-  local i=$2 arg after_c
+  local i=$2 arg cluster pos ch after_c
   while [ "$i" -lt "${#_words[@]}" ]; do
     arg=${_words[$i]}
     case "$arg" in
       --) return 1 ;;
-      --rcfile|--init-file) i=$((i + 2)); continue ;;
+      --rcfile|--init-file|--wordexp|--dump-po-strings) i=$((i + 2)); continue ;;
       --*) i=$((i + 1)); continue ;;
       -?*)
-        case "$arg" in *c*) ;; *) i=$((i + 1)); continue ;; esac
-      ;;
+        cluster=${arg#-}
+        pos=0
+        while [ "$pos" -lt "${#cluster}" ]; do
+          ch=${cluster:pos:1}
+          case "$ch" in
+            c)
+              after_c=${cluster:$((pos + 1))}
+              if [ -n "$after_c" ]; then
+                printf '%s\n' "$after_c"
+                return 0
+              fi
+              [ $((i + 1)) -lt "${#_words[@]}" ] || return 1
+              printf '%s\n' "${_words[$((i + 1))]}"
+              return 0
+              ;;
+            O|o)
+              if [ $((pos + 1)) -lt "${#cluster}" ]; then
+                i=$((i + 1))
+              else
+                i=$((i + 2))
+              fi
+              continue 2
+              ;;
+            *) pos=$((pos + 1)) ;;
+          esac
+        done
+        i=$((i + 1))
+        continue
+        ;;
       *) return 1 ;;
     esac
-    after_c=${arg#*c}
-    if [ "$after_c" != "$arg" ]; then
-      if [ -n "$after_c" ]; then
-        printf '%s\n' "$after_c"
-        return 0
-      fi
-      [ $((i + 1)) -lt "${#_words[@]}" ] || return 1
-      printf '%s\n' "${_words[$((i + 1))]}"
-      return 0
-    fi
-    i=$((i + 1))
   done
   return 1
 }
@@ -469,7 +517,9 @@ line_feeds_shell_interpreter() {
   while [ "$i" -lt "${#words[@]}" ]; do
     name=$(base_name "${words[$i]}")
     case "$name" in
-      command|builtin|exec) i=$((i + 1)); continue ;;
+      command) i=$(skip_command_options words $((i + 1))); continue ;;
+      builtin) i=$((i + 1)); continue ;;
+      exec) i=$(skip_exec_options words $((i + 1))); continue ;;
       sudo) i=$(skip_sudo_options words $((i + 1))); continue ;;
       env) i=$(skip_env_options words $((i + 1))); continue ;;
       time|gtime|nohup|setsid|timeout|gtimeout|nice|ionice|chrt|stdbuf|unbuffer)
@@ -534,7 +584,8 @@ command_words_are_denied() {
     word_is_dynamic "${_cmd_words[$i]}" && return 0
     name=$(base_name "${_cmd_words[$i]}")
     case "$name" in
-      command|builtin) direct_prefix=1; i=$((i + 1)); continue ;;
+      command) direct_prefix=1; i=$(skip_command_options _cmd_words $((i + 1))); continue ;;
+      builtin) direct_prefix=1; i=$((i + 1)); continue ;;
       sudo) direct_prefix=1; i=$(skip_sudo_options _cmd_words $((i + 1))); continue ;;
       env)
         env_split_payloads_are_denied _cmd_words $((i + 1)) && return 0
@@ -542,7 +593,7 @@ command_words_are_denied() {
         i=$(skip_env_options _cmd_words $((i + 1)))
         continue
         ;;
-      exec) wrapped=1; i=$((i + 1)); continue ;;
+      exec) wrapped=1; i=$(skip_exec_options _cmd_words $((i + 1))); continue ;;
       eval)
         payload=${_cmd_words[*]:$((i + 1))}
         [ -n "$payload" ] && command_string_is_denied "$payload" && return 0

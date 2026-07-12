@@ -56,8 +56,12 @@ expect_deny 'bash -lc "kill $PID"'
 expect_deny '/usr/bin/env kill -9 -1'
 expect_deny '/usr/bin/env kill 123'
 expect_deny 'exec kill 123'
+expect_deny 'exec -a x kill -9 -1'
+expect_deny 'exec -a x pkill -f app'
 expect_deny 'builtin kill -9 -1'
 expect_deny 'builtin kill -- 0'
+expect_deny 'command -p pkill -f app'
+expect_deny 'command -p kill -9 -1'
 expect_deny 'time kill -9 -1'
 expect_deny '/usr/bin/time kill -9 -1'
 expect_deny 'nohup kill -9 -1'
@@ -105,6 +109,8 @@ expect_deny "bash -c'kill -9 -1'"
 expect_deny "bash -lc'pkill -f app'"
 expect_deny "bash --norc -c 'kill -9 -1'"
 expect_deny "bash --rcfile /tmp/no-such-rc -c 'pkill -f app'"
+expect_deny "bash -O extglob -c 'pkill -f app'"
+expect_deny "bash -o pipefail -c 'kill -9 -1'"
 expect_deny "/usr/bin/env -S \"bash -c 'kill -9 -1'\""
 expect_deny "/usr/bin/env --split-string=\"bash -c 'pkill -f app'\""
 expect_deny "/usr/bin/env -Sbash -c 'kill -9 -1'"
@@ -116,6 +122,8 @@ expect_deny 'printf "%s\n" "`kill -9 -1`"'
 expect_allow 'kill 123'
 expect_allow 'kill -9 123 456'
 expect_allow 'command kill -TERM -- 789'
+expect_allow 'command -p kill -TERM -- 789'
+expect_allow 'command -v pkill'
 expect_allow 'builtin kill -TERM -- 789'
 expect_allow 'printf "%s\n" "pkill is documented here"'
 expect_allow "printf '%s\n' \$'pkill -f app'"
@@ -139,6 +147,8 @@ expect_allow 'bash <<EOF
 echo ok
 EOF'
 expect_allow "bash --norc -c 'echo ok'"
+expect_allow "bash -O extglob -c 'echo ok'"
+expect_allow "bash -o pipefail -c 'echo ok'"
 pass 'command policy denies sweeps and allows only explicit numeric PID kills'
 
 claude_out=$(printf '{"tool_input":{"command":"pkill -f tauri-driver"}}' | "$CHECK" --claude 2>"$TMP_ROOT/claude.err")
