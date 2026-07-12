@@ -90,6 +90,8 @@ Codex App support is recorded in `docs/codex-app-backend.md`; it is not selectab
 Crewmates never intentionally touch your project clone; [treehouse](https://github.com/kunchenguid/treehouse) pools clean worktrees for tmux, herdr, zellij, and cmux tasks, while Orca creates its own worktrees for `backend=orca`.
 For ship and scout work, `fm-spawn.sh` refuses to launch unless the resolved task path is a real git worktree root that is distinct from the project primary checkout.
 For treehouse-backed tasks, spawn performs that isolation check on physical paths, then records `worktree=` with the `$HOME` spelling when that spelling resolves to the same directory; teardown uses the same alternate spelling only after a "not managed by treehouse" return failure.
+Every crew and scout spawn also gets a per-task process-signaling guard that denies broad kill patterns before execution on verified hook-capable harnesses and installs refusal shims on `PATH`; secondmate primaries are exempt, but their own crew and scout spawns receive the same guard.
+The policy, hook coverage, scope limits, and hookless Cursor/Hermes gap live in [crew-kill-guard.md](crew-kill-guard.md).
 
 The firstmate repo has one extra exposure because it can dispatch crewmates to work on itself.
 Its operating checkout (`FM_ROOT`) and the disposable crewmate worktrees are all linked git worktrees of the same repository, so the valid discriminator is branch state, not whether the checkout is linked.

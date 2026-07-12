@@ -2,7 +2,7 @@
 # Behavior tests for Grok-harness hook authentication, teardown cleanup, and session-lock holder detection.
 set -u
 
-# shellcheck source=tests/lib.sh
+# shellcheck source=tests/lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 SPAWN="$ROOT/bin/fm-spawn.sh"
@@ -57,7 +57,7 @@ run_grok_spawn() {
 }
 
 test_grok_hook_requires_registered_token() {
-  local rec case_dir home proj wt fakebin grok_home id out status hook token target evil evil_target
+  local rec case_dir home proj wt fakebin grok_home id out status hook token target evil evil_target kill_hook kill_token
   rec=$(make_spawn_case hook-auth)
   IFS='|' read -r case_dir home proj wt fakebin grok_home id <<EOF
 $rec
@@ -92,6 +92,20 @@ EOF
   printf 'token=%s\n' "$token" > "$wt/.fm-grok-turnend"
   GROK_WORKSPACE_ROOT="$wt" bash "$hook"
   assert_present "$target" "registered grok pointer did not touch the task turn-end file"
+
+  kill_hook="$grok_home/hooks/fm-kill-guard.sh"
+  kill_token=$(cat "$wt/.fm-grok-killguard")
+  assert_present "$kill_hook" "grok kill hook script was not installed"
+  mkdir -p "$case_dir/no-task"
+  GROK_WORKSPACE_ROOT="$case_dir/no-task" bash "$kill_hook" </dev/null >/dev/null 2>&1
+  expect_code 0 "$?" "grok kill hook must no-op outside task workspaces"
+  printf 'not-a-token\n' > "$wt/.fm-grok-killguard"
+  GROK_WORKSPACE_ROOT="$wt" bash "$kill_hook" </dev/null >/dev/null 2>&1
+  expect_code 2 "$?" "grok kill hook must fail closed on invalid task pointer"
+  printf '%s\n' "$kill_token" > "$wt/.fm-grok-killguard"
+  printf '{"toolInput":{"command":"pkill -f tauri-driver"}}' | GROK_WORKSPACE_ROOT="$wt" bash "$kill_hook" >/dev/null 2>"$case_dir/kill.err"
+  expect_code 2 "$?" "grok kill hook must invoke the task checker"
+  assert_grep 'permissionDecision":"deny' "$case_dir/kill.err" "grok kill hook deny object missing"
   pass "grok global hook requires a firstmate registry token"
 }
 

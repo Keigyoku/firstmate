@@ -20,6 +20,8 @@ If you have changed away from the firstmate home in an interactive shell, invoke
 | `fm-guard.sh`            | Warn on primary-checkout tangles, pending queued wakes, and stale watcher liveness   |
 | `fm-turnend-guard.sh`    | Shared primary turn-end guard predicate so no turn ends blind (docs/turnend-guard.md) |
 | `fm-turnend-guard-grok.sh` | Grok Stop-hook adapter for the primary turn-end guard                              |
+| `fm-crew-kill-guard.sh`  | Shared crew/scout process-signaling guard predicate (docs/crew-kill-guard.md)       |
+| `fm-crew-kill-shim.sh`   | PATH refusal shim installed as `pkill`, `killall`, and `fuser` for crew/scout tasks |
 | `fm-arm-pretool-check.sh` | Stable PreToolUse transport for the watcher-arm command policy (docs/arm-pretool-check.md) |
 | `fm-arm-command-policy.mjs` | Semantic owner of the watcher-arm PreToolUse policy (docs/arm-pretool-check.md)   |
 | `fm-supervision-instructions.sh` | Render the session-start primary-harness supervision block or the one-line repair instruction |

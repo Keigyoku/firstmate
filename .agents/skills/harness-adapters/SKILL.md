@@ -26,8 +26,9 @@ If `config/crew-harness` is unset or `default`, there is no concrete value to in
 Inheritance also copies the literal `config/crew-dispatch.json` file, so secondmates apply the same best-fit profile rules for their own crewmates.
 
 Each adapter splits into mechanics and knowledge.
-The per-task mechanics, including launch command, autonomy flag, and crewmate turn-end hook, live in `bin/fm-spawn.sh`.
+The per-task mechanics, including launch command, autonomy flag, crewmate turn-end hook, and crew/scout process-signal guard installation, live in `bin/fm-spawn.sh`.
 The primary-session "no turn ends blind" guard contract and harness hook installation paths live in `docs/turnend-guard.md`.
+The crew/scout process-signal guard contract and hookless adapter gap live in `docs/crew-kill-guard.md`.
 The primary-session watcher wake protocols are rendered from `docs/supervision-protocols/` by `bin/fm-supervision-instructions.sh`.
 The supervision knowledge lives here: busy signature, exit command, interrupt, dialogs, resume behavior, skill invocation, and quirks.
 
@@ -63,6 +64,13 @@ Every verified primary harness also has a wired PreToolUse-equivalent hook that 
 `opencode` and `pi` block by throwing from `tool.execute.before` / returning `{block: true}` from `tool_call`.
 The exact hook files, commands, output-shaping quirks (Claude Code only honors the deny when stdout is empty), and validation transcripts are owned by `docs/arm-pretool-check.md`.
 When changing any primary PreToolUse hook, validate the real harness behavior in a scratch project before trusting it, then update that doc.
+
+## Crew process-signal guard
+
+Every non-secondmate crew or scout spawn installs a copied `bin/fm-crew-kill-guard.sh` checker plus PATH refusal shims for `pkill`, `killall`, and `fuser`.
+Claude, Codex, OpenCode, Pi, and Grok have wired PreToolUse-equivalent enforcement for shell commands; Cursor and Hermes currently have only the PATH shim because no verified pre-execution hook is available.
+Secondmate primaries are unrestricted, but crewmates and scouts spawned from a secondmate home receive the same guard because the checker is copied into the task temp root.
+When changing this guard or an adapter's crew hook, update `docs/crew-kill-guard.md` and validate the real harness behavior where the doc claims live coverage.
 
 ## Primary watcher supervision
 
@@ -255,7 +263,7 @@ In practice `fm-spawn` launches grok with the brief as its initial prompt, so a 
 Turn-end hook: grok fires a `Stop` hook at every turn boundary, giving firstmate a precise per-turn wake instead of only stale-pane detection.
 grok loads PROJECT hooks (`<worktree>/.grok/hooks/`, `<worktree>/.claude/settings.local.json`) only after the folder is granted hook-trust in `~/.grok/trusted_folders.toml`, which is not automatic and which firstmate will not establish by editing grok's own managed trust store.
 GLOBAL hooks in `~/.grok/hooks/` are always trusted and load on first launch.
-So `fm-spawn` installs ONE firstmate-owned global hook, `~/.grok/hooks/fm-turn-end.json`, plus the companion `~/.grok/hooks/fm-turn-end.sh`, guarded as a no-op for every non-firstmate grok session.
+So for turn-end, `fm-spawn` installs one firstmate-owned global hook, `~/.grok/hooks/fm-turn-end.json`, plus the companion `~/.grok/hooks/fm-turn-end.sh`, guarded as a no-op for every non-firstmate grok session.
 Its `Stop` command fires only when the current workspace holds a `.fm-grok-turnend` token pointer that matches the firstmate-owned hook registry under `~/.grok/hooks/fm-turn-end.d/`.
 `fm-spawn` writes that per-task pointer (`<worktree>/.fm-grok-turnend`, gitignored via git info/exclude like the other harnesses' worktree hook files) and a matching registry entry naming this task's `state/<id>.turn-ended`.
 The hook reads `$GROK_WORKSPACE_ROOT`, which is always set for hooks and equals the worktree.
