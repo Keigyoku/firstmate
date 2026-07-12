@@ -53,6 +53,10 @@ expect_deny '/usr/bin/env kill 123'
 expect_deny 'exec kill 123'
 expect_deny 'builtin kill -9 -1'
 expect_deny 'builtin kill -- 0'
+expect_deny 'time kill -9 -1'
+expect_deny 'nohup kill -9 -1'
+expect_deny 'setsid kill -9 -1'
+expect_deny 'timeout 1 kill -9 -1'
 
 expect_allow 'kill 123'
 expect_allow 'kill -9 123 456'
@@ -80,10 +84,13 @@ spawn=$(cat "$ROOT/bin/fm-spawn.sh")
 for needle in \
   'KILL_SHIMS="$TASK_TMP/killguard-bin"' \
   'PreToolUse' \
+  '--dangerously-bypass-hook-trust -c "notify=' \
+  '-c __CODEXKILLHOOK__' \
   '"tool.execute.before"' \
   'pi.on("tool_call"' \
   'fm-kill-guard.d' \
   'PATH=$KILL_SHIMS:\$PATH'; do
   assert_contains "$spawn" "$needle" "spawn wiring missing: $needle"
 done
+assert_not_contains "$spawn" 'cat > "$WT/.codex/hooks.json"' 'codex spawn must not overwrite project hooks.json'
 pass 'spawn structurally wires every hook-capable adapter and PATH defense'

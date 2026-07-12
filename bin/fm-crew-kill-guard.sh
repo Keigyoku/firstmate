@@ -55,6 +55,7 @@ if [[ $flat =~ (^|[\;\&\|\(][[:space:]]*|[[:space:]](then|do)[[:space:]]+)(comma
 fi
 if [[ $flat =~ (^|[[:space:]/])(bash|sh|zsh|dash|ksh)[[:space:]][^\;\&\|]*-[^[:space:]]*c[[:space:]][^\;\&\|]*([^[:space:]]*/)?kill([[:space:]]|$) ]] ||
    [[ $flat =~ (^|[[:space:]/])(eval|exec)[[:space:]][^\;\&\|]*([^[:space:]]*/)?kill([[:space:]]|$) ]] ||
+   [[ $flat =~ (^|[\;\&\|\(][[:space:]]*|[[:space:]](then|do)[[:space:]]+)(time([[:space:]]+-[^[:space:]]+)*|([^[:space:]]*/)?(nohup|setsid)|([^[:space:]]*/)?timeout([[:space:]]+-[^[:space:]]+)*[[:space:]]+[^[:space:]]+)[[:space:]]+([^[:space:]]*/)?kill([[:space:]]|$) ]] ||
    [[ $flat =~ (^|[\;\&\|\(][[:space:]]*|[[:space:]](then|do)[[:space:]]+)(([^[:space:]]*/)?env[[:space:]]+([^[:space:]=]+=[^[:space:]]+[[:space:]]+|-[^[:space:]]+[[:space:]]+)*)+([^[:space:]]*/)?kill([[:space:]]|$) ]]; then
   deny
 fi

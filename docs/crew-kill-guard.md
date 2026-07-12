@@ -17,7 +17,7 @@ Its denial tells the agent to use only individually verified numeric PIDs owned 
 | Adapter | Enforcement |
 | --- | --- |
 | Claude | A worktree-local `PreToolUse` Bash hook invokes the copied checker with `--claude`, which leaves stdout empty on denial. |
-| Codex | A worktree-local `PreToolUse` Bash hook invokes the copied checker and blocks on exit 2. |
+| Codex | Per-launch hook config registers a `PreToolUse` Bash hook that invokes the copied checker and blocks on exit 2, without rewriting project-owned `.codex/hooks.json`. |
 | OpenCode | The generated task plugin invokes the checker from `tool.execute.before` and throws on every nonzero result. |
 | Pi | The generated task extension invokes the checker from `tool_call` and returns `{ block: true }` on every nonzero result. |
 | Grok | An always-trusted global `PreToolUse` hook resolves an opaque per-task pointer through a mode-0700 registry entry, then invokes the copied checker. |
@@ -29,7 +29,7 @@ This is defense in depth for hook-capable adapters and the available enforcement
 An absolute utility path bypasses the shim, so the hook layer is the real gate where the adapter supports one.
 A shell builtin or absolute `kill` also bypasses PATH, which is why hookless adapters cannot provide the same structural guarantee for grep-derived kill forms.
 
-The per-task checker, shims, Grok registry entry, pointer, and generated hook files are removed during teardown.
+The per-task checker, shims, Grok registry entry, pointer, and generated worktree hook files are removed during teardown.
 
 ## Live verification, 2026-07-12
 

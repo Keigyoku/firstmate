@@ -363,7 +363,7 @@ launch_template() {
       if [ "$kind" = secondmate ]; then
         printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(cat __BRIEF__)"'
       else
-        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(cat __BRIEF__)"'
+        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" -c __CODEXKILLHOOK__ "$(cat __BRIEF__)"'
       fi
       ;;
     opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "$(cat __BRIEF__)"' ;;
@@ -1085,12 +1085,7 @@ EOF
       exclude_path '.claude/settings.local.json'
       ;;
     codex*)
-      adopt_hook_backup '.codex/hooks.json'
-      mkdir -p "$WT/.codex"
-      cat > "$WT/.codex/hooks.json" <<EOF
-{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"'$KILL_GUARD'","timeout":10}]}]}}
-EOF
-      exclude_path '.codex/hooks.json'
+      :
       ;;
     opencode*)
       adopt_hook_backup '.opencode/plugins/fm-turn-end.js'
@@ -1309,6 +1304,7 @@ sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
 sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts")
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
+sq_codexkillhook=$(shell_quote "hooks.PreToolUse=[{matcher=\"Bash\",hooks=[{type=\"command\",command=\"$KILL_GUARD\",timeout=10}]}]")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL" "$EFFORT")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
@@ -1318,6 +1314,7 @@ LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
 LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
 LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
+LAUNCH=${LAUNCH//__CODEXKILLHOOK__/$sq_codexkillhook}
 if [ "$KIND" = secondmate ]; then
   sq_home=$(shell_quote "$PROJ_ABS")
   LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home $LAUNCH"

@@ -281,6 +281,41 @@ test_codex_omits_invalid_max_effort() {
   pass "codex omits unsupported max effort instead of passing a bad config value"
 }
 
+test_codex_preserves_project_hooks_json() {
+  local case_dir home proj wt fakebin launchlog id before after out status launch git_status
+  id=profile-codex-hooks-z17
+  case_dir="$TMP_ROOT/codex-hooks"
+  home="$case_dir/home"
+  proj="$case_dir/project"
+  wt="$case_dir/wt"
+  launchlog="$case_dir/launch.log"
+  fakebin=$(make_spawn_fakebin "$case_dir/fake")
+  mkdir -p "$home/data/$id" "$home/projects" "$home/state" "$home/config"
+  printf 'brief for %s\n' "$id" > "$home/data/$id/brief.md"
+  printf '%s\n' codex > "$home/config/crew-harness"
+  touch "$home/state/.last-watcher-beat"
+  fm_git_init_commit "$proj"
+  mkdir -p "$proj/.codex"
+  before='{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"project-owned"}]}]}}'
+  printf '%s\n' "$before" > "$proj/.codex/hooks.json"
+  git -C "$proj" add .codex/hooks.json
+  git -C "$proj" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm hooks
+  git -C "$proj" worktree add --quiet -b "wt-$id" "$wt"
+
+  out=$(run_spawn "$home" "$wt" "$fakebin" "$launchlog" "$id" "$proj" --model gpt-5 --effort high)
+  status=$?
+  expect_code 0 "$status" "codex spawn with project hooks should succeed"
+  assert_contains "$out" "spawned $id harness=codex" "spawn did not report codex"
+  after=$(cat "$wt/.codex/hooks.json")
+  [ "$after" = "$before" ] || fail "codex spawn changed project hooks.json"$'\n'"expected: $before"$'\n'"actual:   $after"
+  git_status=$(git -C "$wt" status --short -- .codex/hooks.json)
+  [ -z "$git_status" ] || fail "codex spawn dirtied tracked hooks.json: $git_status"
+  launch=$(cat "$launchlog")
+  assert_contains "$launch" "-c 'hooks.PreToolUse=[{matcher=\"Bash\",hooks=[{type=\"command\",command=\"/tmp/fm-$id/fm-crew-kill-guard.sh\",timeout=10}]}]'" \
+    "codex launch did not carry per-launch kill guard hook"
+  pass "codex spawn preserves tracked project hooks.json"
+}
+
 test_grok_threads_model_and_reasoning_effort() {
   local rec id out status launch
   id=profile-grok-z5
@@ -398,6 +433,7 @@ test_active_dispatch_profile_allows_raw_launch_command
 test_claude_threads_model_and_effort
 test_codex_threads_model_and_effort
 test_codex_omits_invalid_max_effort
+test_codex_preserves_project_hooks_json
 test_grok_threads_model_and_reasoning_effort
 test_grok_omits_invalid_max_reasoning_effort
 test_opencode_threads_model_and_ignores_effort_axis
