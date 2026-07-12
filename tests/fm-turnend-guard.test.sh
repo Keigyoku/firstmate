@@ -6,7 +6,8 @@
 #                used by fm-guard.sh and by the hook's banner details.
 #   HOOK       - bin/fm-turnend-guard.sh, the shared primary hook predicate that
 #                scopes in-flight work to the PRIMARY checkout only and requires
-#                a live, identity-matched watcher lock plus a fresh beacon.
+#                a live, identity-matched watcher lock, a fresh beacon, and no
+#                pending queued wakes.
 # All hermetic over temp dirs; no real agent session is invoked.
 set -u
 
@@ -150,6 +151,15 @@ run_hook_without_project_dir() {
   ) 2>&1
 }
 
+run_claude_stop_hook() {
+  local dir=$1
+  # shellcheck disable=SC2016 # This is the literal tracked /bin/sh hook command.
+  printf '{"stop_hook_active":false}' | (
+    cd "$dir" && env -u CLAUDE_PROJECT_DIR -u FM_HOME -u FM_ROOT_OVERRIDE -u FM_STATE_OVERRIDE \
+      /bin/sh -c 'payload=$(cat); root=${CLAUDE_PROJECT_DIR:-$(pwd -P)}; printf "%s" "$payload" | "$root/bin/fm-turnend-guard.sh"'
+  ) 2>&1
+}
+
 nonexistent_pid() {
   local pid=999999
   while kill -0 "$pid" 2>/dev/null; do
@@ -194,6 +204,62 @@ test_hook_blocks_when_fresh_beacon_has_no_live_lock() {
   pass "fm-turnend-guard: blocks when a fresh beacon has no live watcher lock"
 }
 
+test_hook_blocks_when_local_disable_absent() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-disable-absent")
+  : > "$dir/state/task1.meta"
+  out=$(run_hook "$dir" false); status=$?
+  expect_code 2 "$status" "hook must remain enabled when config/turnend-guard is absent"
+  assert_contains "$out" "TURN WOULD END BLIND" "absent local disable must preserve the blocking alarm"
+  pass "fm-turnend-guard: absent local disable preserves blocking behavior"
+}
+
+test_hook_blocks_when_local_disable_is_not_exact_off() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-disable-not-exact")
+  mkdir -p "$dir/config"
+  printf 'off \n' > "$dir/config/turnend-guard"
+  : > "$dir/state/task1.meta"
+  out=$(run_hook "$dir" false); status=$?
+  expect_code 2 "$status" "hook must remain enabled unless config/turnend-guard is exactly off"
+  assert_contains "$out" "TURN WOULD END BLIND" "non-exact local disable must preserve the blocking alarm"
+  pass "fm-turnend-guard: non-exact local disable remains enabled"
+}
+
+test_hook_local_disable_off_suppresses_blocking_path() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-disable-block")
+  mkdir -p "$dir/config"
+  printf 'off\n' > "$dir/config/turnend-guard"
+  : > "$dir/state/task1.meta"
+  out=$(run_hook "$dir" false); status=$?
+  expect_code 0 "$status" "config/turnend-guard=off must suppress the blocking path"
+  [ -z "$out" ] || fail "disabled hook produced blocking output: $out"
+  pass "fm-turnend-guard: local off disables the blocking path"
+}
+
+test_hook_local_disable_off_suppresses_warning_path() {
+  local dir pid identity out status diagnostic
+  dir=$(make_primary_dir "$TMP_ROOT/hook-disable-warning")
+  mkdir -p "$dir/config"
+  printf 'off\n' > "$dir/config/turnend-guard"
+  : > "$dir/state/task1.meta"
+  printf 'wake pending\n' > "$dir/state/.wake-queue"
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$dir" "$pid") || fail "could not identify live watcher holder"
+  record_watcher_lock "$dir" "$pid" "$identity"
+  touch "$dir/state/.last-watcher-beat"
+  out=$(run_hook "$dir" false); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  diagnostic="$dir/fm-state/turnend-guard-diagnostics.log"
+  expect_code 0 "$status" "config/turnend-guard=off must suppress the warning path"
+  [ -z "$out" ] || fail "disabled hook produced warning output: $out"
+  [ ! -e "$diagnostic" ] || fail "disabled hook wrote a warning diagnostic"
+  pass "fm-turnend-guard: local off disables the warning path"
+}
+
 test_hook_blocks_when_dead_lock_has_fresh_beacon() {
   local dir dead out status
   dir=$(make_primary_dir "$TMP_ROOT/hook-dead-lock-fresh")
@@ -226,6 +292,52 @@ test_hook_silent_with_live_lock_and_fresh_beacon() {
   expect_code 0 "$status" "hook must exit 0 with a live identity-matched watcher lock and fresh beacon"
   [ -z "$out" ] || fail "hook produced output despite a live fresh watcher lock: $out"
   pass "fm-turnend-guard: silent no-op with a live watcher lock and fresh beacon"
+}
+
+test_claude_hook_waits_for_live_lock_publication() {
+  local dir pid identity out status lock
+  dir=$(make_primary_dir "$TMP_ROOT/hook-live-lock-publishing")
+  : > "$dir/state/task1.meta"
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$dir" "$pid") || fail "could not identify live watcher holder"
+  lock="$dir/state/.watch.lock"
+  mkdir -p "$lock"
+  printf '%s\n' "$pid" > "$lock/pid"
+  touch "$dir/state/.last-watcher-beat"
+  (
+    sleep 0.2
+    printf '%s\n' "$dir" > "$lock/fm-home"
+    printf '%s\n' "$dir/bin/fm-watch.sh" > "$lock/watcher-path"
+    printf '%s\n' "$identity" > "$lock/pid-identity"
+  ) &
+  out=$(run_claude_stop_hook "$dir"); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 0 "$status" "Claude Stop hook must tolerate the live watcher's bounded lock-publication window"
+  [ -z "$out" ] || fail "Claude Stop hook warned while the live watcher finished publishing its lock: $out"
+  pass "fm-turnend-guard: Claude /bin/sh Stop context tolerates live lock publication"
+}
+
+test_hook_blocks_with_pending_queue_despite_healthy_watcher() {
+  local dir pid identity out status diagnostic
+  dir=$(make_primary_dir "$TMP_ROOT/hook-live-lock-queued-wake")
+  : > "$dir/state/task1.meta"
+  printf 'wake pending\n' > "$dir/state/.wake-queue"
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$dir" "$pid") || fail "could not identify live watcher holder"
+  record_watcher_lock "$dir" "$pid" "$identity"
+  touch "$dir/state/.last-watcher-beat"
+  out=$(run_hook "$dir" false); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 2 "$status" "hook must block while queued wakes are pending"
+  diagnostic="$dir/fm-state/turnend-guard-diagnostics.log"
+  [ -f "$diagnostic" ] || fail "warning decision must create a diagnostic artifact"
+  assert_contains "$(cat "$diagnostic")" 'predicate.queue_pending=true' "diagnostic must explain the queued-wake verdict"
+  assert_contains "$(cat "$diagnostic")" 'predicate.watcher_healthy=true' "diagnostic must preserve the healthy-watcher verdict"
+  pass "fm-turnend-guard: pending wakes block and produce a self-explaining diagnostic"
 }
 
 test_hook_unset_project_dir_silent_with_healthy_watcher() {
@@ -790,8 +902,14 @@ test_predicate_healthy_fresh_beacon
 test_predicate_queue_pending_flag
 test_hook_silent_when_no_work_in_flight
 test_hook_blocks_when_fresh_beacon_has_no_live_lock
+test_hook_blocks_when_local_disable_absent
+test_hook_blocks_when_local_disable_is_not_exact_off
+test_hook_local_disable_off_suppresses_blocking_path
+test_hook_local_disable_off_suppresses_warning_path
 test_hook_blocks_when_dead_lock_has_fresh_beacon
 test_hook_silent_with_live_lock_and_fresh_beacon
+test_claude_hook_waits_for_live_lock_publication
+test_hook_blocks_with_pending_queue_despite_healthy_watcher
 test_hook_unset_project_dir_silent_with_healthy_watcher
 test_hook_unset_project_dir_blocks_with_dead_watcher
 test_hook_accepts_logical_lock_paths_for_physical_home

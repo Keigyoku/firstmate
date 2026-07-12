@@ -12,7 +12,7 @@ The primary can otherwise end a turn after handling wakes without resuming super
 On 2026-07-04, that exact gap left a parked no-mistakes gate unwatched for about nine hours.
 
 `bin/fm-turnend-guard.sh` closes the gap by checking the primary's own turn-end path.
-When tasks are in flight and there is no live identity-matched watcher with a fresh beacon, a harness hook must either block the turn end or force a bounded follow-up turn that tells the primary to resume the session-start supervision protocol for its harness.
+When tasks are in flight and there is no live identity-matched watcher with a fresh beacon, or already-delivered wakes remain queued, a harness hook must either block the turn end or force a bounded follow-up turn that tells the primary to resume the session-start supervision protocol for its harness.
 
 ## Shared Predicate
 
@@ -29,9 +29,18 @@ That is the same identity-matched live lock and fresh beacon check used by `bin/
 Home and watcher paths are compared by physical identity so logical and physical spellings of the same symlinked directory match.
 A stale beacon blocks even if a watcher pid is still live.
 A fresh leftover beacon blocks if the watcher lock is missing, dead, or identity-mismatched.
+The watcher lock is published by the generic singleton helper before `fm-watch.sh` adds its home, path, and process-identity fields.
+The turn-end guard therefore gives a live holder with a fresh beacon and a newly published lock one bounded second to finish those fields, then applies the same identity checks again.
+It does not wait for a dead holder, stale beacon, or older identity mismatch.
+Pending records in `state/.wake-queue` block the turn end even when the watcher itself is healthy, so the primary must drain already-delivered work before stopping.
+
+Whenever the guard blocks, it appends the complete decision inputs and individual predicate verdicts to the size-capped, gitignored `fm-state/turnend-guard-diagnostics.log`.
+The record includes the relevant hook environment, resolved roots, lock contents and physical paths, PID liveness and identity, beacon mtime and age, and queue and watcher verdicts.
 
 `FM_STATE_OVERRIDE` wins over `FM_HOME/state`, and `FM_HOME` wins over repo-root `state/`.
 `FM_GUARD_GRACE` controls the beacon freshness window and defaults to 300 seconds.
+`FM_TURNEND_LOCK_SETTLE` controls the bounded lock-publication settle window and defaults to 1 second.
+The local gitignored file `config/turnend-guard` disables the guard only when its value is exactly `off`.
 If `jq` is missing or hook stdin is empty, the guard fails open and exits 0 because it cannot safely read loop-guard fields.
 
 ## Harness Integrations
@@ -60,6 +69,23 @@ That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it poin
 ## Empirical Validation
 
 All harnesses were validated on 2026-07-08 in scratch repos or throwaway homes, not against the captain's live primary fleet state.
+
+The residual Claude false-positive fix was validated on 2026-07-12 in a disposable primary-shaped clone and home with Claude Code 2.1.193.
+The hermetic reproduction command was `bash tests/fm-turnend-guard.test.sh`.
+Its hook-context regression invokes the tracked Stop command shape through `/bin/sh`, starts with a fresh beacon and a live lock PID whose watcher-specific fields are still being populated, and publishes those fields 0.2 seconds later.
+Before the bounded settle recheck, that state made `fm_watcher_lock_matches_pid` fail on the temporarily absent fields and produced the false banner.
+Observed fixed output was `ok - fm-turnend-guard: Claude /bin/sh Stop context tolerates live lock publication`.
+The same run observed `ok - fm-turnend-guard: pending wakes block and produce a self-explaining diagnostic`, while the existing dead-PID and stale-beacon cases continued to block.
+
+The real healthy-hook validation started the tracked watcher in the scratch clone with `bin/fm-watch-arm.sh`, created `state/live-test.meta`, and ran `claude -p 'Reply with exactly OK.' --model haiku --dangerously-skip-permissions --output-format json`.
+Observed watcher startup output was `watcher: started pid=3474163 (beacon fresh)`.
+Observed Claude output had `subtype=success`, `num_turns=1`, `result=OK`, `stop_reason=end_turn`, and model `claude-haiku-4-5-20251001`; no guard banner or warning diagnostic was produced.
+The watcher was allowed to exit naturally after `printf 'failed: scratch watcher exit signal\n' > state/live-test.status`.
+Observed watcher output was `signal: <scratch>/repo/state/live-test.status`.
+
+The real blind-hook validation removed the scratch watcher lock, retained in-flight metadata, and ran `claude -p 'Reply with exactly OK. Do not use tools.' --model haiku --dangerously-skip-permissions --output-format json`.
+The warning diagnostic recorded `env.CLAUDE_PROJECT_DIR=<scratch>/repo`, `env.FM_HOME=<unset>`, `env.PWD=<scratch>/repo`, and `cwd=<scratch>/repo`.
+It also recorded `pid.alive=false`, `predicate.in_flight=2`, `predicate.beacon_fresh=true`, `predicate.queue_pending=false`, and `predicate.watcher_healthy=false`, proving that the genuine blind condition still reached the blocking path in an actual Claude Stop hook.
 
 Claude Code 2.1.204 preserved the existing behavior.
 Hook file used: `.claude/settings.json`.
@@ -116,6 +142,6 @@ See `docs/arm-pretool-check.md`'s "Harness wiring" section for the same Grok exp
 
 ## Tests
 
-`tests/fm-turnend-guard.test.sh` covers the shared predicate, primary scoping, unset `CLAUDE_PROJECT_DIR` fallback, physical identity matching for symlinked home paths, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, Pi logical-run latch behavior for no-tool and multi-tool runs, fail-open behavior without `jq`, tracked hook registration for all five harnesses, and the Grok adapter's forced-resume loop guard and permission-mode regression.
+`tests/fm-turnend-guard.test.sh` covers the shared predicate, primary scoping, unset `CLAUDE_PROJECT_DIR` fallback, physical identity matching for symlinked home paths, the bounded watcher-lock publication settle window, pending-wake blocking diagnostics, local `config/turnend-guard` disable behavior, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, Pi logical-run latch behavior for no-tool and multi-tool runs, fail-open behavior without `jq`, tracked hook registration for all five harnesses, and the Grok adapter's forced-resume loop guard and permission-mode regression.
 The default behavior suite does not invoke live language-model harnesses.
 `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` opts into the isolated interactive Pi regression recorded above.
