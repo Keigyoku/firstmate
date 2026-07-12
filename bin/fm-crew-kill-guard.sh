@@ -48,6 +48,12 @@ tokenize_command() {
         while [ "$i" -lt "$len" ] && [ "${src:i:1}" != $'\n' ]; do i=$((i + 1)); done
         continue
         ;;
+      '<')
+        case "${src:i:3}" in '<<<') TOKENS+=('<<<'); i=$((i + 3)); continue ;; esac
+        two=${src:i:2}
+        case "$two" in '<<'|'<&'|'<>') TOKENS+=("$two"); i=$((i + 2));; *) TOKENS+=("$char"); i=$((i + 1));; esac
+        continue
+        ;;
       ';'|'&'|'|'|'('|')'|'{'|'}'|'!')
         two=${src:i:2}
         case "$two" in '&&'|'||'|'|&'|';;') TOKENS+=("$two"); i=$((i + 2));; *) TOKENS+=("$char"); i=$((i + 1));; esac
@@ -60,7 +66,7 @@ tokenize_command() {
       char=${src:i:1}
       if [ -z "$quote" ]; then
         case "$char" in
-          [[:space:]]|';'|'&'|'|'|'('|')'|'{'|'}'|'!') break ;;
+          [[:space:]]|';'|'&'|'|'|'('|')'|'{'|'}'|'!'|'<') break ;;
           $'\n') break ;;
           "'") quote="'"; i=$((i + 1)); continue ;;
           '"') quote='"'; i=$((i + 1)); continue ;;
@@ -146,6 +152,21 @@ is_command_separator() {
 
 is_reserved_intro() {
   case "$1" in if|then|else|elif|do|done|while|until|for|select|"case"|in|"esac"|fi|coproc) return 0 ;; *) return 1 ;; esac
+}
+
+word_is_dynamic() {
+  case "$1" in *'$'*|*'`'*) return 0 ;; *) return 1 ;; esac
+}
+
+words_have_stdin_redirection() {
+  local -n _words=$1
+  local i=$2 arg
+  while [ "$i" -lt "${#_words[@]}" ]; do
+    arg=${_words[$i]}
+    case "$arg" in '<'|'<<'|'<<<'|'<&'|'<>'|'<-'|[0-9]'<'|[0-9]'<<'|[0-9]'<<<'|[0-9]'<&'|[0-9]'<>'|[0-9]'<-'|'<'*|[0-9]'<'*) return 0 ;; esac
+    i=$((i + 1))
+  done
+  return 1
 }
 
 skip_sudo_options() {
@@ -237,6 +258,7 @@ command_words_are_denied() {
   while [ "$i" -lt "${#words[@]}" ] && is_reserved_intro "${words[$i]}"; do i=$((i + 1)); done
   [ "$i" -lt "${#words[@]}" ] || return 1
   while [ "$i" -lt "${#words[@]}" ]; do
+    word_is_dynamic "${words[$i]}" && return 0
     name=$(base_name "${words[$i]}")
     case "$name" in
       command|builtin) direct_prefix=1; i=$((i + 1)); continue ;;
@@ -251,6 +273,8 @@ command_words_are_denied() {
       bash|sh|zsh|dash|ksh)
         payload=$(literal_payload_after_shell_c words $((i + 1)) 2>/dev/null || true)
         [ -n "$payload" ] && command_string_is_denied "$payload" && return 0
+        [ "${COMMAND_STDIN_PIPE:-0}" -eq 1 ] && return 0
+        words_have_stdin_redirection words $((i + 1)) && return 0
         return 1
         ;;
       time|gtime|nohup|setsid|timeout|gtimeout|nice|ionice|chrt|stdbuf|unbuffer)
@@ -263,6 +287,7 @@ command_words_are_denied() {
     break
   done
   [ "$i" -lt "${#words[@]}" ] || return 1
+  word_is_dynamic "${words[$i]}" && return 0
   name=$(base_name "${words[$i]}")
   case "$name" in
     pkill|killall) return 0 ;;
@@ -292,6 +317,7 @@ command_words_are_denied() {
 command_string_is_denied() {
   local src=$1 tok word
   local current=()
+  local stdin_pipe=0
   local dollar_paren backtick
   printf -v dollar_paren '%s%s' '$' '('
   printf -v backtick '%s' '`'
@@ -299,14 +325,17 @@ command_string_is_denied() {
   for tok in "${TOKENS[@]}"; do
     if is_command_separator "$tok"; then
       if [ "${#current[@]}" -gt 0 ]; then
+        COMMAND_STDIN_PIPE=$stdin_pipe
         command_words_are_denied current && return 0
         current=()
       fi
+      case "$tok" in '|'|'|&') stdin_pipe=1 ;; *) stdin_pipe=0 ;; esac
       continue
     fi
     current+=("$tok")
   done
   if [ "${#current[@]}" -gt 0 ]; then
+    COMMAND_STDIN_PIPE=$stdin_pipe
     command_words_are_denied current && return 0
   fi
   for word in "${TOKENS[@]}"; do

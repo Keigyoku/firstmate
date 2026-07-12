@@ -80,6 +80,16 @@ expect_deny "bash -lc \$'\\x70kill -f app'"
 expect_deny "bash -lc \$'kill -9 -1'"
 expect_deny "bash -lc \$'echo ok\\nkill -9 -1'"
 expect_deny 'bash -lc $"pkill -f app"'
+expect_deny 'cmd=pkill; $cmd -f app'
+expect_deny 'cmd=kill; $cmd -9 -1'
+expect_deny '$(printf pkill) -f app'
+expect_deny 'printf "pkill -f app" | bash'
+expect_deny "printf 'kill -9 -1' | bash"
+expect_deny 'bash <<< "kill -9 -1"'
+expect_deny 'bash<<<"kill -9 -1"'
+expect_deny 'bash <<EOF
+pkill -f app
+EOF'
 
 expect_allow 'kill 123'
 expect_allow 'kill -9 123 456'
