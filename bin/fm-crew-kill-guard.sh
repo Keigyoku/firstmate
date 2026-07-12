@@ -53,6 +53,11 @@ fi
 if [[ $flat =~ (^|[\;\&\|\(][[:space:]]*|[[:space:]](then|do)[[:space:]]+)(command[[:space:]]+|sudo[[:space:]]+([^[:space:]]+[[:space:]]+)*|([^[:space:]]*/)?env[[:space:]]+([^[:space:]=]+=[^[:space:]]+[[:space:]]+|-[^[:space:]]+[[:space:]]+)*)*([^[:space:]]*/)?fuser[[:space:]][^\;\&\|]*(--kill|-[A-Za-z]*k) ]]; then
   deny
 fi
+if [[ $flat =~ (^|[[:space:]/])(bash|sh|zsh|dash|ksh)[[:space:]][^\;\&\|]*-[^[:space:]]*c[[:space:]][^\;\&\|]*([^[:space:]]*/)?kill([[:space:]]|$) ]] ||
+   [[ $flat =~ (^|[[:space:]/])(eval|exec)[[:space:]][^\;\&\|]*([^[:space:]]*/)?kill([[:space:]]|$) ]] ||
+   [[ $flat =~ (^|[\;\&\|\(][[:space:]]*|[[:space:]](then|do)[[:space:]]+)(([^[:space:]]*/)?env[[:space:]]+([^[:space:]=]+=[^[:space:]]+[[:space:]]+|-[^[:space:]]+[[:space:]]+)*)+([^[:space:]]*/)?kill([[:space:]]|$) ]]; then
+  deny
+fi
 
 # xargs can manufacture an arbitrary PID list after the hook has made its decision.
 if [[ $flat =~ (^|[\;\&\|\(][[:space:]]*|[[:space:]](then|do)[[:space:]]+)([^[:space:]]*/)?xargs([^\;\&\|]*[[:space:]])([^[:space:]]*/)?kill([[:space:]]|$) ]]; then
@@ -84,7 +89,7 @@ while [[ $rest =~ (^|[\;\&\|\(][[:space:]]*|[[:space:]](then|do)[[:space:]]+)(co
       signal_seen=1
       continue
     fi
-    if [[ $arg =~ ^[0-9]+$ ]]; then
+    if [[ $arg =~ ^[1-9][0-9]*$ ]]; then
       pid_seen=1
       continue
     fi
