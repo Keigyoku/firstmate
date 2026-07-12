@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Behavior and spawn-wiring tests for docs/crew-kill-guard.md.
+# shellcheck disable=SC2016
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -29,6 +30,11 @@ expect_deny 'pkill -9 -f "launch-webdriver"'
 expect_deny '/usr/bin/pkill -f tauri-driver'
 expect_deny 'sudo killall gamescope'
 expect_deny 'fuser -k 8080/tcp'
+expect_deny 'fuser -km 8080/tcp'
+expect_deny 'bash -lc "/usr/bin/pkill -f app"'
+expect_deny '/usr/bin/env /usr/bin/pkill -f app'
+expect_deny 'bash -lc "kill $(pgrep app)"'
+expect_deny 'eval "/usr/bin/pkill -f app"'
 expect_deny 'ps ax | grep gamescope | xargs kill -9'
 expect_deny 'kill "$(pgrep -f tauri-driver)"'
 expect_deny 'p=$(ps ax | grep app); kill $p'

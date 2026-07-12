@@ -39,10 +39,18 @@ flat=${COMMAND//$'\\\n'/}
 flat=${flat//$'\n'/;}
 
 # These utilities have no safe crew use: every invocation is a pattern/sweep kill.
-if [[ $flat =~ (^|[\;\&\|\(][[:space:]]*|[[:space:]](then|do)[[:space:]]+)(command[[:space:]]+|sudo[[:space:]]+([^[:space:]]+[[:space:]]+)*)?([^[:space:]]*/)?(pkill|killall)([[:space:]]|$) ]]; then
+if [[ $flat =~ (^|[\;\&\|\(][[:space:]]*|[[:space:]](then|do)[[:space:]]+)(command[[:space:]]+|sudo[[:space:]]+([^[:space:]]+[[:space:]]+)*|([^[:space:]]*/)?env[[:space:]]+([^[:space:]=]+=[^[:space:]]+[[:space:]]+|-[^[:space:]]+[[:space:]]+)*)*([^[:space:]]*/)?(pkill|killall)([[:space:]]|$) ]]; then
   deny
 fi
-if [[ $flat =~ (^|[\;\&\|\(][[:space:]]*|[[:space:]](then|do)[[:space:]]+)(command[[:space:]]+|sudo[[:space:]]+([^[:space:]]+[[:space:]]+)*)?([^[:space:]]*/)?fuser[[:space:]][^\;\&\|]*([[:space:]]-k|-k[[:space:]]|--kill) ]]; then
+if [[ $flat =~ (^|[[:space:]/])(bash|sh|zsh|dash|ksh)[[:space:]][^\;\&\|]*-[^[:space:]]*c[[:space:]] ]] &&
+   [[ $flat =~ (pkill|killall|fuser[[:space:]][^\;\&\|]*--kill|fuser[[:space:]][^\;\&\|]*-[A-Za-z]*k|kill[[:space:]][^\;\&\|]*(\$\(|\`|pgrep|xargs|ps[[:space:]]|grep|rg[[:space:]])) ]]; then
+  deny
+fi
+if [[ $flat =~ (^|[[:space:]/])(eval|exec)[[:space:]] ]] &&
+   [[ $flat =~ (pkill|killall|fuser[[:space:]][^\;\&\|]*--kill|fuser[[:space:]][^\;\&\|]*-[A-Za-z]*k|kill[[:space:]][^\;\&\|]*(\$\(|\`|pgrep|xargs|ps[[:space:]]|grep|rg[[:space:]])) ]]; then
+  deny
+fi
+if [[ $flat =~ (^|[\;\&\|\(][[:space:]]*|[[:space:]](then|do)[[:space:]]+)(command[[:space:]]+|sudo[[:space:]]+([^[:space:]]+[[:space:]]+)*|([^[:space:]]*/)?env[[:space:]]+([^[:space:]=]+=[^[:space:]]+[[:space:]]+|-[^[:space:]]+[[:space:]]+)*)*([^[:space:]]*/)?fuser[[:space:]][^\;\&\|]*(--kill|-[A-Za-z]*k) ]]; then
   deny
 fi
 

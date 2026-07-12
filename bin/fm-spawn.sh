@@ -1206,11 +1206,12 @@ EOF
 set -u
 auth_dir=$sq_grok_kill_auth_dir
 workspace=\${GROK_WORKSPACE_ROOT:-}
-[ -n "\$workspace" ] || exit 2
+[ -n "\$workspace" ] || exit 0
 p="\$workspace/.fm-grok-killguard"
-[ -f "\$p" ] || exit 2
+[ -f "\$p" ] || exit 0
 IFS= read -r token < "\$p" || exit 2
 case "\$token" in fm.????????????) : ;; *) exit 2 ;; esac
+case "\$token" in *[!A-Za-z0-9._-]*) exit 2 ;; esac
 checker=\$(cat "\$auth_dir/\$token" 2>/dev/null) || exit 2
 case "\$checker" in /tmp/fm-*/fm-crew-kill-guard.sh) : ;; *) exit 2 ;; esac
 exec "\$checker"
