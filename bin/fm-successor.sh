@@ -275,6 +275,36 @@ mark_predecessor_retired() {
   rm -f "$meta"
 }
 
+restore_adopted_hooks_from_backup() {
+  local successor=$1 worktree=$2 backup_dir manifest kind rel src target restored=0
+  backup_dir="$STATE/watchdog/adopt-hook-backups/$successor"
+  manifest="$backup_dir/manifest"
+  [ -d "$worktree" ] || return 1
+  [ -f "$manifest" ] || return 1
+  while IFS="$(printf '\t')" read -r kind rel; do
+    case "$rel" in
+      ''|/*|*'..'*) return 1 ;;
+    esac
+    target="$worktree/$rel"
+    case "$kind" in
+      file)
+        src="$backup_dir/files/$rel"
+        [ -f "$src" ] || return 1
+        mkdir -p "$(dirname "$target")"
+        cp -p "$src" "$target"
+        restored=1
+        ;;
+      absent)
+        rm -f "$target"
+        restored=1
+        ;;
+      *) return 1 ;;
+    esac
+  done < "$manifest"
+  [ "$restored" -eq 1 ] || return 1
+  rm -rf "$backup_dir"
+}
+
 restore_predecessor_turnend_hook() {
   local predecessor=$1 meta=$2 worktree=$3 harness state_real turnend token
   [ -d "$worktree" ] || return 0
@@ -311,6 +341,14 @@ remove_grok_turnend_auth() {
   token=$(cat "$STATE/$id.grok-turnend-token" 2>/dev/null || true)
   case "$token" in ''|*[!A-Za-z0-9._-]*) return 0 ;; esac
   hooks_dir="${GROK_HOME:-$HOME/.grok}/hooks/fm-turn-end.d"
+  rm -f "$hooks_dir/$token"
+}
+
+remove_grok_killguard_auth() {
+  local id=$1 token hooks_dir
+  token=$(cat "$STATE/$id.grok-killguard-token" 2>/dev/null || true)
+  case "$token" in ''|*[!A-Za-z0-9._-]*) return 0 ;; esac
+  hooks_dir="${GROK_HOME:-$HOME/.grok}/hooks/fm-kill-guard.d"
   rm -f "$hooks_dir/$token"
 }
 
@@ -351,16 +389,17 @@ cleanup_successor_after_failure() {
     fi
     rm -f "$meta"
   fi
-  for residue in "$STATE/$successor.status" "$STATE/$successor.turn-ended" "$STATE/$successor.check.sh" "$STATE/$successor.pi-ext.ts" "$STATE/$successor.grok-turnend-token"; do
+  for residue in "$STATE/$successor.status" "$STATE/$successor.turn-ended" "$STATE/$successor.check.sh" "$STATE/$successor.pi-ext.ts" "$STATE/$successor.grok-turnend-token" "$STATE/$successor.grok-killguard-token"; do
     [ ! -e "$residue" ] || restore_needed=1
   done
   if [ -n "$predecessor_meta" ] && [ -n "$worktree" ] && successor_hook_points_to_id "$successor" "$predecessor_meta" "$worktree"; then
     restore_needed=1
   fi
   remove_grok_turnend_auth "$successor"
-  rm -f "$STATE/$successor.status" "$STATE/$successor.turn-ended" "$STATE/$successor.check.sh" "$STATE/$successor.pi-ext.ts" "$STATE/$successor.grok-turnend-token"
+  remove_grok_killguard_auth "$successor"
+  rm -f "$STATE/$successor.status" "$STATE/$successor.turn-ended" "$STATE/$successor.check.sh" "$STATE/$successor.pi-ext.ts" "$STATE/$successor.grok-turnend-token" "$STATE/$successor.grok-killguard-token"
   if [ "$restore_needed" -eq 1 ] && [ -n "$predecessor_meta" ] && [ -n "$predecessor" ] && [ -n "$worktree" ]; then
-    restore_predecessor_turnend_hook "$predecessor" "$predecessor_meta" "$worktree" || true
+    restore_adopted_hooks_from_backup "$successor" "$worktree" || restore_predecessor_turnend_hook "$predecessor" "$predecessor_meta" "$worktree" || true
   fi
 }
 

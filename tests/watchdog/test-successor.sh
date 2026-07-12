@@ -145,14 +145,45 @@ if [ "${FM_SUCCESSOR_DOUBLE_CREATE_META:-0}" = 1 ]; then
   if [ "${FM_SUCCESSOR_DOUBLE_WRITE_HOOKS:-0}" = 1 ]; then
     state_real=$(cd "$FM_HOME/state" && pwd -P)
     turnend="$state_real/$id.turn-ended"
+    backup_dir="$FM_HOME/state/watchdog/adopt-hook-backups/$id"
+    mkdir -p "$backup_dir/files"
+    backup_hook() {
+      rel=$1
+      target="$worktree/$rel"
+      if [ -e "$target" ]; then
+        mkdir -p "$(dirname "$backup_dir/files/$rel")"
+        cp -p "$target" "$backup_dir/files/$rel"
+        printf 'file\t%s\n' "$rel" >> "$backup_dir/manifest"
+      else
+        printf 'absent\t%s\n' "$rel" >> "$backup_dir/manifest"
+      fi
+    }
     case "$harness" in
       claude*)
+        backup_hook '.claude/settings.local.json'
         mkdir -p "$worktree/.claude"
-        printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"touch '\''%s'\''"}]}]}}\n' "$turnend" > "$worktree/.claude/settings.local.json"
+        printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"'\''/tmp/fm-%s/fm-crew-kill-guard.sh'\'' --claude"}]}],"Stop":[{"hooks":[{"type":"command","command":"touch '\''%s'\''"}]}]}}\n' "$id" "$turnend" > "$worktree/.claude/settings.local.json"
+        ;;
+      codex*)
+        backup_hook '.codex/hooks.json'
+        mkdir -p "$worktree/.codex"
+        printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"'\''/tmp/fm-%s/fm-crew-kill-guard.sh'\''","timeout":10}]}]}}\n' "$id" > "$worktree/.codex/hooks.json"
+        ;;
+      opencode*)
+        backup_hook '.opencode/plugins/fm-turn-end.js'
+        mkdir -p "$worktree/.opencode/plugins"
+        printf 'const check = "%s";\nexport const FmTurnEnd = async ({ $ }) => ({ event: async ({ event }) => { if (event.type === "session.idle") await $`touch %s` }, "tool.execute.before": async () => check })\n' "/tmp/fm-$id/fm-crew-kill-guard.sh" "$turnend" > "$worktree/.opencode/plugins/fm-turn-end.js"
         ;;
       grok*)
+        backup_hook '.fm-grok-turnend'
+        backup_hook '.fm-grok-killguard'
         printf '%s\n' "fm.bbbbbbbbbbbb" > "$FM_HOME/state/$id.grok-turnend-token"
+        printf '%s\n' "fm.dddddddddddd" > "$FM_HOME/state/$id.grok-killguard-token"
+        mkdir -p "${HOME:-$FM_HOME}/.grok/hooks/fm-turn-end.d" "${HOME:-$FM_HOME}/.grok/hooks/fm-kill-guard.d"
+        printf '%s\n' "$turnend" > "${HOME:-$FM_HOME}/.grok/hooks/fm-turn-end.d/fm.bbbbbbbbbbbb"
+        printf '%s\n' "/tmp/fm-$id/fm-crew-kill-guard.sh" > "${HOME:-$FM_HOME}/.grok/hooks/fm-kill-guard.d/fm.dddddddddddd"
         printf 'token=%s\n' "fm.bbbbbbbbbbbb" > "$worktree/.fm-grok-turnend"
+        printf '%s\n' "fm.dddddddddddd" > "$worktree/.fm-grok-killguard"
         ;;
     esac
   fi
@@ -481,7 +512,7 @@ test_successor_failure_restores_claude_predecessor_hook() {
   printf 'handoff for Claude hook restore\n' > "$handoff"
   fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$project" "worktree=$worktree" "backend=tmux" "harness=claude" "mode=no-mistakes" "yolo=off"
   settings="$worktree/.claude/settings.local.json"
-  printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"touch '\''%s'\''"}]}]}}\n' "$home/state/demo.turn-ended" > "$settings"
+  printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"'\''/tmp/fm-demo/fm-crew-kill-guard.sh'\'' --claude"}]}],"Stop":[{"hooks":[{"type":"command","command":"touch '\''%s'\''"}]}]}}\n' "$home/state/demo.turn-ended" > "$settings"
   make_spawn_double "$spawn_double" "$spawn_log" 0
   make_retire_double "$retire_double" "$retire_log"
 
@@ -493,13 +524,79 @@ test_successor_failure_restores_claude_predecessor_hook() {
   expect_code 1 "$status" "unready Claude successor should exit 1"
   assert_present "$home/state/demo.meta" "predecessor meta should remain active after Claude successor failure"
   assert_grep '/demo.turn-ended' "$settings" "Claude hook should be restored to predecessor turn-end file"
+  assert_grep '/tmp/fm-demo/fm-crew-kill-guard.sh' "$settings" "Claude kill guard should be restored to predecessor checker"
   assert_no_grep '/demo-restore-claude-next.turn-ended' "$settings" "Claude hook should not remain targeted at failed successor"
+  assert_no_grep '/tmp/fm-demo-restore-claude-next/fm-crew-kill-guard.sh' "$settings" "Claude kill guard should not remain targeted at failed successor"
   pass "successor failure restores Claude predecessor hook"
 }
 
+test_successor_failure_restores_codex_predecessor_hook() {
+  local home project worktree spawn_log retire_log spawn_double retire_double handoff status hooks
+  home="$TMP_ROOT/restore-codex-home"
+  project="$home/project"
+  worktree="$home/worktree"
+  spawn_log="$TMP_ROOT/restore-codex-spawn.log"
+  retire_log="$TMP_ROOT/restore-codex-retire.log"
+  spawn_double="$TMP_ROOT/restore-codex-spawn-double"
+  retire_double="$TMP_ROOT/restore-codex-retire-double"
+  mkdir -p "$home/state" "$home/fm-state" "$project" "$worktree/.codex"
+  handoff="$home/fm-state/handoff-restore-codex.md"
+  printf 'handoff for Codex hook restore\n' > "$handoff"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$project" "worktree=$worktree" "backend=tmux" "harness=codex" "mode=no-mistakes" "yolo=off"
+  hooks="$worktree/.codex/hooks.json"
+  printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"'\''/tmp/fm-demo/fm-crew-kill-guard.sh'\''","timeout":10}]}]}}\n' > "$hooks"
+  make_spawn_double "$spawn_double" "$spawn_log" 0
+  make_retire_double "$retire_double" "$retire_log"
+
+  FM_HOME="$home" FM_SUCCESSOR_ID=demo-restore-codex-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_SUCCESSOR_DOUBLE_CREATE_META=1 FM_SUCCESSOR_DOUBLE_WRITE_HOOKS=1 \
+    FM_SUCCESSOR_READY_TIMEOUT=0 FM_SUCCESSOR_RETIRE_CMD="$retire_double" FM_SUCCESSOR_RETIRE_LOG="$retire_log" \
+    "$ROOT/bin/fm-successor.sh" demo "$handoff" >/dev/null 2>&1
+  status=$?
+  expect_code 1 "$status" "unready Codex successor should exit 1"
+  assert_present "$home/state/demo.meta" "predecessor meta should remain active after Codex successor failure"
+  assert_grep '/tmp/fm-demo/fm-crew-kill-guard.sh' "$hooks" "Codex kill guard should be restored to predecessor checker"
+  assert_no_grep '/tmp/fm-demo-restore-codex-next/fm-crew-kill-guard.sh' "$hooks" "Codex kill guard should not remain targeted at failed successor"
+  pass "successor failure restores Codex predecessor hook"
+}
+
+test_successor_failure_restores_opencode_predecessor_hook() {
+  local home project worktree spawn_log retire_log spawn_double retire_double handoff status plugin
+  home="$TMP_ROOT/restore-opencode-home"
+  project="$home/project"
+  worktree="$home/worktree"
+  spawn_log="$TMP_ROOT/restore-opencode-spawn.log"
+  retire_log="$TMP_ROOT/restore-opencode-retire.log"
+  spawn_double="$TMP_ROOT/restore-opencode-spawn-double"
+  retire_double="$TMP_ROOT/restore-opencode-retire-double"
+  mkdir -p "$home/state" "$home/fm-state" "$project" "$worktree/.opencode/plugins"
+  handoff="$home/fm-state/handoff-restore-opencode.md"
+  printf 'handoff for OpenCode hook restore\n' > "$handoff"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$project" "worktree=$worktree" "backend=tmux" "harness=opencode" "mode=no-mistakes" "yolo=off"
+  plugin="$worktree/.opencode/plugins/fm-turn-end.js"
+  # shellcheck disable=SC2016
+  printf 'const check = "/tmp/fm-demo/fm-crew-kill-guard.sh";\nexport const FmTurnEnd = async ({ $ }) => ({ event: async ({ event }) => { if (event.type === "session.idle") await $`touch %s` }, "tool.execute.before": async () => check })\n' "$home/state/demo.turn-ended" > "$plugin"
+  make_spawn_double "$spawn_double" "$spawn_log" 0
+  make_retire_double "$retire_double" "$retire_log"
+
+  FM_HOME="$home" FM_SUCCESSOR_ID=demo-restore-opencode-next FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
+    FM_SUCCESSOR_SPAWN_LOG="$spawn_log" FM_SUCCESSOR_DOUBLE_CREATE_META=1 FM_SUCCESSOR_DOUBLE_WRITE_HOOKS=1 \
+    FM_SUCCESSOR_READY_TIMEOUT=0 FM_SUCCESSOR_RETIRE_CMD="$retire_double" FM_SUCCESSOR_RETIRE_LOG="$retire_log" \
+    "$ROOT/bin/fm-successor.sh" demo "$handoff" >/dev/null 2>&1
+  status=$?
+  expect_code 1 "$status" "unready OpenCode successor should exit 1"
+  assert_present "$home/state/demo.meta" "predecessor meta should remain active after OpenCode successor failure"
+  assert_grep '/demo.turn-ended' "$plugin" "OpenCode hook should be restored to predecessor turn-end file"
+  assert_grep '/tmp/fm-demo/fm-crew-kill-guard.sh' "$plugin" "OpenCode kill guard should be restored to predecessor checker"
+  assert_no_grep '/demo-restore-opencode-next.turn-ended' "$plugin" "OpenCode hook should not remain targeted at failed successor"
+  assert_no_grep '/tmp/fm-demo-restore-opencode-next/fm-crew-kill-guard.sh' "$plugin" "OpenCode kill guard should not remain targeted at failed successor"
+  pass "successor failure restores OpenCode predecessor hook"
+}
+
 test_successor_failure_restores_grok_predecessor_pointer() {
-  local home project worktree spawn_log retire_log spawn_double retire_double handoff status pointer
+  local home project worktree spawn_log retire_log spawn_double retire_double handoff status pointer kill_pointer grok_home
   home="$TMP_ROOT/restore-grok-home"
+  grok_home="$home/fake-home/.grok"
   project="$home/project"
   worktree="$home/worktree"
   spawn_log="$TMP_ROOT/restore-grok-spawn.log"
@@ -511,8 +608,14 @@ test_successor_failure_restores_grok_predecessor_pointer() {
   printf 'handoff for Grok hook restore\n' > "$handoff"
   fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$project" "worktree=$worktree" "backend=tmux" "harness=grok" "mode=no-mistakes" "yolo=off"
   printf '%s\n' "fm.aaaaaaaaaaaa" > "$home/state/demo.grok-turnend-token"
+  printf '%s\n' "fm.cccccccccccc" > "$home/state/demo.grok-killguard-token"
+  mkdir -p "$grok_home/hooks/fm-turn-end.d" "$grok_home/hooks/fm-kill-guard.d"
+  printf '%s\n' "$home/state/demo.turn-ended" > "$grok_home/hooks/fm-turn-end.d/fm.aaaaaaaaaaaa"
+  printf '%s\n' "/tmp/fm-demo/fm-crew-kill-guard.sh" > "$grok_home/hooks/fm-kill-guard.d/fm.cccccccccccc"
   pointer="$worktree/.fm-grok-turnend"
+  kill_pointer="$worktree/.fm-grok-killguard"
   printf 'token=%s\n' "fm.aaaaaaaaaaaa" > "$pointer"
+  printf '%s\n' "fm.cccccccccccc" > "$kill_pointer"
   make_spawn_double "$spawn_double" "$spawn_log" 0
   make_retire_double "$retire_double" "$retire_log"
 
@@ -524,7 +627,10 @@ test_successor_failure_restores_grok_predecessor_pointer() {
   expect_code 1 "$status" "unready Grok successor should exit 1"
   assert_present "$home/state/demo.meta" "predecessor meta should remain active after Grok successor failure"
   [ "$(cat "$pointer")" = "token=fm.aaaaaaaaaaaa" ] || fail "Grok pointer should be restored to predecessor token"
+  [ "$(cat "$kill_pointer")" = "fm.cccccccccccc" ] || fail "Grok kill pointer should be restored to predecessor token"
   assert_absent "$home/state/demo-restore-grok-next.grok-turnend-token" "failed successor Grok token should be cleaned from state"
+  assert_absent "$home/state/demo-restore-grok-next.grok-killguard-token" "failed successor Grok kill token should be cleaned from state"
+  assert_absent "$grok_home/hooks/fm-kill-guard.d/fm.dddddddddddd" "failed successor Grok kill auth should be removed"
   pass "successor failure restores Grok predecessor pointer"
 }
 
@@ -633,6 +739,7 @@ test_partial_spawn_failure_cleans_successor_and_restores_hook() {
   handoff="$home/fm-state/handoff-partial-failure.md"
   printf 'handoff for partial failing spawn\n' > "$handoff"
   fm_write_meta "$home/state/demo.meta" "window=target-pane" "project=$project" "worktree=$worktree" "backend=tmux" "harness=claude" "mode=no-mistakes" "yolo=off"
+  printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"'\''/tmp/fm-demo/fm-crew-kill-guard.sh'\'' --claude"}]}],"Stop":[{"hooks":[{"type":"command","command":"touch '\''%s'\''"}]}]}}\n' "$home/state/demo.turn-ended" > "$worktree/.claude/settings.local.json"
   make_spawn_double "$spawn_double" "$spawn_log" 23
 
   FM_HOME="$home" FM_SUCCESSOR_ID=demo-partial-fails FM_SUCCESSOR_SPAWN_CMD="$spawn_double" \
@@ -649,7 +756,9 @@ test_partial_spawn_failure_cleans_successor_and_restores_hook() {
   assert_grep "spawn failed" "$artifact" "failure artifact should explain partial spawn failure"
   settings="$worktree/.claude/settings.local.json"
   assert_grep '/demo.turn-ended' "$settings" "Claude hook should be restored to predecessor after partial spawn failure"
+  assert_grep '/tmp/fm-demo/fm-crew-kill-guard.sh' "$settings" "Claude kill guard should be restored after partial spawn failure"
   assert_no_grep '/demo-partial-fails.turn-ended' "$settings" "Claude hook should not remain targeted at failed successor"
+  assert_no_grep '/tmp/fm-demo-partial-fails/fm-crew-kill-guard.sh' "$settings" "Claude kill guard should not remain targeted at failed successor"
   pass "partial spawn failure cleans successor and restores hook"
 }
 
@@ -1000,6 +1109,8 @@ test_successor_rejects_dead_agent_endpoint_readiness
 test_successor_rejects_bare_turnend_readiness
 test_successor_halts_without_readiness_and_keeps_predecessor_active
 test_successor_failure_restores_claude_predecessor_hook
+test_successor_failure_restores_codex_predecessor_hook
+test_successor_failure_restores_opencode_predecessor_hook
 test_successor_failure_restores_grok_predecessor_pointer
 test_successor_carries_x_followup_link
 test_successor_halts_when_predecessor_retire_fails

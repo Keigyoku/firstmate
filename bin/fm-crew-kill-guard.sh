@@ -72,14 +72,25 @@ while [[ $rest =~ (^|[\;\&\|\(][[:space:]]*|[[:space:]](then|do)[[:space:]]+)(co
   args=${BASH_REMATCH[6]:-}
   args=${args#"${args%%[![:space:]]*}"}
   [ -n "$args" ] || deny
+  end_options=0
+  signal_seen=0
+  pid_seen=0
   for arg in $args; do
-    case "$arg" in
-      --) ;;
-      -[0-9]*|-[A-Za-z]*) ;;
-      [0-9]*) [[ $arg =~ ^[0-9]+$ ]] || deny ;;
-      *) deny ;;
-    esac
+    if [ "$end_options" -eq 0 ] && [ "$arg" = -- ]; then
+      end_options=1
+      continue
+    fi
+    if [ "$end_options" -eq 0 ] && [ "$signal_seen" -eq 0 ] && [[ $arg =~ ^-[0-9]+$|^-[A-Za-z]+$ ]]; then
+      signal_seen=1
+      continue
+    fi
+    if [[ $arg =~ ^[0-9]+$ ]]; then
+      pid_seen=1
+      continue
+    fi
+    deny
   done
+  [ "$pid_seen" -eq 1 ] || deny
   rest=${rest#*"${BASH_REMATCH[0]}"}
 done
 
