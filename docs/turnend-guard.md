@@ -29,6 +29,13 @@ That is the same identity-matched live lock and fresh beacon check used by `bin/
 Home and watcher paths are compared by physical identity so logical and physical spellings of the same symlinked directory match.
 A stale beacon blocks even if a watcher pid is still live.
 A fresh leftover beacon blocks if the watcher lock is missing, dead, or identity-mismatched.
+The watcher lock is published by the generic singleton helper before `fm-watch.sh` adds its home, path, and process-identity fields.
+The turn-end guard therefore gives a live holder with a fresh beacon and a newly published lock one bounded second to finish those fields, then applies the same identity checks again.
+It does not wait for a dead holder, stale beacon, or older identity mismatch.
+Pending records in `state/.wake-queue` block the turn end even when the watcher itself is healthy, so the primary must drain already-delivered work before stopping.
+
+Whenever the guard blocks, it appends the complete decision inputs and individual predicate verdicts to the size-capped, gitignored `fm-state/turnend-guard-diagnostics.log`.
+The record includes the relevant hook environment, resolved roots, lock contents and physical paths, PID liveness and identity, beacon mtime and age, and queue and watcher verdicts.
 
 `FM_STATE_OVERRIDE` wins over `FM_HOME/state`, and `FM_HOME` wins over repo-root `state/`.
 `FM_GUARD_GRACE` controls the beacon freshness window and defaults to 300 seconds.
@@ -60,6 +67,23 @@ That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it poin
 ## Empirical Validation
 
 All harnesses were validated on 2026-07-08 in scratch repos or throwaway homes, not against the captain's live primary fleet state.
+
+The residual Claude false-positive fix was validated on 2026-07-12 in a disposable primary-shaped clone and home with Claude Code 2.1.193.
+The hermetic reproduction command was `bash tests/fm-turnend-guard.test.sh`.
+Its hook-context regression invokes the tracked Stop command shape through `/bin/sh`, starts with a fresh beacon and a live lock PID whose watcher-specific fields are still being populated, and publishes those fields 0.2 seconds later.
+Before the bounded settle recheck, that state made `fm_watcher_lock_matches_pid` fail on the temporarily absent fields and produced the false banner.
+Observed fixed output was `ok - fm-turnend-guard: Claude /bin/sh Stop context tolerates live lock publication`.
+The same run observed `ok - fm-turnend-guard: pending wakes block and produce a self-explaining diagnostic`, while the existing dead-PID and stale-beacon cases continued to block.
+
+The real healthy-hook validation started the tracked watcher in the scratch clone with `bin/fm-watch-arm.sh`, created `state/live-test.meta`, and ran `claude -p 'Reply with exactly OK.' --model haiku --dangerously-skip-permissions --output-format json`.
+Observed watcher startup output was `watcher: started pid=3474163 (beacon fresh)`.
+Observed Claude output had `subtype=success`, `num_turns=1`, `result=OK`, `stop_reason=end_turn`, and model `claude-haiku-4-5-20251001`; no guard banner or warning diagnostic was produced.
+The watcher was allowed to exit naturally after `printf 'failed: scratch watcher exit signal\n' > state/live-test.status`.
+Observed watcher output was `signal: <scratch>/repo/state/live-test.status`.
+
+The real blind-hook validation removed the scratch watcher lock, retained in-flight metadata, and ran `claude -p 'Reply with exactly OK. Do not use tools.' --model haiku --dangerously-skip-permissions --output-format json`.
+The warning diagnostic recorded `env.CLAUDE_PROJECT_DIR=<scratch>/repo`, `env.FM_HOME=<unset>`, `env.PWD=<scratch>/repo`, and `cwd=<scratch>/repo`.
+It also recorded `pid.alive=false`, `predicate.in_flight=2`, `predicate.beacon_fresh=true`, `predicate.queue_pending=false`, and `predicate.watcher_healthy=false`, proving that the genuine blind condition still reached the blocking path in an actual Claude Stop hook.
 
 Claude Code 2.1.204 preserved the existing behavior.
 Hook file used: `.claude/settings.json`.

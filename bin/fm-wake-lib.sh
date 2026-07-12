@@ -95,6 +95,29 @@ fm_watcher_healthy() {
   return 0
 }
 
+# fm_watcher_healthy_settled <state> <watch-path> [grace] [home] [settle-seconds]
+# The watcher publishes its generic singleton lock before it can add the
+# watcher-specific identity fields. A turn-end hook can observe that small
+# mid-publication window. Recheck only while the lock names a live pid, its
+# beacon is fresh, and the lock itself is younger than the bounded settle
+# window. Every other unhealthy state fails immediately.
+fm_watcher_healthy_settled() {
+  local state=$1 watch_path=$2 grace=${3:-${FM_GUARD_GRACE:-300}} home=${4:-$FM_HOME} settle=${5:-1} lockdir beat pid started now
+  lockdir="$state/.watch.lock"
+  beat="$state/.last-watcher-beat"
+  started=$(date +%s)
+  while :; do
+    fm_watcher_healthy "$state" "$watch_path" "$grace" "$home" && return 0
+    pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+    fm_pid_alive "$pid" || return 1
+    [ "$(fm_path_age "$beat")" -lt "$grace" ] || return 1
+    [ "$(fm_path_age "$lockdir")" -le "$settle" ] || return 1
+    now=$(date +%s)
+    [ $((now - started)) -lt "$settle" ] || return 1
+    sleep 0.05
+  done
+}
+
 fm_lock_clean_known_files() {
   local lockdir=$1
   rm -f \
