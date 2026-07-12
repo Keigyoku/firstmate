@@ -390,12 +390,17 @@ literal_payload_after_shell_c() {
   local i=$2 arg after_c
   while [ "$i" -lt "${#_words[@]}" ]; do
     arg=${_words[$i]}
-    if [[ $arg == -- ]]; then
-      i=$((i + 1))
-      continue
-    fi
-    if [[ $arg == -*c* && $arg != - ]]; then
-      after_c=${arg#*c}
+    case "$arg" in
+      --) return 1 ;;
+      --rcfile|--init-file) i=$((i + 2)); continue ;;
+      --*) i=$((i + 1)); continue ;;
+      -?*)
+        case "$arg" in *c*) ;; *) i=$((i + 1)); continue ;; esac
+      ;;
+      *) return 1 ;;
+    esac
+    after_c=${arg#*c}
+    if [ "$after_c" != "$arg" ]; then
       if [ -n "$after_c" ]; then
         printf '%s\n' "$after_c"
         return 0
@@ -433,11 +438,29 @@ validate_kill_args() {
 }
 
 line_feeds_shell_interpreter() {
-  local line=$1 prefix i=0 name
+  local line=$1 prefix idx=0 tok i=0 name
   local words=()
+  local current=()
+  local last=()
   prefix=${line%%<<*}
   tokenize_command "$prefix" || return 0
-  words=("${TOKENS[@]}")
+  while [ "$idx" -lt "${#TOKENS[@]}" ]; do
+    tok=${TOKENS[$idx]}
+    if is_command_separator "$tok"; then
+      if [ "${#current[@]}" -gt 0 ]; then
+        last=("${current[@]}")
+        current=()
+      fi
+      idx=$((idx + 1))
+      continue
+    fi
+    current+=("$tok")
+    idx=$((idx + 1))
+  done
+  if [ "${#current[@]}" -gt 0 ]; then
+    last=("${current[@]}")
+  fi
+  words=("${last[@]}")
   while [ "$i" -lt "${#words[@]}" ]; do
     [[ ${words[$i]} == *=* && ${words[$i]} != /* ]] || break
     i=$((i + 1))

@@ -93,8 +93,18 @@ EOF'
 expect_deny 'bash <<EOF
 echo "$(pkill -f app)"
 EOF'
+expect_deny 'if true; then bash <<EOF
+pkill -f app
+EOF
+fi'
+expect_deny 'if true; then bash <<EOF
+echo "$(pkill -f app)"
+EOF
+fi'
 expect_deny "bash -c'kill -9 -1'"
 expect_deny "bash -lc'pkill -f app'"
+expect_deny "bash --norc -c 'kill -9 -1'"
+expect_deny "bash --rcfile /tmp/no-such-rc -c 'pkill -f app'"
 expect_deny "/usr/bin/env -S \"bash -c 'kill -9 -1'\""
 expect_deny "/usr/bin/env --split-string=\"bash -c 'pkill -f app'\""
 expect_deny "/usr/bin/env -Sbash -c 'kill -9 -1'"
@@ -121,9 +131,14 @@ EOF'
 expect_allow 'cat <<'"'EOF'"'
 echo "$(pkill -f app)"
 EOF'
+expect_allow 'if true; then cat <<'"'EOF'"'
+pkill -f app
+EOF
+fi'
 expect_allow 'bash <<EOF
 echo ok
 EOF'
+expect_allow "bash --norc -c 'echo ok'"
 pass 'command policy denies sweeps and allows only explicit numeric PID kills'
 
 claude_out=$(printf '{"tool_input":{"command":"pkill -f tauri-driver"}}' | "$CHECK" --claude 2>"$TMP_ROOT/claude.err")
