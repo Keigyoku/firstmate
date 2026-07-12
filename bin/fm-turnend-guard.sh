@@ -132,7 +132,9 @@ write_decision_diagnostic() {
       "$([ -n "$lock_identity" ] && [ "$lock_identity" = "$pid_identity" ] && printf true || printf false)"
   } >> "$out" 2>/dev/null || return 0
   if [ "$(wc -c < "$out" 2>/dev/null || printf 0)" -gt 65536 ]; then
-    tail -c 49152 "$out" > "$out.tmp" 2>/dev/null && mv "$out.tmp" "$out" 2>/dev/null || true
+    if tail -c 49152 "$out" > "$out.tmp" 2>/dev/null; then
+      mv "$out.tmp" "$out" 2>/dev/null || true
+    fi
   fi
 }
 

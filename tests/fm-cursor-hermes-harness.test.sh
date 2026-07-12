@@ -198,10 +198,12 @@ test_busy_signatures_match() {
   printf '%s\n' '⚕ ❯ msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel' | grep -qiE "$re" \
     || fail "hermes busy footer 'Ctrl+C cancel' not matched"
   # Idle footers must not read as busy.
-  printf '%s\n' '  → Add a follow-up' | grep -qiE "$re" \
-    && fail "cursor idle footer wrongly matched busy" || :
-  printf '%s\n' '❯' | grep -qiE "$re" \
-    && fail "hermes idle prompt wrongly matched busy" || :
+  if printf '%s\n' '  → Add a follow-up' | grep -qiE "$re"; then
+    fail "cursor idle footer wrongly matched busy"
+  fi
+  if printf '%s\n' '❯' | grep -qiE "$re"; then
+    fail "hermes idle prompt wrongly matched busy"
+  fi
   pass "cursor/hermes busy signatures registered in the default busy regex"
 }
 
