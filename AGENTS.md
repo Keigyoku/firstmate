@@ -98,6 +98,7 @@ state/               volatile runtime signals; gitignored
   <id>.status        appended by crewmates: "<state>: <note>" wake-event lines, not current-state truth
   <id>.turn-ended    touched by turn-end hooks
   <id>.grok-turnend-token   firstmate-owned grok hook registry token for the task; removed by teardown
+  <id>.grok-killguard-token firstmate-owned grok kill-guard hook registry token for the task; removed by teardown
   <id>.meta          written by fm-spawn: window=, worktree=, project=, harness=, model=, effort=, kind=, mode=, yolo=, tasktmp=; kind=secondmate also records home= and projects=; a non-default runtime backend records further backend-specific fields (docs/configuration.md "Runtime backend"; bin/fm-backend.sh, section 8); fm-pr-check, including through fm-pr-merge, appends pr= and GitHub's pr_head= when available; fm-x-link appends x_request=, x_request_ts=, x_followups=, and optional x_platform=/x_reply_max_chars= for an X-mode-originated task (section 14)
   For treehouse-backed ship/scout tasks, worktree= is stored with the `$HOME` spelling when that spelling resolves to the same physical directory as the backend-reported path, matching treehouse's registry on symlinked-home hosts.
   <id>.check.sh      optional slow poll you write per task (e.g. merged-PR check)
@@ -323,7 +324,7 @@ Inheritance copies the literal `config/crew-harness` file, so a secondmate's own
 Propagation timing, mechanism, and `bin/fm-config-push.sh` are section 3's canonical statement.
 
 Each adapter splits into mechanics and knowledge.
-The per-task mechanics (launch command, autonomy flag, crewmate turn-end hook) live in `bin/fm-spawn.sh`; the primary-session turn-end guard lives in `docs/turnend-guard.md`; the knowledge you need while supervising (busy signature, exit, interrupt, dialogs, quirks, skill invocation, resume) lives in the agent-only `harness-adapters` skill.
+The per-task mechanics (launch command, autonomy flag, crewmate turn-end hook, and crew/scout process-signal guard installation) live in `bin/fm-spawn.sh`; the primary-session turn-end guard lives in `docs/turnend-guard.md`; the crew/scout process-signal guard contract lives in `docs/crew-kill-guard.md`; the knowledge you need while supervising (busy signature, exit, interrupt, dialogs, quirks, skill invocation, resume) lives in the agent-only `harness-adapters` skill.
 **Never dispatch a crewmate or secondmate on an unverified adapter.**
 If `config/crew-harness` or `config/secondmate-harness` names an unverified one, tell the captain and fall back to your own harness until it is verified.
 If the captain asks for a new harness, load `harness-adapters`, verify it empirically with a trivial supervised task, then commit the script and knowledge changes.
@@ -549,9 +550,9 @@ When `--model` or `--effort` is omitted, the corresponding meta value is `defaul
 For `kind=secondmate`, the same script launches in the registered or explicit firstmate home instead of running `treehouse get` for a project, records `home=` and `projects=`, and uses the charter brief as the launch prompt.
 
 For ship and scout tasks, tmux/herdr/zellij/cmux create a runtime endpoint and run `treehouse get`; Orca creates an Orca-owned worktree, validates it, then creates the terminal.
-In all cases, the script asserts the resolved worktree is a genuine isolated worktree distinct from the primary checkout (aborting the spawn otherwise, to prevent the worktree tangle of section 8), re-spells treehouse worktree paths through `$HOME` when that spelling names the same physical directory, installs the per-task turn-end signal hook, records `state/<id>.meta`, and launches the agent with the brief.
+In all cases, the script asserts the resolved worktree is a genuine isolated worktree distinct from the primary checkout (aborting the spawn otherwise, to prevent the worktree tangle of section 8), re-spells treehouse worktree paths through `$HOME` when that spelling names the same physical directory, installs the per-task turn-end signal hook and crew/scout kill guard where applicable, records `state/<id>.meta`, and launches the agent with the brief.
 Selecting `backend=codex-app` fails as an unknown backend; see `docs/codex-app-backend.md`.
-For grok, the turn-end hook is one firstmate-owned global hook under `$GROK_HOME/hooks/`, or `~/.grok/hooks/` when `GROK_HOME` is unset, activated only when the worktree holds the per-task `.fm-grok-turnend` token pointer that matches `state/<id>.grok-turnend-token`; teardown removes the pointer and token.
+For grok, turn-end and kill-guard hooks are firstmate-owned global hooks under `$GROK_HOME/hooks/`, or `~/.grok/hooks/` when `GROK_HOME` is unset, activated only when the worktree holds the matching per-task pointer; teardown removes each pointer and token.
 For `kind=secondmate`, the script creates the same kind of runtime endpoint but starts directly in the persistent home.
 With herdr, ordinary crewmate and scout spawns use the current `FM_HOME` workspace; a primary `--secondmate` spawn uses the secondmate target home's workspace, so secondmate-owned tabs do not mix into the primary `firstmate` space.
 With zellij there is no per-home workspace split: every task, primary or secondmate, lands as a tab in the one shared `firstmate` zellij session (docs/zellij-backend.md).

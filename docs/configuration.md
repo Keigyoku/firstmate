@@ -146,6 +146,7 @@ claude, codex, opencode, pi, grok, cursor, and hermes are all empirically verifi
 The verified adapter knowledge - busy signatures, interrupt and exit commands, skill-invocation syntax, and per-harness quirks - lives in [`.agents/skills/harness-adapters/SKILL.md`](../.agents/skills/harness-adapters/SKILL.md).
 Launch mechanics, including the verified command templates, live in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh).
 Primary-session turn-end guard integrations for verified harnesses are tracked as repo-level hook files and documented in [`docs/turnend-guard.md`](turnend-guard.md).
+Crew and scout process-signaling guard integrations are installed at spawn time and documented in [`docs/crew-kill-guard.md`](crew-kill-guard.md).
 The local, gitignored `config/turnend-guard` file disables that primary-session guard only when its content is exactly `off`; absent or any other value leaves the guard enabled.
 Primary-session watcher wake protocols are rendered at session start by [`bin/fm-supervision-instructions.sh`](../bin/fm-supervision-instructions.sh) from [`docs/supervision-protocols/`](supervision-protocols/).
 Claude and Grok use background-notify cycles, Codex uses bounded foreground checkpoints, Pi uses its two tracked primary extensions, and OpenCode uses its TUI plugin.
@@ -161,7 +162,7 @@ An explicit `--model` or `--effort` overrides the matching token from `config/se
 When `config/crew-dispatch.json` exists, crewmate and scout spawns require an explicit resolved harness instead of automatically falling back to `config/crew-harness`.
 The primary propagates `config/crew-dispatch.json`, `config/crew-harness`, and `config/backlog-backend` into secondmate homes at secondmate spawn, during the locked session-start bootstrap secondmate sweep, and during explicit `bin/fm-config-push.sh` runs, so a secondmate's own crewmates, dispatch profiles, and backlog backend use the primary values.
 `config/secondmate-harness` is not inherited because secondmates do not launch secondmates.
-For grok, `fm-spawn.sh` installs one firstmate-owned global turn-end hook under `$GROK_HOME/hooks/`, or `~/.grok/hooks/` when `GROK_HOME` is unset, and drops a per-task `.fm-grok-turnend` pointer in the worktree, with teardown removing the task token and pointer.
+For grok, `fm-spawn.sh` installs firstmate-owned global turn-end and kill-guard hooks under `$GROK_HOME/hooks/`, or `~/.grok/hooks/` when `GROK_HOME` is unset, and drops per-task pointer files in the worktree, with teardown removing each task token and pointer.
 For Pi secondmate launches, `fm-spawn.sh` starts Pi with `-e` pointed at the secondmate home's own tracked `.pi/extensions/fm-primary-pi-watch.ts` and `.pi/extensions/fm-primary-turnend-guard.ts`, both already present from the secondmate home's git worktree.
 
 ## Crew dispatch profiles (config/crew-dispatch.json)
@@ -378,7 +379,7 @@ FM_SUCCESSOR_ID=        # test/diagnostic override for the watchdog successor ta
 FM_SUCCESSOR_READY_TIMEOUT=30      # seconds fm-successor waits for readiness proof before halting the watchdog
 FM_SUCCESSOR_SPAWN_CMD= # test/diagnostic override for the fm-successor spawn command; receives the fm-spawn-compatible argument vector
 FM_SUCCESSOR_RETIRE_CMD= # test/diagnostic override for fm-successor's predecessor endpoint retirement command
-GROK_HOME=              # optional Grok config home for firstmate's global grok turn-end hook; defaults to ~/.grok
+GROK_HOME=              # optional Grok config home for firstmate's global grok turn-end and kill-guard hooks; defaults to ~/.grok
 FM_SEND_RETRIES=3       # fm-send Enter-retry attempts after typing the line once
 FM_SEND_SLEEP=0.4       # seconds between fm-send submit checks
 FM_SEND_SETTLE=1        # seconds fm-send waits after a successful text submit; 0 disables

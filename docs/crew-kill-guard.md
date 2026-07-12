@@ -36,6 +36,7 @@ An absolute utility path bypasses the shim, so the hook layer is the real gate w
 A shell builtin or absolute `kill` also bypasses PATH, which is why hookless adapters cannot provide the same structural guarantee for grep-derived kill forms.
 
 The per-task checker, shims, Grok registry entry, pointer, and generated worktree hook files are removed during teardown.
+When a watchdog successor temporarily adopts a predecessor worktree, spawn backs up generated hook and pointer files; if successor readiness is not proven, successor cleanup restores the predecessor's files before halting.
 
 ## Live verification, 2026-07-12
 
