@@ -37,11 +37,12 @@ fi
 TOKENS=()
 tokenize_command() {
   local src=${1//$'\\\n'/}
-  local i=0 len=${#src} token='' char='' quote='' next='' two=''
+  local i=0 len=${#src} token='' char='' quote='' next='' two='' hex='' oct=''
   TOKENS=()
   while [ "$i" -lt "$len" ]; do
     char=${src:i:1}
     case "$char" in
+      $'\n') TOKENS+=("$char"); i=$((i + 1)); continue ;;
       [[:space:]]) i=$((i + 1)); continue ;;
       '#')
         while [ "$i" -lt "$len" ] && [ "${src:i:1}" != $'\n' ]; do i=$((i + 1)); done
@@ -60,8 +61,18 @@ tokenize_command() {
       if [ -z "$quote" ]; then
         case "$char" in
           [[:space:]]|';'|'&'|'|'|'('|')'|'{'|'}'|'!') break ;;
+          $'\n') break ;;
           "'") quote="'"; i=$((i + 1)); continue ;;
           '"') quote='"'; i=$((i + 1)); continue ;;
+          '$')
+            if [ $((i + 1)) -lt "$len" ]; then
+              next=${src:i+1:1}
+              case "$next" in
+                "'") quote=ansi; i=$((i + 2)); continue ;;
+                '"') quote='"'; i=$((i + 2)); continue ;;
+              esac
+            fi
+            ;;
           "\\")
             if [ $((i + 1)) -lt "$len" ]; then
               next=${src:i+1:1}
@@ -73,6 +84,39 @@ tokenize_command() {
         esac
       elif [ "$quote" = "'" ]; then
         if [ "$char" = "'" ]; then quote=; i=$((i + 1)); continue; fi
+      elif [ "$quote" = ansi ]; then
+        if [ "$char" = "'" ]; then quote=; i=$((i + 1)); continue; fi
+        if [ "$char" = "\\" ] && [ $((i + 1)) -lt "$len" ]; then
+          next=${src:i+1:1}
+          case "$next" in
+            n) token+=$'\n'; i=$((i + 2)); continue ;;
+            r) token+=$'\r'; i=$((i + 2)); continue ;;
+            t) token+=$'\t'; i=$((i + 2)); continue ;;
+            a) token+=$'\a'; i=$((i + 2)); continue ;;
+            b) token+=$'\b'; i=$((i + 2)); continue ;;
+            e|E) token+=$'\e'; i=$((i + 2)); continue ;;
+            f) token+=$'\f'; i=$((i + 2)); continue ;;
+            v) token+=$'\v'; i=$((i + 2)); continue ;;
+            "\\"|"'"|'"'|\?) token+=$next; i=$((i + 2)); continue ;;
+            x)
+              hex=${src:i+2:2}
+              [[ $hex =~ ^[0-9A-Fa-f]{1,2}$ ]] || return 1
+              printf -v next '%b' "\\x$hex"
+              token+=$next
+              i=$((i + 2 + ${#hex}))
+              continue
+              ;;
+            [0-7])
+              oct=${src:i+1:3}
+              oct=${oct%%[!0-7]*}
+              printf -v next '%b' "\\$oct"
+              token+=$next
+              i=$((i + 1 + ${#oct}))
+              continue
+              ;;
+          esac
+          return 1
+        fi
       else
         if [ "$char" = '"' ]; then quote=; i=$((i + 1)); continue; fi
         if [ "$char" = "\\" ] && [ $((i + 1)) -lt "$len" ]; then
@@ -97,7 +141,7 @@ base_name() {
 }
 
 is_command_separator() {
-  case "$1" in ';'|'&'|'&&'|'||'|'|'|'|&'|';;'|'('|')'|'{'|'}'|'!') return 0 ;; *) return 1 ;; esac
+  case "$1" in $'\n'|';'|'&'|'&&'|'||'|'|'|'|&'|';;'|'('|')'|'{'|'}'|'!') return 0 ;; *) return 1 ;; esac
 }
 
 is_reserved_intro() {

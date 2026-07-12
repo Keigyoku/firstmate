@@ -69,12 +69,21 @@ expect_deny 'if true;then kill -9 -1;fi'
 expect_deny '{ kill -9 -1; }'
 expect_deny '! kill -9 -1'
 expect_deny '(kill -9 -1)'
+expect_deny $'echo ok\nkill -9 -1'
+expect_deny $'echo ok\n/usr/bin/time /usr/bin/pkill -f app'
+expect_deny "bash -lc \$'pkill -f app'"
+expect_deny "bash -lc \$'\\x70kill -f app'"
+expect_deny "bash -lc \$'kill -9 -1'"
+expect_deny "bash -lc \$'echo ok\\nkill -9 -1'"
+expect_deny 'bash -lc $"pkill -f app"'
 
 expect_allow 'kill 123'
 expect_allow 'kill -9 123 456'
 expect_allow 'command kill -TERM -- 789'
 expect_allow 'builtin kill -TERM -- 789'
 expect_allow 'printf "%s\n" "pkill is documented here"'
+expect_allow "printf '%s\n' \$'pkill -f app'"
+expect_allow 'echo $"kill -9 -1"'
 pass 'command policy denies sweeps and allows only explicit numeric PID kills'
 
 claude_out=$(printf '{"tool_input":{"command":"pkill -f tauri-driver"}}' | "$CHECK" --claude 2>"$TMP_ROOT/claude.err")
