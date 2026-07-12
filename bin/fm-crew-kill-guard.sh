@@ -56,6 +56,17 @@ tokenize_command() {
         case "$two" in '<<'|'<&'|'<>') TOKENS+=("$two"); TOKEN_SUBS+=(0); i=$((i + 2));; *) TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1));; esac
         continue
         ;;
+      '>')
+        two=${src:i:2}
+        case "$two" in '>>'|'>&'|'>|') TOKENS+=("$two"); TOKEN_SUBS+=(0); i=$((i + 2));; *) TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1));; esac
+        continue
+        ;;
+      '&')
+        case "${src:i:3}" in '&>>') TOKENS+=("${src:i:3}"); TOKEN_SUBS+=(0); i=$((i + 3)); continue ;; esac
+        two=${src:i:2}
+        case "$two" in '&&') TOKENS+=("$two"); TOKEN_SUBS+=(0); i=$((i + 2)); continue ;; '&>') TOKENS+=("$two"); TOKEN_SUBS+=(0); i=$((i + 2)); continue ;; esac
+        TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1)); continue
+        ;;
       '{')
         if [ $((i + 1)) -lt "$len" ] && [[ ${src:i+1:1} != [[:space:]\;\&\|\(\)\<\>] ]]; then
           :
@@ -70,9 +81,9 @@ tokenize_command() {
           TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1)); continue
         fi
         ;;
-      ';'|'&'|'|'|'('|')'|'!')
+      ';'|'|'|'('|')'|'!')
         two=${src:i:2}
-        case "$two" in '&&'|'||'|'|&'|';;') TOKENS+=("$two"); TOKEN_SUBS+=(0); i=$((i + 2));; *) TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1));; esac
+        case "$two" in '||'|'|&'|';;') TOKENS+=("$two"); TOKEN_SUBS+=(0); i=$((i + 2));; *) TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1));; esac
         continue
         ;;
     esac
@@ -83,7 +94,7 @@ tokenize_command() {
       char=${src:i:1}
       if [ -z "$quote" ]; then
         case "$char" in
-          [[:space:]]|';'|'&'|'|'|'('|')'|'!'|'<') break ;;
+          [[:space:]]|';'|'&'|'|'|'('|')'|'!'|'<'|'>') break ;;
           $'\n') break ;;
           "'") quote="'"; i=$((i + 1)); continue ;;
           '"') quote='"'; i=$((i + 1)); continue ;;
@@ -330,14 +341,14 @@ words_have_opaque_stdin_redirection() {
 
 redirection_needs_operand() {
   case "$1" in
-    '<'|'>'|'>>'|'<&'|'>&'|'<>'|'>|'|'<<'|'<<-'|'<<<'|[0-9]'<'|[0-9]'>'|[0-9]'>>'|[0-9]'<&'|[0-9]'>&'|[0-9]'<>'|[0-9]'>|'|[0-9]'<<'|[0-9]'<<-'|[0-9]'<<<') return 0 ;;
+    '<'|'>'|'>>'|'<&'|'>&'|'<>'|'>|'|'&>'|'&>>'|'<<'|'<<-'|'<<<'|[0-9]'<'|[0-9]'>'|[0-9]'>>'|[0-9]'<&'|[0-9]'>&'|[0-9]'<>'|[0-9]'>|'|[0-9]'<<'|[0-9]'<<-'|[0-9]'<<<') return 0 ;;
   esac
   [[ $1 =~ ^[0-9]+(<|>|>>|<\&|>\&|<>|>\||<<|<<-|<<<)$ ]]
 }
 
 redirection_has_attached_operand() {
   case "$1" in
-    '<'*|'>'*|[0-9]'<'*|[0-9]'>'*)
+    '<'*|'>'*|'&>'*|[0-9]'<'*|[0-9]'>'*)
       redirection_needs_operand "$1" && return 1
       return 0
       ;;
