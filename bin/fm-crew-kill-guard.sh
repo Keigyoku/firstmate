@@ -737,6 +737,78 @@ validate_kill_args() {
   [ "$pid_seen" -eq 1 ]
 }
 
+set_alias_payload() {
+  local -n _names=$1
+  local -n _payloads=$2
+  local name=$3 payload=$4 i=0
+  while [ "$i" -lt "${#_names[@]}" ]; do
+    if [ "${_names[$i]}" = "$name" ]; then
+      _payloads[i]=$payload
+      return
+    fi
+    i=$((i + 1))
+  done
+  _names+=("$name")
+  _payloads+=("$payload")
+}
+
+alias_payload_for() {
+  # shellcheck disable=SC2178
+  local -n _names=$1
+  # shellcheck disable=SC2178
+  local -n _payloads=$2
+  local name=$3 i=0
+  while [ "$i" -lt "${#_names[@]}" ]; do
+    if [ "${_names[$i]}" = "$name" ]; then
+      printf '%s\n' "${_payloads[$i]}"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  return 1
+}
+
+update_shopt_alias_state() {
+  local -n _words=$1
+  local -n _alias_expand=$2
+  local i=$3 mode='' arg
+  while [ "$i" -lt "${#_words[@]}" ]; do
+    arg=${_words[$i]}
+    case "$arg" in
+      -s|-u) mode=$arg ;;
+      expand_aliases)
+        case "$mode" in
+          -s) _alias_expand=1 ;;
+          -u) _alias_expand=0 ;;
+        esac
+        ;;
+    esac
+    i=$((i + 1))
+  done
+}
+
+record_alias_definitions() {
+  local -n _words=$1
+  local -n _alias_names=$2
+  local -n _alias_payloads=$3
+  local i=$4 arg name payload
+  while [ "$i" -lt "${#_words[@]}" ]; do
+    arg=${_words[$i]}
+    case "$arg" in
+      --|-p) i=$((i + 1)); continue ;;
+      *=*)
+        name=${arg%%=*}
+        payload=${arg#*=}
+        case "$name" in
+          ''|*[!A-Za-z0-9_]*|[0-9]*) ;;
+          *) set_alias_payload _alias_names _alias_payloads "$name" "$payload" ;;
+        esac
+        ;;
+    esac
+    i=$((i + 1))
+  done
+}
+
 simple_command_feeds_shell_interpreter() {
   local words_name=$1 subs_name=$2 i=0 name
   local -n _words=$words_name
@@ -849,6 +921,9 @@ redact_non_shell_heredocs() {
 command_words_are_denied() {
   local words_name=$1
   local subs_name=$2
+  local alias_expand_name=${3:-}
+  local alias_names_name=${4:-}
+  local alias_payloads_name=${5:-}
   local -n _cmd_words=$words_name
   local -n _cmd_subs=$subs_name
   local i=0 name payload direct_prefix=0 wrapped=0
@@ -872,6 +947,21 @@ command_words_are_denied() {
     word_has_brace_expansion "${_cmd_words[$i]}" && return 0
     name=$(base_name "${_cmd_words[$i]}")
     case "$name" in
+      shopt)
+        if [ -n "$alias_expand_name" ]; then
+          local -n _alias_expand_ref=$alias_expand_name
+          update_shopt_alias_state _cmd_words _alias_expand_ref $((i + 1))
+        fi
+        return 1
+        ;;
+      alias)
+        if [ -n "$alias_names_name" ] && [ -n "$alias_payloads_name" ]; then
+          local -n _alias_names_ref=$alias_names_name
+          local -n _alias_payloads_ref=$alias_payloads_name
+          record_alias_definitions _cmd_words _alias_names_ref _alias_payloads_ref $((i + 1))
+        fi
+        return 1
+        ;;
       command) direct_prefix=1; i=$(skip_command_options _cmd_words $((i + 1))); continue ;;
       builtin) direct_prefix=1; i=$(skip_builtin_options _cmd_words $((i + 1))); continue ;;
       sudo) direct_prefix=1; i=$(skip_sudo_options _cmd_words $((i + 1))); continue ;;
@@ -913,6 +1003,15 @@ command_words_are_denied() {
   word_is_dynamic "${_cmd_words[$i]}" && return 0
   word_has_brace_expansion "${_cmd_words[$i]}" && return 0
   name=$(base_name "${_cmd_words[$i]}")
+  if [ -n "$alias_expand_name" ] && [ -n "$alias_names_name" ] && [ -n "$alias_payloads_name" ]; then
+    local -n _alias_expand_ref=$alias_expand_name
+    local -n _alias_names_ref=$alias_names_name
+    local -n _alias_payloads_ref=$alias_payloads_name
+    if [ "$_alias_expand_ref" -eq 1 ]; then
+      payload=$(alias_payload_for _alias_names_ref _alias_payloads_ref "$name" 2>/dev/null || true)
+      [ -n "$payload" ] && command_string_is_denied "$payload" && return 0
+    fi
+  fi
   case "$name" in
     pkill|killall) return 0 ;;
     fuser)
@@ -943,6 +1042,12 @@ command_string_is_denied() {
   local current=()
   local current_subs=()
   local stdin_pipe=0
+  # shellcheck disable=SC2034
+  local alias_expand=0
+  # shellcheck disable=SC2034
+  local alias_names=()
+  # shellcheck disable=SC2034
+  local alias_payloads=()
   src=$(redact_non_shell_heredocs "$1")
   tokenize_command "$src" || return 0
   local idx=0 tok
@@ -951,7 +1056,7 @@ command_string_is_denied() {
     if is_command_separator "$tok"; then
       if [ "${#current[@]}" -gt 0 ]; then
         COMMAND_STDIN_PIPE=$stdin_pipe
-        command_words_are_denied current current_subs && return 0
+        command_words_are_denied current current_subs alias_expand alias_names alias_payloads && return 0
         current=()
         current_subs=()
       fi
@@ -965,7 +1070,7 @@ command_string_is_denied() {
   done
   if [ "${#current[@]}" -gt 0 ]; then
     COMMAND_STDIN_PIPE=$stdin_pipe
-    command_words_are_denied current current_subs && return 0
+    command_words_are_denied current current_subs alias_expand alias_names alias_payloads && return 0
   fi
   return 1
 }

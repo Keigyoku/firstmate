@@ -179,6 +179,10 @@ expect_deny 'printf "%s\0" 123 | xargs -0 kill'
 expect_deny 'printf "%s\n" 123 | xargs -I{} kill -9 {}'
 expect_deny 'xargs -a /tmp/pids kill -9'
 expect_deny 'xargs --arg-file=/tmp/pids kill'
+expect_deny "shopt -s expand_aliases; alias x='pkill -f app'; x"
+expect_deny $'shopt -s expand_aliases\nalias x="pkill -f app"\nx'
+expect_deny $'shopt -s expand_aliases\nalias x="kill -9 -1"\nx'
+expect_deny $'shopt -s expand_aliases\nalias x="sudo pkill -f app"\nx'
 
 expect_allow 'kill 123'
 expect_allow 'kill -9 123 456'
@@ -233,6 +237,9 @@ expect_allow 'git ls-files | xargs wc -l'
 expect_allow 'find . -name "*.tmp" -print0 | xargs -0 rm'
 expect_allow 'xargs -a /tmp/files wc -l'
 expect_allow 'printf "%s\n" hello | xargs'
+expect_allow "alias x='pkill -f app'; echo x"
+expect_allow $'shopt -s expand_aliases\nalias x="echo pkill -f app"\nx'
+expect_allow 'printf "%s\n" "alias x='"'"'pkill -f app'"'"'"'
 pass 'command policy denies sweeps and allows only explicit numeric PID kills'
 
 claude_out=$(printf '{"tool_input":{"command":"pkill -f tauri-driver"}}' | "$CHECK" --claude 2>"$TMP_ROOT/claude.err")
