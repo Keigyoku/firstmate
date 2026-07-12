@@ -30,6 +30,8 @@ expect_deny 'pkill -9 -f "launch-webdriver"'
 expect_deny '/usr/bin/pkill -f tauri-driver'
 expect_deny '>/tmp/out pkill -f app'
 expect_deny '2>/tmp/e kill -9 -1'
+expect_deny '10>/tmp/out pkill -f app'
+expect_deny '12>/tmp/e kill -9 -1'
 expect_deny '</dev/null killall app'
 expect_deny '>/tmp/out sudo pkill -f app'
 expect_deny 'sudo killall gamescope'
@@ -109,6 +111,9 @@ expect_deny 'bash<<<"kill -9 -1"'
 expect_deny 'bash <<EOF
 pkill -f app
 EOF'
+expect_deny 'bash <<EOF; cat
+pkill -f app
+EOF'
 expect_deny '<<EOF bash
 pkill -f app
 EOF'
@@ -181,6 +186,9 @@ expect_allow 'printf "%s\n" "$(git rev-parse --show-toplevel)"'
 expect_allow "printf '%s\n' '\$(pkill -f app)'"
 expect_allow 'echo \$\(pkill -f app\)'
 expect_allow 'cat <<'"'EOF'"'
+pkill -f app
+EOF'
+expect_allow 'cat <<'"'EOF'"'; bash -c "echo ok"
 pkill -f app
 EOF'
 expect_allow '<<EOF cat

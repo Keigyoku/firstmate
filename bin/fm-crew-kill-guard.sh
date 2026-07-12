@@ -313,8 +313,8 @@ words_have_opaque_stdin_redirection() {
 redirection_needs_operand() {
   case "$1" in
     '<'|'>'|'>>'|'<&'|'>&'|'<>'|'>|'|'<<'|'<<-'|'<<<'|[0-9]'<'|[0-9]'>'|[0-9]'>>'|[0-9]'<&'|[0-9]'>&'|[0-9]'<>'|[0-9]'>|'|[0-9]'<<'|[0-9]'<<-'|[0-9]'<<<') return 0 ;;
-    *) return 1 ;;
   esac
+  [[ $1 =~ ^[0-9]+(<|>|>>|<\&|>\&|<>|>\||<<|<<-|<<<)$ ]]
 }
 
 redirection_has_attached_operand() {
@@ -323,8 +323,8 @@ redirection_has_attached_operand() {
       redirection_needs_operand "$1" && return 1
       return 0
       ;;
-    *) return 1 ;;
   esac
+  [[ $1 =~ ^[0-9]+(<|>|>>|<\&|>\&|<>|>\||<<|<<-|<<<).+ ]]
 }
 
 normalize_simple_command_words() {
@@ -694,66 +694,75 @@ validate_kill_args() {
   [ "$pid_seen" -eq 1 ]
 }
 
-line_feeds_shell_interpreter() {
-  local line=$1 prefix idx=0 tok i=0 name
-  local words=()
+simple_command_feeds_shell_interpreter() {
+  local words_name=$1 subs_name=$2 i=0 name
+  local -n _words=$words_name
+  local -n _subs=$subs_name
   local normalized_words=()
   local normalized_subs=()
-  local current=()
-  local current_subs=()
-  local last=()
-  local last_subs=()
-  prefix=$line
-  tokenize_command "$prefix" || return 0
-  while [ "$idx" -lt "${#TOKENS[@]}" ]; do
-    tok=${TOKENS[$idx]}
-    if is_command_separator "$tok"; then
-      if [ "${#current[@]}" -gt 0 ]; then
-        last=("${current[@]}")
-        last_subs=("${current_subs[@]}")
-        current=()
-        current_subs=()
-      fi
-      idx=$((idx + 1))
-      continue
-    fi
-    current+=("$tok")
-    current_subs+=("${TOKEN_SUBS[$idx]:-0}")
-    idx=$((idx + 1))
-  done
-  if [ "${#current[@]}" -gt 0 ]; then
-    last=("${current[@]}")
-    last_subs=("${current_subs[@]}")
-  fi
-  : "${last[@]}" "${last_subs[@]}"
-  normalize_simple_command_words last last_subs normalized_words normalized_subs
-  words=("${normalized_words[@]}")
-  while [ "$i" -lt "${#words[@]}" ]; do
-    [[ ${words[$i]} == *=* && ${words[$i]} != /* ]] || break
+  normalize_simple_command_words _words _subs normalized_words normalized_subs
+  _words=("${normalized_words[@]}")
+  _subs=("${normalized_subs[@]}")
+  while [ "$i" -lt "${#_words[@]}" ]; do
+    [[ ${_words[$i]} == *=* && ${_words[$i]} != /* ]] || break
     i=$((i + 1))
   done
-  while [ "$i" -lt "${#words[@]}" ] && is_reserved_intro "${words[$i]}"; do i=$((i + 1)); done
-  while [ "$i" -lt "${#words[@]}" ]; do
-    name=$(base_name "${words[$i]}")
+  while [ "$i" -lt "${#_words[@]}" ] && is_reserved_intro "${_words[$i]}"; do i=$((i + 1)); done
+  while [ "$i" -lt "${#_words[@]}" ]; do
+    name=$(base_name "${_words[$i]}")
     case "$name" in
-      command) i=$(skip_command_options words $((i + 1))); continue ;;
-      builtin) i=$(skip_builtin_options words $((i + 1))); continue ;;
-      exec) i=$(skip_exec_options words $((i + 1))); continue ;;
-      sudo) i=$(skip_sudo_options words $((i + 1))); continue ;;
-      env) i=$(skip_env_options words $((i + 1))); continue ;;
+      command) i=$(skip_command_options _words $((i + 1))); continue ;;
+      builtin) i=$(skip_builtin_options _words $((i + 1))); continue ;;
+      exec) i=$(skip_exec_options _words $((i + 1))); continue ;;
+      sudo) i=$(skip_sudo_options _words $((i + 1))); continue ;;
+      env) i=$(skip_env_options _words $((i + 1))); continue ;;
       busybox|toybox)
         i=$((i + 1))
-        [ "$i" -lt "${#words[@]}" ] && [ "${words[$i]}" = -- ] && i=$((i + 1))
+        [ "$i" -lt "${#_words[@]}" ] && [ "${_words[$i]}" = -- ] && i=$((i + 1))
         continue
         ;;
       time|gtime|nohup|setsid|timeout|gtimeout|nice|ionice|chrt|stdbuf|unbuffer)
-        i=$(skip_wrapper_options words $((i + 1)) "$name")
+        i=$(skip_wrapper_options _words $((i + 1)) "$name")
         continue
         ;;
     esac
     case "$name" in bash|sh|zsh|dash|ksh) return 0 ;; *) return 1 ;; esac
   done
   return 1
+}
+
+line_heredoc_feeds_shell_interpreter() {
+  local line=$1 idx=0 tok heredoc_idx=-1 delimiter_idx=-1 scan=0
+  local words=()
+  local subs=()
+  tokenize_command "$line" || return 0
+  while [ "$idx" -lt "${#TOKENS[@]}" ]; do
+    tok=${TOKENS[$idx]}
+    if [ "$tok" = '<<' ] || [ "$tok" = '<<-' ]; then
+      heredoc_idx=$idx
+      delimiter_idx=$((idx + 1))
+      break
+    fi
+    if is_command_separator "$tok"; then
+      words=()
+      subs=()
+      idx=$((idx + 1))
+      continue
+    fi
+    words+=("$tok")
+    subs+=("${TOKEN_SUBS[$idx]:-0}")
+    idx=$((idx + 1))
+  done
+  [ "$heredoc_idx" -ge 0 ] || return 1
+  scan=$((delimiter_idx + 1))
+  while [ "$scan" -lt "${#TOKENS[@]}" ]; do
+    tok=${TOKENS[$scan]}
+    is_command_separator "$tok" && break
+    words+=("$tok")
+    subs+=("${TOKEN_SUBS[$scan]:-0}")
+    scan=$((scan + 1))
+  done
+  simple_command_feeds_shell_interpreter words subs
 }
 
 redact_non_shell_heredocs() {
@@ -772,7 +781,7 @@ redact_non_shell_heredocs() {
     delimiter=$(quote_remove_word "$delimiter") || continue
     [ -n "$delimiter" ] || continue
     keep_body=1
-    line_feeds_shell_interpreter "$line" || keep_body=0
+    line_heredoc_feeds_shell_interpreter "$line" || keep_body=0
     while IFS= read -r line || [ -n "$line" ]; do
       comparable=$line
       if [ "$strip_tabs" -ne 0 ]; then
