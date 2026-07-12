@@ -12,6 +12,12 @@ An actual `kill` command is allowed only when every target is an explicit numeri
 The guard deliberately does not test PID ownership because that check would be racy.
 Its denial tells the agent to use only individually verified numeric PIDs owned by its task and that the live app, desktop session, and herdr processes are untouchable.
 
+## Scope limits
+
+The guard targets careless direct shell-visible pattern kills and shell command substitutions before execution.
+It deliberately does not block deferred executable payloads routed through other interpreters or utilities, such as `trap 'pkill -f app' EXIT`, `find . -exec kill -9 -1 ';'`, `awk 'BEGIN{system("pkill -f app")}'`, Python `os.kill()`, or comparable deliberate interpreter-routed signaling.
+Those surfaces remain subject to the same policy expectation: a crew must not signal processes outside its task tree, and must escalate instead of retrying with a bypass shape.
+
 ## Spawn installation
 
 | Adapter | Enforcement |

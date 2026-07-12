@@ -158,6 +158,108 @@ word_is_dynamic() {
   case "$1" in *'$'*|*'`'*) return 0 ;; *) return 1 ;; esac
 }
 
+find_command_substitution_end() {
+  local src=$1 start=$2
+  local i=$start len=${#src} depth=1 char='' next='' quote=''
+  while [ "$i" -lt "$len" ]; do
+    char=${src:i:1}
+    if [ -z "$quote" ]; then
+      case "$char" in
+        "'") quote="'"; i=$((i + 1)); continue ;;
+        '"') quote='"'; i=$((i + 1)); continue ;;
+        '`')
+          i=$(find_backtick_substitution_end "$src" $((i + 1))) || return 1
+          i=$((i + 1))
+          continue
+          ;;
+        '$')
+          if [ $((i + 1)) -lt "$len" ] && [ "${src:i+1:1}" = '(' ]; then
+            depth=$((depth + 1))
+            i=$((i + 2))
+            continue
+          fi
+          ;;
+        ')')
+          depth=$((depth - 1))
+          [ "$depth" -eq 0 ] && { printf '%s\n' "$i"; return 0; }
+          ;;
+        "\\")
+          i=$((i + 2))
+          continue
+          ;;
+      esac
+    elif [ "$quote" = "'" ]; then
+      if [ "$char" = "'" ]; then quote=; fi
+    else
+      case "$char" in
+        '"') quote= ;;
+        "\\") i=$((i + 2)); continue ;;
+      esac
+    fi
+    i=$((i + 1))
+  done
+  return 1
+}
+
+find_backtick_substitution_end() {
+  local src=$1 i=$2
+  local len=${#src} char=''
+  while [ "$i" -lt "$len" ]; do
+    char=${src:i:1}
+    case "$char" in
+      '`') printf '%s\n' "$i"; return 0 ;;
+      "\\") i=$((i + 2)); continue ;;
+    esac
+    i=$((i + 1))
+  done
+  return 1
+}
+
+word_substitutions_are_denied() {
+  local word=$1
+  local i=0 len=${#word} char='' next='' end='' payload=''
+  while [ "$i" -lt "$len" ]; do
+    char=${word:i:1}
+    case "$char" in
+      '$')
+        if [ $((i + 1)) -lt "$len" ]; then
+          next=${word:i+1:1}
+          if [ "$next" = '(' ]; then
+            [ $((i + 2)) -lt "$len" ] && [ "${word:i+2:1}" = '(' ] && { i=$((i + 2)); continue; }
+            end=$(find_command_substitution_end "$word" $((i + 2))) || return 0
+            payload=${word:i+2:end-i-2}
+            [ -n "$payload" ] && command_string_is_denied "$payload" && return 0
+            i=$((end + 1))
+            continue
+          fi
+        fi
+        ;;
+      '`')
+        end=$(find_backtick_substitution_end "$word" $((i + 1))) || return 0
+        payload=${word:i+1:end-i-1}
+        [ -n "$payload" ] && command_string_is_denied "$payload" && return 0
+        i=$((end + 1))
+        continue
+        ;;
+      "\\")
+        i=$((i + 2))
+        continue
+        ;;
+    esac
+    i=$((i + 1))
+  done
+  return 1
+}
+
+words_substitutions_are_denied() {
+  local -n _words=$1
+  local word
+  for word in "${_words[@]}"; do
+    word_substitutions_are_denied "$word" && return 0
+  done
+  return 1
+}
+
 words_have_stdin_redirection() {
   local -n _words=$1
   local i=$2 arg
@@ -295,6 +397,7 @@ command_words_are_denied() {
   local words_name=$1
   local -n words=$words_name
   local i=0 name payload direct_prefix=0 wrapped=0
+  words_substitutions_are_denied words && return 0
   while [ "$i" -lt "${#words[@]}" ]; do
     [[ ${words[$i]} == *=* && ${words[$i]} != /* ]] || break
     i=$((i + 1))

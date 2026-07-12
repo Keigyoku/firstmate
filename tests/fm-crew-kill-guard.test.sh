@@ -95,6 +95,10 @@ expect_deny "bash -lc'pkill -f app'"
 expect_deny "/usr/bin/env -S \"bash -c 'kill -9 -1'\""
 expect_deny "/usr/bin/env --split-string=\"bash -c 'pkill -f app'\""
 expect_deny "/usr/bin/env -Sbash -c 'kill -9 -1'"
+expect_deny 'echo "$(pkill -f app)"'
+expect_deny 'x="$(kill -9 -1)"'
+expect_deny 'echo `pkill -f app`'
+expect_deny 'printf "%s\n" "`kill -9 -1`"'
 
 expect_allow 'kill 123'
 expect_allow 'kill -9 123 456'
@@ -104,6 +108,7 @@ expect_allow 'printf "%s\n" "pkill is documented here"'
 expect_allow "printf '%s\n' \$'pkill -f app'"
 expect_allow 'echo $"kill -9 -1"'
 expect_allow 'echo $(pwd)'
+expect_allow 'echo "`pwd`"'
 expect_allow 'printf "%s\n" "$(git rev-parse --show-toplevel)"'
 pass 'command policy denies sweeps and allows only explicit numeric PID kills'
 
