@@ -46,7 +46,7 @@ Standing sense equipment for adjudicating eyeball rows yourself, instead of pack
 - Drive: synthetic input and window management only inside the nested compositor named below.
 
 Fleet-local, machine-specific toolkit detail (exact binaries, audio devices, compositor choice, launch quirks) lives at `data/smoke-crew-eyeball-toolkit.md` in the operating firstmate home when present.
-Read that file before an eyeball-heavy pass.
+If that file exists, read it before an eyeball-heavy pass.
 This skill owns the durable safety and duty rules; that file owns host-specific equipment detail.
 
 ### Nested-compositor isolation
