@@ -35,32 +35,35 @@ if [ -z "$COMMAND" ]; then
 fi
 
 TOKENS=()
+TOKEN_SUBS=()
 tokenize_command() {
   local src=${1//$'\\\n'/}
-  local i=0 len=${#src} token='' char='' quote='' next='' two='' hex='' oct=''
+  local i=0 len=${#src} token='' token_subs=0 char='' quote='' next='' two='' hex='' oct=''
   TOKENS=()
+  TOKEN_SUBS=()
   while [ "$i" -lt "$len" ]; do
     char=${src:i:1}
     case "$char" in
-      $'\n') TOKENS+=("$char"); i=$((i + 1)); continue ;;
+      $'\n') TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1)); continue ;;
       [[:space:]]) i=$((i + 1)); continue ;;
       '#')
         while [ "$i" -lt "$len" ] && [ "${src:i:1}" != $'\n' ]; do i=$((i + 1)); done
         continue
         ;;
       '<')
-        case "${src:i:3}" in '<<<') TOKENS+=('<<<'); i=$((i + 3)); continue ;; esac
+        case "${src:i:3}" in '<<<'|'<<-') TOKENS+=("${src:i:3}"); TOKEN_SUBS+=(0); i=$((i + 3)); continue ;; esac
         two=${src:i:2}
-        case "$two" in '<<'|'<&'|'<>') TOKENS+=("$two"); i=$((i + 2));; *) TOKENS+=("$char"); i=$((i + 1));; esac
+        case "$two" in '<<'|'<&'|'<>') TOKENS+=("$two"); TOKEN_SUBS+=(0); i=$((i + 2));; *) TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1));; esac
         continue
         ;;
       ';'|'&'|'|'|'('|')'|'{'|'}'|'!')
         two=${src:i:2}
-        case "$two" in '&&'|'||'|'|&'|';;') TOKENS+=("$two"); i=$((i + 2));; *) TOKENS+=("$char"); i=$((i + 1));; esac
+        case "$two" in '&&'|'||'|'|&'|';;') TOKENS+=("$two"); TOKEN_SUBS+=(0); i=$((i + 2));; *) TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1));; esac
         continue
         ;;
     esac
     token=
+    token_subs=0
     quote=
     while [ "$i" -lt "$len" ]; do
       char=${src:i:1}
@@ -76,9 +79,11 @@ tokenize_command() {
               case "$next" in
                 "'") quote=ansi; i=$((i + 2)); continue ;;
                 '"') quote='"'; i=$((i + 2)); continue ;;
+                '(') token_subs=1 ;;
               esac
             fi
             ;;
+          '`') token_subs=1 ;;
           "\\")
             if [ $((i + 1)) -lt "$len" ]; then
               next=${src:i+1:1}
@@ -131,12 +136,14 @@ tokenize_command() {
           i=$((i + 2))
           continue
         fi
+        case "$char" in '$') [ $((i + 1)) -lt "$len" ] && [ "${src:i+1:1}" = '(' ] && token_subs=1 ;; '`') token_subs=1 ;; esac
       fi
       token+=$char
       i=$((i + 1))
     done
     [ -z "$quote" ] || return 1
     TOKENS+=("$token")
+    TOKEN_SUBS+=("$token_subs")
   done
 }
 
@@ -216,8 +223,9 @@ find_backtick_substitution_end() {
 }
 
 word_substitutions_are_denied() {
-  local word=$1
+  local word=$1 check=${2:-1}
   local i=0 len=${#word} char='' next='' end='' payload=''
+  [ "$check" -eq 1 ] || return 1
   while [ "$i" -lt "$len" ]; do
     char=${word:i:1}
     case "$char" in
@@ -253,19 +261,50 @@ word_substitutions_are_denied() {
 
 words_substitutions_are_denied() {
   local -n _words=$1
-  local word
-  for word in "${_words[@]}"; do
-    word_substitutions_are_denied "$word" && return 0
+  local _subs_name=${2:-} i=0 check=1
+  if [ -n "$_subs_name" ]; then
+    local -n _subs=$_subs_name
+  fi
+  while [ "$i" -lt "${#_words[@]}" ]; do
+    check=1
+    [ -z "$_subs_name" ] || check=${_subs[$i]:-0}
+    word_substitutions_are_denied "${_words[$i]}" "$check" && return 0
+    i=$((i + 1))
   done
   return 1
 }
 
-words_have_stdin_redirection() {
+shell_here_string_payloads_are_denied() {
+  local -n _words=$1
+  local -n _subs=$2
+  local i=$3 arg payload payload_subs
+  while [ "$i" -lt "${#_words[@]}" ]; do
+    arg=${_words[$i]}
+    case "$arg" in
+      '<<<'|[0-9]'<<<')
+        [ $((i + 1)) -lt "${#_words[@]}" ] || return 0
+        payload=${_words[$((i + 1))]}
+        payload_subs=${_subs[$((i + 1))]:-0}
+        word_substitutions_are_denied "$payload" "$payload_subs" && return 0
+        [ -n "$payload" ] && command_string_is_denied "$payload" && return 0
+        i=$((i + 2))
+        continue
+        ;;
+    esac
+    i=$((i + 1))
+  done
+  return 1
+}
+
+words_have_opaque_stdin_redirection() {
   local -n _words=$1
   local i=$2 arg
   while [ "$i" -lt "${#_words[@]}" ]; do
     arg=${_words[$i]}
-    case "$arg" in '<'|'<<'|'<<<'|'<&'|'<>'|'<-'|[0-9]'<'|[0-9]'<<'|[0-9]'<<<'|[0-9]'<&'|[0-9]'<>'|[0-9]'<-'|'<'*|[0-9]'<'*) return 0 ;; esac
+    case "$arg" in
+      '<<'|'<<-'|'<<<'|[0-9]'<<'|[0-9]'<<-'|[0-9]'<<<') ;;
+      '<'|'<&'|'<>'|'<-'|[0-9]'<'|[0-9]'<&'|[0-9]'<>'|[0-9]'<-'|'<'*|[0-9]'<'*) return 0 ;;
+    esac
     i=$((i + 1))
   done
   return 1
@@ -393,59 +432,124 @@ validate_kill_args() {
   [ "$pid_seen" -eq 1 ]
 }
 
-command_words_are_denied() {
-  local words_name=$1
-  local -n words=$words_name
-  local i=0 name payload direct_prefix=0 wrapped=0
-  words_substitutions_are_denied words && return 0
+line_feeds_shell_interpreter() {
+  local line=$1 prefix i=0 name
+  local words=()
+  prefix=${line%%<<*}
+  tokenize_command "$prefix" || return 0
+  words=("${TOKENS[@]}")
   while [ "$i" -lt "${#words[@]}" ]; do
     [[ ${words[$i]} == *=* && ${words[$i]} != /* ]] || break
     i=$((i + 1))
   done
   while [ "$i" -lt "${#words[@]}" ] && is_reserved_intro "${words[$i]}"; do i=$((i + 1)); done
-  [ "$i" -lt "${#words[@]}" ] || return 1
   while [ "$i" -lt "${#words[@]}" ]; do
-    word_is_dynamic "${words[$i]}" && return 0
     name=$(base_name "${words[$i]}")
     case "$name" in
+      command|builtin|exec) i=$((i + 1)); continue ;;
+      sudo) i=$(skip_sudo_options words $((i + 1))); continue ;;
+      env) i=$(skip_env_options words $((i + 1))); continue ;;
+      time|gtime|nohup|setsid|timeout|gtimeout|nice|ionice|chrt|stdbuf|unbuffer)
+        i=$(skip_wrapper_options words $((i + 1)) "$name")
+        continue
+        ;;
+    esac
+    case "$name" in bash|sh|zsh|dash|ksh) return 0 ;; *) return 1 ;; esac
+  done
+  return 1
+}
+
+redact_non_shell_heredocs() {
+  local src=$1 out='' line='' after='' delimiter='' comparable='' strip_tabs=0 keep_body=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    out+="$line"$'\n'
+    [[ $line == *'<<'* && $line != *'<<<'* ]] || continue
+    after=${line#*<<}
+    strip_tabs=0
+    if [[ $after == -* ]]; then
+      strip_tabs=1
+      after=${after#-}
+    fi
+    after=${after#"${after%%[![:space:]]*}"}
+    delimiter=${after%%[[:space:];&|()<>]*}
+    delimiter=${delimiter#\'}
+    delimiter=${delimiter%\'}
+    delimiter=${delimiter#\"}
+    delimiter=${delimiter%\"}
+    [ -n "$delimiter" ] || continue
+    keep_body=1
+    line_feeds_shell_interpreter "$line" || keep_body=0
+    while IFS= read -r line || [ -n "$line" ]; do
+      comparable=$line
+      if [ "$strip_tabs" -ne 0 ]; then
+        while [[ $comparable == $'\t'* ]]; do comparable=${comparable#$'\t'}; done
+      fi
+      if [ "$comparable" = "$delimiter" ]; then
+        [ "$keep_body" -eq 0 ] || out+="$line"$'\n'
+        break
+      fi
+      [ "$keep_body" -eq 0 ] || out+="$line"$'\n'
+    done
+  done <<< "$src"
+  printf '%s' "$out"
+}
+
+command_words_are_denied() {
+  local words_name=$1
+  local subs_name=$2
+  local -n _cmd_words=$words_name
+  local -n _cmd_subs=$subs_name
+  local i=0 name payload direct_prefix=0 wrapped=0
+  words_substitutions_are_denied _cmd_words _cmd_subs && return 0
+  while [ "$i" -lt "${#_cmd_words[@]}" ]; do
+    [[ ${_cmd_words[$i]} == *=* && ${_cmd_words[$i]} != /* ]] || break
+    i=$((i + 1))
+  done
+  while [ "$i" -lt "${#_cmd_words[@]}" ] && is_reserved_intro "${_cmd_words[$i]}"; do i=$((i + 1)); done
+  [ "$i" -lt "${#_cmd_words[@]}" ] || return 1
+  while [ "$i" -lt "${#_cmd_words[@]}" ]; do
+    word_is_dynamic "${_cmd_words[$i]}" && return 0
+    name=$(base_name "${_cmd_words[$i]}")
+    case "$name" in
       command|builtin) direct_prefix=1; i=$((i + 1)); continue ;;
-      sudo) direct_prefix=1; i=$(skip_sudo_options words $((i + 1))); continue ;;
+      sudo) direct_prefix=1; i=$(skip_sudo_options _cmd_words $((i + 1))); continue ;;
       env)
-        env_split_payloads_are_denied words $((i + 1)) && return 0
+        env_split_payloads_are_denied _cmd_words $((i + 1)) && return 0
         wrapped=1
-        i=$(skip_env_options words $((i + 1)))
+        i=$(skip_env_options _cmd_words $((i + 1)))
         continue
         ;;
       exec) wrapped=1; i=$((i + 1)); continue ;;
       eval)
-        payload=${words[*]:$((i + 1))}
+        payload=${_cmd_words[*]:$((i + 1))}
         [ -n "$payload" ] && command_string_is_denied "$payload" && return 0
         return 1
         ;;
       bash|sh|zsh|dash|ksh)
-        payload=$(literal_payload_after_shell_c words $((i + 1)) 2>/dev/null || true)
+        payload=$(literal_payload_after_shell_c _cmd_words $((i + 1)) 2>/dev/null || true)
         [ -n "$payload" ] && command_string_is_denied "$payload" && return 0
         [ "${COMMAND_STDIN_PIPE:-0}" -eq 1 ] && return 0
-        words_have_stdin_redirection words $((i + 1)) && return 0
+        shell_here_string_payloads_are_denied _cmd_words _cmd_subs $((i + 1)) && return 0
+        words_have_opaque_stdin_redirection _cmd_words $((i + 1)) && return 0
         return 1
         ;;
       time|gtime|nohup|setsid|timeout|gtimeout|nice|ionice|chrt|stdbuf|unbuffer)
         wrapped=1
-        i=$(skip_wrapper_options words $((i + 1)) "$name")
+        i=$(skip_wrapper_options _cmd_words $((i + 1)) "$name")
         continue
         ;;
       xargs) return 0 ;;
     esac
     break
   done
-  [ "$i" -lt "${#words[@]}" ] || return 1
-  word_is_dynamic "${words[$i]}" && return 0
-  name=$(base_name "${words[$i]}")
+  [ "$i" -lt "${#_cmd_words[@]}" ] || return 1
+  word_is_dynamic "${_cmd_words[$i]}" && return 0
+  name=$(base_name "${_cmd_words[$i]}")
   case "$name" in
     pkill|killall) return 0 ;;
     fuser)
       local arg
-      for arg in "${words[@]:$((i + 1))}"; do
+      for arg in "${_cmd_words[@]:$((i + 1))}"; do
         case "$arg" in
           --kill) return 0 ;;
           -?*)
@@ -459,7 +563,7 @@ command_words_are_denied() {
       ;;
     kill)
       [ "$wrapped" -eq 0 ] || return 0
-      validate_kill_args words $((i + 1)) || return 0
+      validate_kill_args _cmd_words $((i + 1)) || return 0
       ;;
   esac
   [ "$direct_prefix" -eq 1 ] && :
@@ -467,25 +571,33 @@ command_words_are_denied() {
 }
 
 command_string_is_denied() {
-  local src=$1 tok
+  local src tok
   local current=()
+  local current_subs=()
   local stdin_pipe=0
+  src=$(redact_non_shell_heredocs "$1")
   tokenize_command "$src" || return 0
-  for tok in "${TOKENS[@]}"; do
+  local idx=0 tok
+  while [ "$idx" -lt "${#TOKENS[@]}" ]; do
+    tok=${TOKENS[$idx]}
     if is_command_separator "$tok"; then
       if [ "${#current[@]}" -gt 0 ]; then
         COMMAND_STDIN_PIPE=$stdin_pipe
-        command_words_are_denied current && return 0
+        command_words_are_denied current current_subs && return 0
         current=()
+        current_subs=()
       fi
       case "$tok" in '|'|'|&') stdin_pipe=1 ;; *) stdin_pipe=0 ;; esac
+      idx=$((idx + 1))
       continue
     fi
     current+=("$tok")
+    current_subs+=("${TOKEN_SUBS[$idx]:-0}")
+    idx=$((idx + 1))
   done
   if [ "${#current[@]}" -gt 0 ]; then
     COMMAND_STDIN_PIPE=$stdin_pipe
-    command_words_are_denied current && return 0
+    command_words_are_denied current current_subs && return 0
   fi
   return 1
 }
