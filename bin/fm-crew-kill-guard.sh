@@ -507,6 +507,15 @@ skip_command_options() {
   printf '%s\n' "$i"
 }
 
+skip_builtin_options() {
+  local -n _words=$1
+  local i=$2
+  if [ "$i" -lt "${#_words[@]}" ] && [ "${_words[$i]}" = -- ]; then
+    i=$((i + 1))
+  fi
+  printf '%s\n' "$i"
+}
+
 skip_exec_options() {
   local -n _words=$1
   local i=$2 arg
@@ -677,10 +686,15 @@ line_feeds_shell_interpreter() {
     name=$(base_name "${words[$i]}")
     case "$name" in
       command) i=$(skip_command_options words $((i + 1))); continue ;;
-      builtin) i=$((i + 1)); continue ;;
+      builtin) i=$(skip_builtin_options words $((i + 1))); continue ;;
       exec) i=$(skip_exec_options words $((i + 1))); continue ;;
       sudo) i=$(skip_sudo_options words $((i + 1))); continue ;;
       env) i=$(skip_env_options words $((i + 1))); continue ;;
+      busybox|toybox)
+        i=$((i + 1))
+        [ "$i" -lt "${#words[@]}" ] && [ "${words[$i]}" = -- ] && i=$((i + 1))
+        continue
+        ;;
       time|gtime|nohup|setsid|timeout|gtimeout|nice|ionice|chrt|stdbuf|unbuffer)
         i=$(skip_wrapper_options words $((i + 1)) "$name")
         continue
@@ -741,7 +755,7 @@ command_words_are_denied() {
     name=$(base_name "${_cmd_words[$i]}")
     case "$name" in
       command) direct_prefix=1; i=$(skip_command_options _cmd_words $((i + 1))); continue ;;
-      builtin) direct_prefix=1; i=$((i + 1)); continue ;;
+      builtin) direct_prefix=1; i=$(skip_builtin_options _cmd_words $((i + 1))); continue ;;
       sudo) direct_prefix=1; i=$(skip_sudo_options _cmd_words $((i + 1))); continue ;;
       env)
         env_split_payloads_are_denied _cmd_words $((i + 1)) && return 0
@@ -750,6 +764,11 @@ command_words_are_denied() {
         continue
         ;;
       exec) wrapped=1; i=$(skip_exec_options _cmd_words $((i + 1))); continue ;;
+      busybox|toybox)
+        i=$((i + 1))
+        [ "$i" -lt "${#_cmd_words[@]}" ] && [ "${_cmd_words[$i]}" = -- ] && i=$((i + 1))
+        continue
+        ;;
       eval)
         payload=${_cmd_words[*]:$((i + 1))}
         [ -n "$payload" ] && command_string_is_denied "$payload" && return 0
