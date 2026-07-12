@@ -145,7 +145,7 @@ is_command_separator() {
 }
 
 is_reserved_intro() {
-  case "$1" in if|then|else|elif|do|done|while|until|for|select|"case"|in|"esac"|fi) return 0 ;; *) return 1 ;; esac
+  case "$1" in if|then|else|elif|do|done|while|until|for|select|"case"|in|"esac"|fi|coproc) return 0 ;; *) return 1 ;; esac
 }
 
 skip_sudo_options() {
@@ -269,7 +269,15 @@ command_words_are_denied() {
     fuser)
       local arg
       for arg in "${words[@]:$((i + 1))}"; do
-        [[ $arg == --kill || $arg =~ ^-[A-Za-z]*k[A-Za-z]* ]] && return 0
+        case "$arg" in
+          --kill) return 0 ;;
+          -?*)
+            case "$arg" in
+              --*) ;;
+              *k*) return 0 ;;
+            esac
+            ;;
+        esac
       done
       ;;
     kill)
