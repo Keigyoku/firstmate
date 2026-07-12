@@ -311,7 +311,7 @@ words_have_opaque_stdin_redirection() {
 }
 
 quote_remove_word() {
-  local src=$1 out='' i=0 char='' next='' quote=''
+  local src=$1 out='' i=0 char='' next='' quote='' hex='' oct=''
   local len=${#src}
   while [ "$i" -lt "$len" ]; do
     char=${src:i:1}
@@ -319,6 +319,15 @@ quote_remove_word() {
       case "$char" in
         "'") quote="'"; i=$((i + 1)); continue ;;
         '"') quote='"'; i=$((i + 1)); continue ;;
+        '$')
+          if [ $((i + 1)) -lt "$len" ]; then
+            next=${src:i+1:1}
+            case "$next" in
+              "'") quote=ansi; i=$((i + 2)); continue ;;
+              '"') quote='"'; i=$((i + 2)); continue ;;
+            esac
+          fi
+          ;;
         "\\")
           if [ $((i + 1)) -lt "$len" ]; then
             out+=${src:i+1:1}
@@ -329,6 +338,39 @@ quote_remove_word() {
       esac
     elif [ "$quote" = "'" ]; then
       if [ "$char" = "'" ]; then quote=; i=$((i + 1)); continue; fi
+    elif [ "$quote" = ansi ]; then
+      if [ "$char" = "'" ]; then quote=; i=$((i + 1)); continue; fi
+      if [ "$char" = "\\" ] && [ $((i + 1)) -lt "$len" ]; then
+        next=${src:i+1:1}
+        case "$next" in
+          n) out+=$'\n'; i=$((i + 2)); continue ;;
+          r) out+=$'\r'; i=$((i + 2)); continue ;;
+          t) out+=$'\t'; i=$((i + 2)); continue ;;
+          a) out+=$'\a'; i=$((i + 2)); continue ;;
+          b) out+=$'\b'; i=$((i + 2)); continue ;;
+          e|E) out+=$'\e'; i=$((i + 2)); continue ;;
+          f) out+=$'\f'; i=$((i + 2)); continue ;;
+          v) out+=$'\v'; i=$((i + 2)); continue ;;
+          "\\"|"'"|'"'|\?) out+=$next; i=$((i + 2)); continue ;;
+          x)
+            hex=${src:i+2:2}
+            [[ $hex =~ ^[0-9A-Fa-f]{1,2}$ ]] || return 1
+            printf -v next '%b' "\\x$hex"
+            out+=$next
+            i=$((i + 2 + ${#hex}))
+            continue
+            ;;
+          [0-7])
+            oct=${src:i+1:3}
+            oct=${oct%%[!0-7]*}
+            printf -v next '%b' "\\$oct"
+            out+=$next
+            i=$((i + 1 + ${#oct}))
+            continue
+            ;;
+        esac
+        return 1
+      fi
     else
       if [ "$char" = '"' ]; then quote=; i=$((i + 1)); continue; fi
       if [ "$char" = "\\" ] && [ $((i + 1)) -lt "$len" ]; then
@@ -521,10 +563,62 @@ literal_payload_after_shell_c() {
         i=$((i + 1))
         continue
         ;;
+      +?*)
+        cluster=${arg#+}
+        pos=0
+        while [ "$pos" -lt "${#cluster}" ]; do
+          ch=${cluster:pos:1}
+          case "$ch" in
+            O|o)
+              if [ $((pos + 1)) -lt "${#cluster}" ]; then
+                i=$((i + 1))
+              else
+                i=$((i + 2))
+              fi
+              continue 2
+              ;;
+            *) pos=$((pos + 1)) ;;
+          esac
+        done
+        i=$((i + 1))
+        continue
+        ;;
       *) return 1 ;;
     esac
   done
   return 1
+}
+
+xargs_payload_is_denied() {
+  local -n _words=$1
+  local -n _subs=$2
+  local i=$3 arg
+  local xargs_cmd_words=()
+  local xargs_cmd_subs=()
+  while [ "$i" -lt "${#_words[@]}" ]; do
+    arg=${_words[$i]}
+    [ "$arg" = -- ] && { i=$((i + 1)); break; }
+    [[ $arg == -* && $arg != - ]] || break
+    case "$arg" in
+      -0|-r|-t|-p|-x|--null|--no-run-if-empty|--verbose|--interactive|--exit|--help|--version)
+        i=$((i + 1))
+        ;;
+      -a|-d|-I|-E|-J|-n|-L|-P|-R|-s|--arg-file|--delimiter|--replace|--eof|--max-args|--max-lines|--max-procs|--max-chars)
+        i=$((i + 2))
+        ;;
+      -a?*|-d?*|-I?*|-E?*|-J?*|-n?*|-L?*|-P?*|-R?*|-s?*|--arg-file=*|--delimiter=*|--replace=*|--eof=*|--max-args=*|--max-lines=*|--max-procs=*|--max-chars=*)
+        i=$((i + 1))
+        ;;
+      *)
+        return 0 ;;
+    esac
+  done
+  [ "$i" -lt "${#_words[@]}" ] || return 1
+  # shellcheck disable=SC2034
+  xargs_cmd_words=("${_words[@]:$i}")
+  # shellcheck disable=SC2034
+  xargs_cmd_subs=("${_subs[@]:$i}")
+  command_words_are_denied xargs_cmd_words xargs_cmd_subs
 }
 
 validate_kill_args() {
@@ -674,7 +768,7 @@ command_words_are_denied() {
         i=$(skip_wrapper_options _cmd_words $((i + 1)) "$name")
         continue
         ;;
-      xargs) return 0 ;;
+      xargs) xargs_payload_is_denied _cmd_words _cmd_subs $((i + 1)) && return 0; return 1 ;;
     esac
     break
   done

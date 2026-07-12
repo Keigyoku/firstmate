@@ -114,6 +114,8 @@ expect_deny "bash --norc -c 'kill -9 -1'"
 expect_deny "bash --rcfile /tmp/no-such-rc -c 'pkill -f app'"
 expect_deny "bash -O extglob -c 'pkill -f app'"
 expect_deny "bash -o pipefail -c 'kill -9 -1'"
+expect_deny "bash +O extglob -c 'pkill -f app'"
+expect_deny "bash +o pipefail -c 'kill -9 -1'"
 expect_deny "/usr/bin/env -S \"bash -c 'kill -9 -1'\""
 expect_deny "/usr/bin/env -iS \"bash -c 'pkill -f app'\""
 expect_deny "/usr/bin/env --split-string=\"bash -c 'pkill -f app'\""
@@ -126,9 +128,25 @@ expect_deny 'cat <<\EOF
 data
 EOF
 pkill -f app'
+expect_deny 'cat <<$'"'EOF'"'
+data
+EOF
+pkill -f app'
+expect_deny 'cat <<$"EOF"
+data
+EOF
+pkill -f app'
 expect_deny 'bash <<\EOF
 pkill -f app
 EOF'
+expect_deny 'bash <<$'"'EOF'"'
+pkill -f app
+EOF'
+expect_deny 'ps ax | grep gamescope | xargs -0 kill -9'
+expect_deny 'printf "%s\0" 123 | xargs -0 kill'
+expect_deny 'printf "%s\n" 123 | xargs -I{} kill -9 {}'
+expect_deny 'xargs -a /tmp/pids kill -9'
+expect_deny 'xargs --arg-file=/tmp/pids kill'
 
 expect_allow 'kill 123'
 expect_allow 'kill -9 123 456'
@@ -163,6 +181,12 @@ EOF'
 expect_allow "bash --norc -c 'echo ok'"
 expect_allow "bash -O extglob -c 'echo ok'"
 expect_allow "bash -o pipefail -c 'echo ok'"
+expect_allow "bash +O extglob -c 'echo ok'"
+expect_allow "bash +o pipefail -c 'echo ok'"
+expect_allow 'git ls-files | xargs wc -l'
+expect_allow 'find . -name "*.tmp" -print0 | xargs -0 rm'
+expect_allow 'xargs -a /tmp/files wc -l'
+expect_allow 'printf "%s\n" hello | xargs'
 pass 'command policy denies sweeps and allows only explicit numeric PID kills'
 
 claude_out=$(printf '{"tool_input":{"command":"pkill -f tauri-driver"}}' | "$CHECK" --claude 2>"$TMP_ROOT/claude.err")
