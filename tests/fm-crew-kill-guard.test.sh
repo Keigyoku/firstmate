@@ -54,9 +54,14 @@ expect_deny 'exec kill 123'
 expect_deny 'builtin kill -9 -1'
 expect_deny 'builtin kill -- 0'
 expect_deny 'time kill -9 -1'
+expect_deny '/usr/bin/time kill -9 -1'
 expect_deny 'nohup kill -9 -1'
 expect_deny 'setsid kill -9 -1'
 expect_deny 'timeout 1 kill -9 -1'
+expect_deny 'nice kill -9 -1'
+expect_deny '/usr/bin/nice kill -9 -1'
+expect_deny 'command nice kill -9 -1'
+expect_deny 'sudo nice kill -9 -1'
 
 expect_allow 'kill 123'
 expect_allow 'kill -9 123 456'
@@ -81,6 +86,7 @@ assert_contains "$shim_out" 'process signaling by pattern or sweep is denied' 'P
 pass 'PATH shim refuses pattern kill'
 
 spawn=$(cat "$ROOT/bin/fm-spawn.sh")
+teardown=$(cat "$ROOT/bin/fm-teardown.sh")
 for needle in \
   'KILL_SHIMS="$TASK_TMP/killguard-bin"' \
   'PreToolUse' \
@@ -93,4 +99,5 @@ for needle in \
   assert_contains "$spawn" "$needle" "spawn wiring missing: $needle"
 done
 assert_not_contains "$spawn" 'cat > "$WT/.codex/hooks.json"' 'codex spawn must not overwrite project hooks.json'
+assert_not_contains "$teardown" '.codex/hooks.json' 'teardown must not remove project hooks.json'
 pass 'spawn structurally wires every hook-capable adapter and PATH defense'
