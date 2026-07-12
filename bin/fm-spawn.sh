@@ -1322,10 +1322,9 @@ fi
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
-if [ "$KIND" = secondmate ]; then
-  spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
-else
-  spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp PATH=$KILL_SHIMS:\$PATH"
+spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
+if [ "$KIND" != secondmate ]; then
+  spawn_send_text_line "$T" "export PATH=$KILL_SHIMS:\$PATH"
 fi
 sleep 0.3
 spawn_send_literal "$T" "$LAUNCH"
