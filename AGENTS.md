@@ -91,6 +91,7 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   projects.md        thin fleet navigation registry; firstmate-private, parsed by fm-project-mode.sh (section 6)
   secondmates.md      secondmate routing table; firstmate-private, maintained by fm-home-seed.sh (section 6)
   smoke-crew-eyeball-toolkit.md  optional fleet-local host-specific smoke verification equipment notes read by the `smoke-crew` skill
+  marketing-crew-northstar.md  optional fleet-local path to the Marketing Crew Northstar skills clone read by the `marketing-crew` skill
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
 projects/            cloned repos; gitignored; READ-ONLY for you
@@ -935,6 +936,7 @@ These skills are not captain-invocable; they are conditional operating reference
 - `firstmate-coding-guidelines` - load before changing firstmate's shared, tracked material, as defined by section 1's list, whether editing directly or briefing a crewmate for a firstmate-repo task.
 - `review-crew` - load when dispatched as a Review Crew round (a review-fix cycle round on a PR, or an independent pre-merge review).
 - `smoke-crew` - load when dispatched for smoke verification (a Smoke Crew pass, pre-ship live-app matrix run, or regression smoke of a merged or candidate build).
+- `marketing-crew` - load when dispatched as a Marketing Crew task (marketing strategy, copy, content, SEO, launch, growth work).
 
 ## 14. X mode
 
