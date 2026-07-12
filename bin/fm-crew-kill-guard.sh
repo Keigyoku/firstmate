@@ -189,11 +189,46 @@ skip_env_options() {
   while [ "$i" -lt "${#_words[@]}" ]; do
     arg=${_words[$i]}
     [ "$arg" = -- ] && { printf '%s\n' $((i + 1)); return; }
+    if [[ $arg == -* && $arg != - ]]; then
+      case "$arg" in -u|-C|-S|--unset|--chdir|--split-string) i=$((i + 2)) ;; *=*) i=$((i + 1)) ;; *) i=$((i + 1)) ;; esac
+      continue
+    fi
     [[ $arg == *=* && $arg != /* ]] && { i=$((i + 1)); continue; }
-    [[ $arg == -* && $arg != - ]] || break
-    case "$arg" in -u|-C|-S|--unset|--chdir|--split-string) i=$((i + 2)) ;; *=*) i=$((i + 1)) ;; *) i=$((i + 1)) ;; esac
+    break
   done
   printf '%s\n' "$i"
+}
+
+env_split_payloads_are_denied() {
+  local -n _words=$1
+  local i=$2 arg payload
+  while [ "$i" -lt "${#_words[@]}" ]; do
+    arg=${_words[$i]}
+    [ "$arg" = -- ] && return 1
+    if [[ $arg != -* || $arg == - ]]; then
+      [[ $arg == *=* && $arg != /* ]] && { i=$((i + 1)); continue; }
+      break
+    fi
+    case "$arg" in
+      -S|--split-string)
+        [ $((i + 1)) -lt "${#_words[@]}" ] || return 0
+        payload=${_words[$((i + 1))]}
+        [ -n "$payload" ] && command_string_is_denied "$payload" && return 0
+        i=$((i + 2))
+        ;;
+      -S?*)
+        return 0 ;;
+      --split-string=*)
+        payload=${arg#--split-string=}
+        [ -n "$payload" ] && command_string_is_denied "$payload" && return 0
+        i=$((i + 1))
+        ;;
+      -u|-C|--unset|--chdir) i=$((i + 2)) ;;
+      *=*) i=$((i + 1)) ;;
+      *) i=$((i + 1)) ;;
+    esac
+  done
+  return 1
 }
 
 skip_wrapper_options() {
@@ -211,10 +246,19 @@ skip_wrapper_options() {
 
 literal_payload_after_shell_c() {
   local -n _words=$1
-  local i=$2 arg
+  local i=$2 arg after_c
   while [ "$i" -lt "${#_words[@]}" ]; do
     arg=${_words[$i]}
-    if [[ $arg == -*c* ]]; then
+    if [[ $arg == -- ]]; then
+      i=$((i + 1))
+      continue
+    fi
+    if [[ $arg == -*c* && $arg != - ]]; then
+      after_c=${arg#*c}
+      if [ -n "$after_c" ]; then
+        printf '%s\n' "$after_c"
+        return 0
+      fi
       [ $((i + 1)) -lt "${#_words[@]}" ] || return 1
       printf '%s\n' "${_words[$((i + 1))]}"
       return 0
@@ -263,7 +307,12 @@ command_words_are_denied() {
     case "$name" in
       command|builtin) direct_prefix=1; i=$((i + 1)); continue ;;
       sudo) direct_prefix=1; i=$(skip_sudo_options words $((i + 1))); continue ;;
-      env) wrapped=1; i=$(skip_env_options words $((i + 1))); continue ;;
+      env)
+        env_split_payloads_are_denied words $((i + 1)) && return 0
+        wrapped=1
+        i=$(skip_env_options words $((i + 1)))
+        continue
+        ;;
       exec) wrapped=1; i=$((i + 1)); continue ;;
       eval)
         payload=${words[*]:$((i + 1))}
@@ -315,12 +364,9 @@ command_words_are_denied() {
 }
 
 command_string_is_denied() {
-  local src=$1 tok word
+  local src=$1 tok
   local current=()
   local stdin_pipe=0
-  local dollar_paren backtick
-  printf -v dollar_paren '%s%s' '$' '('
-  printf -v backtick '%s' '`'
   tokenize_command "$src" || return 0
   for tok in "${TOKENS[@]}"; do
     if is_command_separator "$tok"; then
@@ -338,9 +384,6 @@ command_string_is_denied() {
     COMMAND_STDIN_PIPE=$stdin_pipe
     command_words_are_denied current && return 0
   fi
-  for word in "${TOKENS[@]}"; do
-    case "$word" in *"$dollar_paren"*|*"$backtick"*) return 0 ;; esac
-  done
   return 1
 }
 
