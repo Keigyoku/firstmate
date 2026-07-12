@@ -310,6 +310,47 @@ words_have_opaque_stdin_redirection() {
   return 1
 }
 
+redirection_needs_operand() {
+  case "$1" in
+    '<'|'>'|'>>'|'<&'|'>&'|'<>'|'>|'|'<<'|'<<-'|'<<<'|[0-9]'<'|[0-9]'>'|[0-9]'>>'|[0-9]'<&'|[0-9]'>&'|[0-9]'<>'|[0-9]'>|'|[0-9]'<<'|[0-9]'<<-'|[0-9]'<<<') return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+redirection_has_attached_operand() {
+  case "$1" in
+    '<'*|'>'*|[0-9]'<'*|[0-9]'>'*)
+      redirection_needs_operand "$1" && return 1
+      return 0
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+normalize_simple_command_words() {
+  local -n _in_words=$1
+  local -n _in_subs=$2
+  local -n _out_words=$3
+  local -n _out_subs=$4
+  local i=0 word
+  _out_words=()
+  _out_subs=()
+  while [ "$i" -lt "${#_in_words[@]}" ]; do
+    word=${_in_words[$i]}
+    if redirection_needs_operand "$word"; then
+      i=$((i + 2))
+      continue
+    fi
+    if redirection_has_attached_operand "$word"; then
+      i=$((i + 1))
+      continue
+    fi
+    _out_words+=("$word")
+    _out_subs+=("${_in_subs[$i]:-0}")
+    i=$((i + 1))
+  done
+}
+
 quote_remove_word() {
   local src=$1 out='' i=0 char='' next='' quote='' hex='' oct=''
   local len=${#src}
@@ -656,27 +697,37 @@ validate_kill_args() {
 line_feeds_shell_interpreter() {
   local line=$1 prefix idx=0 tok i=0 name
   local words=()
+  local normalized_words=()
+  local normalized_subs=()
   local current=()
+  local current_subs=()
   local last=()
-  prefix=${line%%<<*}
+  local last_subs=()
+  prefix=$line
   tokenize_command "$prefix" || return 0
   while [ "$idx" -lt "${#TOKENS[@]}" ]; do
     tok=${TOKENS[$idx]}
     if is_command_separator "$tok"; then
       if [ "${#current[@]}" -gt 0 ]; then
         last=("${current[@]}")
+        last_subs=("${current_subs[@]}")
         current=()
+        current_subs=()
       fi
       idx=$((idx + 1))
       continue
     fi
     current+=("$tok")
+    current_subs+=("${TOKEN_SUBS[$idx]:-0}")
     idx=$((idx + 1))
   done
   if [ "${#current[@]}" -gt 0 ]; then
     last=("${current[@]}")
+    last_subs=("${current_subs[@]}")
   fi
-  words=("${last[@]}")
+  : "${last[@]}" "${last_subs[@]}"
+  normalize_simple_command_words last last_subs normalized_words normalized_subs
+  words=("${normalized_words[@]}")
   while [ "$i" -lt "${#words[@]}" ]; do
     [[ ${words[$i]} == *=* && ${words[$i]} != /* ]] || break
     i=$((i + 1))
@@ -743,7 +794,15 @@ command_words_are_denied() {
   local -n _cmd_words=$words_name
   local -n _cmd_subs=$subs_name
   local i=0 name payload direct_prefix=0 wrapped=0
+  local original_words=("${_cmd_words[@]}")
+  local original_subs=("${_cmd_subs[@]}")
+  local normalized_words=()
+  local normalized_subs=()
+  : "${original_words[@]}" "${original_subs[@]}"
   words_substitutions_are_denied _cmd_words _cmd_subs && return 0
+  normalize_simple_command_words _cmd_words _cmd_subs normalized_words normalized_subs
+  _cmd_words=("${normalized_words[@]}")
+  _cmd_subs=("${normalized_subs[@]}")
   while [ "$i" -lt "${#_cmd_words[@]}" ]; do
     [[ ${_cmd_words[$i]} == *=* && ${_cmd_words[$i]} != /* ]] || break
     i=$((i + 1))
@@ -778,8 +837,8 @@ command_words_are_denied() {
         payload=$(literal_payload_after_shell_c _cmd_words $((i + 1)) 2>/dev/null || true)
         [ -n "$payload" ] && command_string_is_denied "$payload" && return 0
         [ "${COMMAND_STDIN_PIPE:-0}" -eq 1 ] && return 0
-        shell_here_string_payloads_are_denied _cmd_words _cmd_subs $((i + 1)) && return 0
-        words_have_opaque_stdin_redirection _cmd_words $((i + 1)) && return 0
+        shell_here_string_payloads_are_denied original_words original_subs 0 && return 0
+        words_have_opaque_stdin_redirection original_words 0 && return 0
         return 1
         ;;
       time|gtime|nohup|setsid|timeout|gtimeout|nice|ionice|chrt|stdbuf|unbuffer)
