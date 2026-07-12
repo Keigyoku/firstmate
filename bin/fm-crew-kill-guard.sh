@@ -745,6 +745,21 @@ alias_payload_for() {
   return 1
 }
 
+shell_quote_words_from() {
+  local -n _words=$1
+  local start=$2 i quoted=''
+  i=$start
+  while [ "$i" -lt "${#_words[@]}" ]; do
+    printf -v quoted '%s %q' "$quoted" "${_words[$i]}"
+    i=$((i + 1))
+  done
+  printf '%s\n' "${quoted# }"
+}
+
+payload_has_trailing_blank() {
+  [[ $1 == *[[:space:]] ]]
+}
+
 update_shopt_alias_state() {
   local -n _words=$1
   local -n _alias_expand=$2
@@ -783,6 +798,32 @@ record_alias_definitions() {
         ;;
     esac
     i=$((i + 1))
+  done
+}
+
+record_hash_definitions() {
+  local -n _words=$1
+  local -n _hash_names=$2
+  local -n _hash_payloads=$3
+  local i=$4 arg path name
+  while [ "$i" -lt "${#_words[@]}" ]; do
+    arg=${_words[$i]}
+    case "$arg" in
+      --) i=$((i + 1)); break ;;
+      -p)
+        [ $((i + 2)) -lt "${#_words[@]}" ] || return
+        path=${_words[$((i + 1))]}
+        name=${_words[$((i + 2))]}
+        case "$name" in
+          ''|*[!A-Za-z0-9_]*|[0-9]*) ;;
+          *) set_alias_payload _hash_names _hash_payloads "$name" "$path" ;;
+        esac
+        i=$((i + 3))
+        continue
+        ;;
+      -*) i=$((i + 1)); continue ;;
+      *) break ;;
+    esac
   done
 }
 
@@ -909,10 +950,12 @@ command_words_are_denied() {
   local alias_expand_name=${4:-}
   local alias_names_name=${5:-}
   local alias_payloads_name=${6:-}
+  local hash_names_name=${7:-}
+  local hash_payloads_name=${8:-}
   local -n _cmd_words=$words_name
   local -n _cmd_subs=$subs_name
   local -n _cmd_globs=$globs_name
-  local i=0 name payload direct_prefix=0 wrapped=0
+  local i=0 name payload hash_payload rest combined direct_prefix=0 wrapped=0
   local original_words=("${_cmd_words[@]}")
   local original_subs=("${_cmd_subs[@]}")
   local normalized_words=()
@@ -948,6 +991,14 @@ command_words_are_denied() {
           local -n _alias_names_ref=$alias_names_name
           local -n _alias_payloads_ref=$alias_payloads_name
           record_alias_definitions _cmd_words _alias_names_ref _alias_payloads_ref $((i + 1))
+        fi
+        return 1
+        ;;
+      hash)
+        if [ -n "$hash_names_name" ] && [ -n "$hash_payloads_name" ]; then
+          local -n _hash_names_ref=$hash_names_name
+          local -n _hash_payloads_ref=$hash_payloads_name
+          record_hash_definitions _cmd_words _hash_names_ref _hash_payloads_ref $((i + 1))
         fi
         return 1
         ;;
@@ -999,7 +1050,28 @@ command_words_are_denied() {
     local -n _alias_payloads_ref=$alias_payloads_name
     if [ "$_alias_expand_ref" -eq 1 ]; then
       payload=$(alias_payload_for _alias_names_ref _alias_payloads_ref "$name" 2>/dev/null || true)
-      [ -n "$payload" ] && command_string_is_denied "$payload" && return 0
+      if [ -n "$payload" ]; then
+        case "${ALIAS_RESOLVE_STACK:-}:" in *":$name:"*) return 0 ;; esac
+        rest=$(shell_quote_words_from normalized_words $((i + 1)))
+        if payload_has_trailing_blank "$payload"; then
+          combined=$payload$rest
+        else
+          combined=$payload
+          [ -z "$rest" ] || combined+=" $rest"
+        fi
+        ALIAS_RESOLVE_STACK="${ALIAS_RESOLVE_STACK:-}:$name" command_string_is_denied "$combined" "$alias_expand_name" "$alias_names_name" "$alias_payloads_name" "$hash_names_name" "$hash_payloads_name" && return 0
+      fi
+    fi
+  fi
+  if [ -n "$hash_names_name" ] && [ -n "$hash_payloads_name" ]; then
+    local -n _hash_names_ref=$hash_names_name
+    local -n _hash_payloads_ref=$hash_payloads_name
+    hash_payload=$(alias_payload_for _hash_names_ref _hash_payloads_ref "$name" 2>/dev/null || true)
+    if [ -n "$hash_payload" ]; then
+      rest=$(shell_quote_words_from normalized_words $((i + 1)))
+      combined=$hash_payload
+      [ -z "$rest" ] || combined+=" $rest"
+      command_string_is_denied "$combined" "$alias_expand_name" "$alias_names_name" "$alias_payloads_name" "$hash_names_name" "$hash_payloads_name" && return 0
     fi
   fi
   case "$name" in
@@ -1033,12 +1105,30 @@ command_string_is_denied() {
   local current_subs=()
   local current_globs=()
   local stdin_pipe=0
-  # shellcheck disable=SC2034
-  local alias_expand=0
-  # shellcheck disable=SC2034
-  local alias_names=()
-  # shellcheck disable=SC2034
-  local alias_payloads=()
+  local alias_expand_ref alias_names_ref alias_payloads_ref hash_names_ref hash_payloads_ref
+  if [ "$#" -ge 6 ]; then
+    alias_expand_ref=$2
+    alias_names_ref=$3
+    alias_payloads_ref=$4
+    hash_names_ref=$5
+    hash_payloads_ref=$6
+  else
+    # shellcheck disable=SC2034
+    local alias_expand=0
+    # shellcheck disable=SC2034
+    local alias_names=()
+    # shellcheck disable=SC2034
+    local alias_payloads=()
+    # shellcheck disable=SC2034
+    local hash_names=()
+    # shellcheck disable=SC2034
+    local hash_payloads=()
+    alias_expand_ref=alias_expand
+    alias_names_ref=alias_names
+    alias_payloads_ref=alias_payloads
+    hash_names_ref=hash_names
+    hash_payloads_ref=hash_payloads
+  fi
   src=$(redact_non_shell_heredocs "$1")
   tokenize_command "$src" || return 0
   local idx=0 tok
@@ -1047,7 +1137,7 @@ command_string_is_denied() {
     if is_command_separator "$tok"; then
       if [ "${#current[@]}" -gt 0 ]; then
         COMMAND_STDIN_PIPE=$stdin_pipe
-        command_words_are_denied current current_subs current_globs alias_expand alias_names alias_payloads && return 0
+        command_words_are_denied current current_subs current_globs "$alias_expand_ref" "$alias_names_ref" "$alias_payloads_ref" "$hash_names_ref" "$hash_payloads_ref" && return 0
         current=()
         current_subs=()
         current_globs=()
@@ -1063,7 +1153,7 @@ command_string_is_denied() {
   done
   if [ "${#current[@]}" -gt 0 ]; then
     COMMAND_STDIN_PIPE=$stdin_pipe
-    command_words_are_denied current current_subs current_globs alias_expand alias_names alias_payloads && return 0
+    command_words_are_denied current current_subs current_globs "$alias_expand_ref" "$alias_names_ref" "$alias_payloads_ref" "$hash_names_ref" "$hash_payloads_ref" && return 0
   fi
   return 1
 }

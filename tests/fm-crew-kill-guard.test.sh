@@ -191,6 +191,12 @@ expect_deny "shopt -s expand_aliases; alias x='pkill -f app'; x"
 expect_deny $'shopt -s expand_aliases\nalias x="pkill -f app"\nx'
 expect_deny $'shopt -s expand_aliases\nalias x="kill -9 -1"\nx'
 expect_deny $'shopt -s expand_aliases\nalias x="sudo pkill -f app"\nx'
+expect_deny "shopt -s expand_aliases; alias x='y'; alias y='pkill -f app'; x"
+expect_deny "shopt -s expand_aliases; alias x='y'; alias y='kill -9 -1'; x"
+expect_deny "shopt -s expand_aliases; alias s='sudo '; alias x='pkill -f app'; s x"
+expect_deny "shopt -s expand_aliases; alias s='sudo '; alias x='kill -9 -1'; s x"
+expect_deny 'hash -p /usr/bin/pkill x; x -f app'
+expect_deny 'hash -p /bin/kill x; x -9 -1'
 expect_deny $'# <<EOF\npkill -f app\nEOF'
 expect_deny $'# comment <<EOF\npkill -f app\nEOF'
 
@@ -255,6 +261,10 @@ expect_allow 'xargs -a /tmp/files wc -l'
 expect_allow 'printf "%s\n" hello | xargs'
 expect_allow "alias x='pkill -f app'; echo x"
 expect_allow $'shopt -s expand_aliases\nalias x="echo pkill -f app"\nx'
+expect_allow "shopt -s expand_aliases; alias x='y'; alias y='echo pkill -f app'; x"
+expect_allow "shopt -s expand_aliases; alias s='sudo '; alias x='echo pkill -f app'; s x"
+expect_allow 'hash -p /bin/kill x; x 123'
+expect_allow 'hash -p /usr/bin/printf x; x "%s\n" pkill'
 expect_allow 'printf "%s\n" "alias x='"'"'pkill -f app'"'"'"'
 expect_allow $'# <<EOF\necho ok\nEOF'
 pass 'command policy denies sweeps and allows only explicit numeric PID kills'
