@@ -11,9 +11,9 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 
 # shellcheck source=bin/fm-backend.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backend.sh"
-# shellcheck source=bin/fm-watchdog-lib.sh
+# shellcheck source=bin/fm-watchdog-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-watchdog-lib.sh"
-# shellcheck source=bin/fm-classify-lib.sh
+# shellcheck source=bin/fm-classify-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 
 usage() {
