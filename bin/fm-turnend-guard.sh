@@ -52,6 +52,8 @@ GRACE=${FM_GUARD_GRACE:-300}
 WATCH="$SCRIPT_DIR/fm-watch.sh"
 LOCK_SETTLE=${FM_TURNEND_LOCK_SETTLE:-1}
 
+[ "$(cat "$CONFIG/turnend-guard" 2>/dev/null || true)" = off ] && exit 0
+
 # shellcheck source=bin/fm-supervision-lib.sh
 . "$SCRIPT_DIR/fm-supervision-lib.sh"
 

@@ -203,6 +203,62 @@ test_hook_blocks_when_fresh_beacon_has_no_live_lock() {
   pass "fm-turnend-guard: blocks when a fresh beacon has no live watcher lock"
 }
 
+test_hook_blocks_when_local_disable_absent() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-disable-absent")
+  : > "$dir/state/task1.meta"
+  out=$(run_hook "$dir" false); status=$?
+  expect_code 2 "$status" "hook must remain enabled when config/turnend-guard is absent"
+  assert_contains "$out" "TURN WOULD END BLIND" "absent local disable must preserve the blocking alarm"
+  pass "fm-turnend-guard: absent local disable preserves blocking behavior"
+}
+
+test_hook_blocks_when_local_disable_is_not_exact_off() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-disable-not-exact")
+  mkdir -p "$dir/config"
+  printf 'off \n' > "$dir/config/turnend-guard"
+  : > "$dir/state/task1.meta"
+  out=$(run_hook "$dir" false); status=$?
+  expect_code 2 "$status" "hook must remain enabled unless config/turnend-guard is exactly off"
+  assert_contains "$out" "TURN WOULD END BLIND" "non-exact local disable must preserve the blocking alarm"
+  pass "fm-turnend-guard: non-exact local disable remains enabled"
+}
+
+test_hook_local_disable_off_suppresses_blocking_path() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-disable-block")
+  mkdir -p "$dir/config"
+  printf 'off\n' > "$dir/config/turnend-guard"
+  : > "$dir/state/task1.meta"
+  out=$(run_hook "$dir" false); status=$?
+  expect_code 0 "$status" "config/turnend-guard=off must suppress the blocking path"
+  [ -z "$out" ] || fail "disabled hook produced blocking output: $out"
+  pass "fm-turnend-guard: local off disables the blocking path"
+}
+
+test_hook_local_disable_off_suppresses_warning_path() {
+  local dir pid identity out status diagnostic
+  dir=$(make_primary_dir "$TMP_ROOT/hook-disable-warning")
+  mkdir -p "$dir/config"
+  printf 'off\n' > "$dir/config/turnend-guard"
+  : > "$dir/state/task1.meta"
+  printf 'wake pending\n' > "$dir/state/.wake-queue"
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$dir" "$pid") || fail "could not identify live watcher holder"
+  record_watcher_lock "$dir" "$pid" "$identity"
+  touch "$dir/state/.last-watcher-beat"
+  out=$(run_hook "$dir" false); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  diagnostic="$dir/fm-state/turnend-guard-diagnostics.log"
+  expect_code 0 "$status" "config/turnend-guard=off must suppress the warning path"
+  [ -z "$out" ] || fail "disabled hook produced warning output: $out"
+  [ ! -e "$diagnostic" ] || fail "disabled hook wrote a warning diagnostic"
+  pass "fm-turnend-guard: local off disables the warning path"
+}
+
 test_hook_blocks_when_dead_lock_has_fresh_beacon() {
   local dir dead out status
   dir=$(make_primary_dir "$TMP_ROOT/hook-dead-lock-fresh")
@@ -845,6 +901,10 @@ test_predicate_healthy_fresh_beacon
 test_predicate_queue_pending_flag
 test_hook_silent_when_no_work_in_flight
 test_hook_blocks_when_fresh_beacon_has_no_live_lock
+test_hook_blocks_when_local_disable_absent
+test_hook_blocks_when_local_disable_is_not_exact_off
+test_hook_local_disable_off_suppresses_blocking_path
+test_hook_local_disable_off_suppresses_warning_path
 test_hook_blocks_when_dead_lock_has_fresh_beacon
 test_hook_silent_with_live_lock_and_fresh_beacon
 test_claude_hook_waits_for_live_lock_publication

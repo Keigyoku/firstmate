@@ -102,18 +102,23 @@ fm_watcher_healthy() {
 # beacon is fresh, and the lock itself is younger than the bounded settle
 # window. Every other unhealthy state fails immediately.
 fm_watcher_healthy_settled() {
-  local state=$1 watch_path=$2 grace=${3:-${FM_GUARD_GRACE:-300}} home=${4:-$FM_HOME} settle=${5:-1} lockdir beat pid started now
+  local state=$1 watch_path=$2 grace=${3:-${FM_GUARD_GRACE:-300}} home=${4:-$FM_HOME} settle=${5:-1} lockdir beat pid attempts max_attempts
   lockdir="$state/.watch.lock"
   beat="$state/.last-watcher-beat"
-  started=$(date +%s)
+  case "$settle" in
+    ''|*[!0-9]*) settle=1 ;;
+  esac
+  max_attempts=$((settle * 20))
+  [ "$max_attempts" -gt 0 ] || max_attempts=1
+  attempts=0
   while :; do
     fm_watcher_healthy "$state" "$watch_path" "$grace" "$home" && return 0
     pid=$(cat "$lockdir/pid" 2>/dev/null || true)
     fm_pid_alive "$pid" || return 1
     [ "$(fm_path_age "$beat")" -lt "$grace" ] || return 1
     [ "$(fm_path_age "$lockdir")" -le "$settle" ] || return 1
-    now=$(date +%s)
-    [ $((now - started)) -lt "$settle" ] || return 1
+    [ "$attempts" -lt "$max_attempts" ] || return 1
+    attempts=$((attempts + 1))
     sleep 0.05
   done
 }

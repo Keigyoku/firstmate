@@ -39,6 +39,7 @@ The record includes the relevant hook environment, resolved roots, lock contents
 
 `FM_STATE_OVERRIDE` wins over `FM_HOME/state`, and `FM_HOME` wins over repo-root `state/`.
 `FM_GUARD_GRACE` controls the beacon freshness window and defaults to 300 seconds.
+The local gitignored file `config/turnend-guard` disables the guard only when its value is exactly `off`.
 If `jq` is missing or hook stdin is empty, the guard fails open and exits 0 because it cannot safely read loop-guard fields.
 
 ## Harness Integrations
