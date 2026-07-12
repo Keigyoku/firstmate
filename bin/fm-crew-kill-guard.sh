@@ -310,6 +310,44 @@ words_have_opaque_stdin_redirection() {
   return 1
 }
 
+quote_remove_word() {
+  local src=$1 out='' i=0 char='' next='' quote=''
+  local len=${#src}
+  while [ "$i" -lt "$len" ]; do
+    char=${src:i:1}
+    if [ -z "$quote" ]; then
+      case "$char" in
+        "'") quote="'"; i=$((i + 1)); continue ;;
+        '"') quote='"'; i=$((i + 1)); continue ;;
+        "\\")
+          if [ $((i + 1)) -lt "$len" ]; then
+            out+=${src:i+1:1}
+            i=$((i + 2))
+            continue
+          fi
+          ;;
+      esac
+    elif [ "$quote" = "'" ]; then
+      if [ "$char" = "'" ]; then quote=; i=$((i + 1)); continue; fi
+    else
+      if [ "$char" = '"' ]; then quote=; i=$((i + 1)); continue; fi
+      if [ "$char" = "\\" ] && [ $((i + 1)) -lt "$len" ]; then
+        next=${src:i+1:1}
+        case "$next" in '$'|'`'|'"'|"\\"|$'\n')
+          [ "$next" = $'\n' ] || out+=$next
+          i=$((i + 2))
+          continue
+          ;;
+        esac
+      fi
+    fi
+    out+=$char
+    i=$((i + 1))
+  done
+  [ -z "$quote" ] || return 1
+  printf '%s\n' "$out"
+}
+
 skip_sudo_options() {
   local -n _words=$1
   local i=$2 arg opt
@@ -319,6 +357,11 @@ skip_sudo_options() {
     [[ $arg == -* && $arg != - ]] || break
     opt=${arg#-}
     opt=${opt%%=*}
+    case "$arg" in --*=*) i=$((i + 1)); continue ;; esac
+    if [[ $arg =~ ^-[CgHhprRTtUu].+ ]]; then
+      i=$((i + 1))
+      continue
+    fi
     case "$opt" in *[CgHhprRTtUu]*) i=$((i + 2)) ;; *) i=$((i + 1)) ;; esac
   done
   printf '%s\n' "$i"
@@ -326,12 +369,22 @@ skip_sudo_options() {
 
 skip_env_options() {
   local -n _words=$1
-  local i=$2 arg
+  local i=$2 arg cluster after_s
   while [ "$i" -lt "${#_words[@]}" ]; do
     arg=${_words[$i]}
     [ "$arg" = -- ] && { printf '%s\n' $((i + 1)); return; }
     if [[ $arg == -* && $arg != - ]]; then
-      case "$arg" in -u|-C|-S|--unset|--chdir|--split-string) i=$((i + 2)) ;; *=*) i=$((i + 1)) ;; *) i=$((i + 1)) ;; esac
+      case "$arg" in
+        -u|-C|-S|--unset|--chdir|--split-string) i=$((i + 2)) ;;
+        --split-string=*|*=*) i=$((i + 1)) ;;
+        --*) i=$((i + 1)) ;;
+        -*S*)
+          cluster=${arg#-}
+          after_s=${cluster#*S}
+          if [ -n "$after_s" ]; then i=$((i + 1)); else i=$((i + 2)); fi
+          ;;
+        *) i=$((i + 1)) ;;
+      esac
       continue
     fi
     [[ $arg == *=* && $arg != /* ]] && { i=$((i + 1)); continue; }
@@ -342,7 +395,7 @@ skip_env_options() {
 
 env_split_payloads_are_denied() {
   local -n _words=$1
-  local i=$2 arg payload
+  local i=$2 arg payload cluster after_s
   while [ "$i" -lt "${#_words[@]}" ]; do
     arg=${_words[$i]}
     [ "$arg" = -- ] && return 1
@@ -357,12 +410,23 @@ env_split_payloads_are_denied() {
         [ -n "$payload" ] && command_string_is_denied "$payload" && return 0
         i=$((i + 2))
         ;;
-      -S?*)
-        return 0 ;;
       --split-string=*)
         payload=${arg#--split-string=}
         [ -n "$payload" ] && command_string_is_denied "$payload" && return 0
         i=$((i + 1))
+        ;;
+      -*S*)
+        cluster=${arg#-}
+        after_s=${cluster#*S}
+        if [ -n "$after_s" ]; then
+          payload=$after_s
+          [ -n "$payload" ] && command_string_is_denied "$payload" && return 0
+          return 0
+        fi
+        [ $((i + 1)) -lt "${#_words[@]}" ] || return 0
+        payload=${_words[$((i + 1))]}
+        [ -n "$payload" ] && command_string_is_denied "$payload" && return 0
+        i=$((i + 2))
         ;;
       -u|-C|--unset|--chdir) i=$((i + 2)) ;;
       *=*) i=$((i + 1)) ;;
@@ -409,6 +473,7 @@ skip_exec_options() {
     [ "$arg" = -- ] && { printf '%s\n' $((i + 1)); return; }
     case "$arg" in
       -a) i=$((i + 2)); continue ;;
+      -a?*) i=$((i + 1)); continue ;;
       -c|-l) i=$((i + 1)); continue ;;
       -*) printf '%s\n' "${#_words[@]}"; return ;;
       *) break ;;
@@ -545,10 +610,7 @@ redact_non_shell_heredocs() {
     fi
     after=${after#"${after%%[![:space:]]*}"}
     delimiter=${after%%[[:space:];&|()<>]*}
-    delimiter=${delimiter#\'}
-    delimiter=${delimiter%\'}
-    delimiter=${delimiter#\"}
-    delimiter=${delimiter%\"}
+    delimiter=$(quote_remove_word "$delimiter") || continue
     [ -n "$delimiter" ] || continue
     keep_body=1
     line_feeds_shell_interpreter "$line" || keep_body=0

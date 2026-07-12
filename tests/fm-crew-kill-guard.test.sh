@@ -29,6 +29,8 @@ expect_deny() {
 expect_deny 'pkill -9 -f "launch-webdriver"'
 expect_deny '/usr/bin/pkill -f tauri-driver'
 expect_deny 'sudo killall gamescope'
+expect_deny 'sudo -uroot pkill -f app'
+expect_deny 'sudo -groot pkill -f app'
 expect_deny 'fuser -k 8080/tcp'
 expect_deny 'fuser -km 8080/tcp'
 expect_deny 'fuser -4k 8080/tcp'
@@ -57,6 +59,7 @@ expect_deny '/usr/bin/env kill -9 -1'
 expect_deny '/usr/bin/env kill 123'
 expect_deny 'exec kill 123'
 expect_deny 'exec -a x kill -9 -1'
+expect_deny 'exec -afoo kill -9 -1'
 expect_deny 'exec -a x pkill -f app'
 expect_deny 'builtin kill -9 -1'
 expect_deny 'builtin kill -- 0'
@@ -112,12 +115,20 @@ expect_deny "bash --rcfile /tmp/no-such-rc -c 'pkill -f app'"
 expect_deny "bash -O extglob -c 'pkill -f app'"
 expect_deny "bash -o pipefail -c 'kill -9 -1'"
 expect_deny "/usr/bin/env -S \"bash -c 'kill -9 -1'\""
+expect_deny "/usr/bin/env -iS \"bash -c 'pkill -f app'\""
 expect_deny "/usr/bin/env --split-string=\"bash -c 'pkill -f app'\""
 expect_deny "/usr/bin/env -Sbash -c 'kill -9 -1'"
 expect_deny 'echo "$(pkill -f app)"'
 expect_deny 'x="$(kill -9 -1)"'
 expect_deny 'echo `pkill -f app`'
 expect_deny 'printf "%s\n" "`kill -9 -1`"'
+expect_deny 'cat <<\EOF
+data
+EOF
+pkill -f app'
+expect_deny 'bash <<\EOF
+pkill -f app
+EOF'
 
 expect_allow 'kill 123'
 expect_allow 'kill -9 123 456'
@@ -138,6 +149,9 @@ pkill -f app
 EOF'
 expect_allow 'cat <<'"'EOF'"'
 echo "$(pkill -f app)"
+EOF'
+expect_allow 'cat <<\EOF
+pkill -f app
 EOF'
 expect_allow 'if true; then cat <<'"'EOF'"'
 pkill -f app
