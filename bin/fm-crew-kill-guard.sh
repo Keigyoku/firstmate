@@ -56,7 +56,21 @@ tokenize_command() {
         case "$two" in '<<'|'<&'|'<>') TOKENS+=("$two"); TOKEN_SUBS+=(0); i=$((i + 2));; *) TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1));; esac
         continue
         ;;
-      ';'|'&'|'|'|'('|')'|'{'|'}'|'!')
+      '{')
+        if [ $((i + 1)) -lt "$len" ] && [[ ${src:i+1:1} != [[:space:]\;\&\|\(\)\<\>] ]]; then
+          :
+        else
+          TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1)); continue
+        fi
+        ;;
+      '}')
+        if [ $((i + 1)) -lt "$len" ] && [[ ${src:i+1:1} != [[:space:]\;\&\|\(\)\<\>] ]]; then
+          :
+        else
+          TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1)); continue
+        fi
+        ;;
+      ';'|'&'|'|'|'('|')'|'!')
         two=${src:i:2}
         case "$two" in '&&'|'||'|'|&'|';;') TOKENS+=("$two"); TOKEN_SUBS+=(0); i=$((i + 2));; *) TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1));; esac
         continue
@@ -69,7 +83,7 @@ tokenize_command() {
       char=${src:i:1}
       if [ -z "$quote" ]; then
         case "$char" in
-          [[:space:]]|';'|'&'|'|'|'('|')'|'{'|'}'|'!'|'<') break ;;
+          [[:space:]]|';'|'&'|'|'|'('|')'|'!'|'<') break ;;
           $'\n') break ;;
           "'") quote="'"; i=$((i + 1)); continue ;;
           '"') quote='"'; i=$((i + 1)); continue ;;
@@ -163,6 +177,10 @@ is_reserved_intro() {
 
 word_is_dynamic() {
   case "$1" in *'$'*|*'`'*) return 0 ;; *) return 1 ;; esac
+}
+
+word_has_brace_expansion() {
+  case "$1" in *'{'*','*'}'*|*'{'*'..'*'}'*) return 0 ;; *) return 1 ;; esac
 }
 
 find_command_substitution_end() {
@@ -840,6 +858,7 @@ command_words_are_denied() {
   [ "$i" -lt "${#_cmd_words[@]}" ] || return 1
   while [ "$i" -lt "${#_cmd_words[@]}" ]; do
     word_is_dynamic "${_cmd_words[$i]}" && return 0
+    word_has_brace_expansion "${_cmd_words[$i]}" && return 0
     name=$(base_name "${_cmd_words[$i]}")
     case "$name" in
       command) direct_prefix=1; i=$(skip_command_options _cmd_words $((i + 1))); continue ;;
@@ -881,6 +900,7 @@ command_words_are_denied() {
   done
   [ "$i" -lt "${#_cmd_words[@]}" ] || return 1
   word_is_dynamic "${_cmd_words[$i]}" && return 0
+  word_has_brace_expansion "${_cmd_words[$i]}" && return 0
   name=$(base_name "${_cmd_words[$i]}")
   case "$name" in
     pkill|killall) return 0 ;;
