@@ -36,59 +36,62 @@ fi
 
 TOKENS=()
 TOKEN_SUBS=()
+TOKEN_GLOBS=()
 tokenize_command() {
   local src=${1//$'\\\n'/}
-  local i=0 len=${#src} token='' token_subs=0 char='' quote='' next='' two='' hex='' oct=''
+  local i=0 len=${#src} token='' token_subs=0 token_globs=0 char='' quote='' next='' two='' hex='' oct=''
   TOKENS=()
   TOKEN_SUBS=()
+  TOKEN_GLOBS=()
   while [ "$i" -lt "$len" ]; do
     char=${src:i:1}
     case "$char" in
-      $'\n') TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1)); continue ;;
+      $'\n') TOKENS+=("$char"); TOKEN_SUBS+=(0); TOKEN_GLOBS+=(0); i=$((i + 1)); continue ;;
       [[:space:]]) i=$((i + 1)); continue ;;
       '#')
         while [ "$i" -lt "$len" ] && [ "${src:i:1}" != $'\n' ]; do i=$((i + 1)); done
         continue
         ;;
       '<')
-        case "${src:i:3}" in '<<<'|'<<-') TOKENS+=("${src:i:3}"); TOKEN_SUBS+=(0); i=$((i + 3)); continue ;; esac
+        case "${src:i:3}" in '<<<'|'<<-') TOKENS+=("${src:i:3}"); TOKEN_SUBS+=(0); TOKEN_GLOBS+=(0); i=$((i + 3)); continue ;; esac
         two=${src:i:2}
-        case "$two" in '<<'|'<&'|'<>') TOKENS+=("$two"); TOKEN_SUBS+=(0); i=$((i + 2));; *) TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1));; esac
+        case "$two" in '<<'|'<&'|'<>') TOKENS+=("$two"); TOKEN_SUBS+=(0); TOKEN_GLOBS+=(0); i=$((i + 2));; *) TOKENS+=("$char"); TOKEN_SUBS+=(0); TOKEN_GLOBS+=(0); i=$((i + 1));; esac
         continue
         ;;
       '>')
         two=${src:i:2}
-        case "$two" in '>>'|'>&'|'>|') TOKENS+=("$two"); TOKEN_SUBS+=(0); i=$((i + 2));; *) TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1));; esac
+        case "$two" in '>>'|'>&'|'>|') TOKENS+=("$two"); TOKEN_SUBS+=(0); TOKEN_GLOBS+=(0); i=$((i + 2));; *) TOKENS+=("$char"); TOKEN_SUBS+=(0); TOKEN_GLOBS+=(0); i=$((i + 1));; esac
         continue
         ;;
       '&')
-        case "${src:i:3}" in '&>>') TOKENS+=("${src:i:3}"); TOKEN_SUBS+=(0); i=$((i + 3)); continue ;; esac
+        case "${src:i:3}" in '&>>') TOKENS+=("${src:i:3}"); TOKEN_SUBS+=(0); TOKEN_GLOBS+=(0); i=$((i + 3)); continue ;; esac
         two=${src:i:2}
-        case "$two" in '&&') TOKENS+=("$two"); TOKEN_SUBS+=(0); i=$((i + 2)); continue ;; '&>') TOKENS+=("$two"); TOKEN_SUBS+=(0); i=$((i + 2)); continue ;; esac
-        TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1)); continue
+        case "$two" in '&&') TOKENS+=("$two"); TOKEN_SUBS+=(0); TOKEN_GLOBS+=(0); i=$((i + 2)); continue ;; '&>') TOKENS+=("$two"); TOKEN_SUBS+=(0); TOKEN_GLOBS+=(0); i=$((i + 2)); continue ;; esac
+        TOKENS+=("$char"); TOKEN_SUBS+=(0); TOKEN_GLOBS+=(0); i=$((i + 1)); continue
         ;;
       '{')
         if [ $((i + 1)) -lt "$len" ] && [[ ${src:i+1:1} != [[:space:]\;\&\|\(\)\<\>] ]]; then
           :
         else
-          TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1)); continue
+          TOKENS+=("$char"); TOKEN_SUBS+=(0); TOKEN_GLOBS+=(0); i=$((i + 1)); continue
         fi
         ;;
       '}')
         if [ $((i + 1)) -lt "$len" ] && [[ ${src:i+1:1} != [[:space:]\;\&\|\(\)\<\>] ]]; then
           :
         else
-          TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1)); continue
+          TOKENS+=("$char"); TOKEN_SUBS+=(0); TOKEN_GLOBS+=(0); i=$((i + 1)); continue
         fi
         ;;
       ';'|'|'|'('|')'|'!')
         two=${src:i:2}
-        case "$two" in '||'|'|&'|';;') TOKENS+=("$two"); TOKEN_SUBS+=(0); i=$((i + 2));; *) TOKENS+=("$char"); TOKEN_SUBS+=(0); i=$((i + 1));; esac
+        case "$two" in '||'|'|&'|';;') TOKENS+=("$two"); TOKEN_SUBS+=(0); TOKEN_GLOBS+=(0); i=$((i + 2));; *) TOKENS+=("$char"); TOKEN_SUBS+=(0); TOKEN_GLOBS+=(0); i=$((i + 1));; esac
         continue
         ;;
     esac
     token=
     token_subs=0
+    token_globs=0
     quote=
     while [ "$i" -lt "$len" ]; do
       char=${src:i:1}
@@ -109,6 +112,7 @@ tokenize_command() {
             fi
             ;;
           '`') token_subs=1 ;;
+          '*'|'?'|'[') token_globs=1 ;;
           "\\")
             if [ $((i + 1)) -lt "$len" ]; then
               next=${src:i+1:1}
@@ -169,6 +173,7 @@ tokenize_command() {
     [ -z "$quote" ] || return 1
     TOKENS+=("$token")
     TOKEN_SUBS+=("$token_subs")
+    TOKEN_GLOBS+=("$token_globs")
   done
 }
 
@@ -365,6 +370,14 @@ normalize_simple_command_words() {
   local -n _in_subs=$2
   local -n _out_words=$3
   local -n _out_subs=$4
+  local _in_globs_name=${5:-} _out_globs_name=${6:-}
+  if [ -n "$_in_globs_name" ]; then
+    local -n _in_globs=$_in_globs_name
+  fi
+  if [ -n "$_out_globs_name" ]; then
+    local -n _out_globs=$_out_globs_name
+    _out_globs=()
+  fi
   local i=0 word
   _out_words=()
   _out_subs=()
@@ -390,6 +403,7 @@ normalize_simple_command_words() {
     fi
     _out_words+=("$word")
     _out_subs+=("${_in_subs[$i]:-0}")
+    [ -z "$_out_globs_name" ] || _out_globs+=("${_in_globs[$i]:-0}")
     i=$((i + 1))
   done
 }
@@ -644,9 +658,11 @@ literal_payload_after_shell_c() {
 xargs_payload_is_denied() {
   local -n _words=$1
   local -n _subs=$2
-  local i=$3 arg
+  local -n _globs=$3
+  local i=$4 arg
   local xargs_cmd_words=()
   local xargs_cmd_subs=()
+  local xargs_cmd_globs=()
   while [ "$i" -lt "${#_words[@]}" ]; do
     arg=${_words[$i]}
     [ "$arg" = -- ] && { i=$((i + 1)); break; }
@@ -670,7 +686,9 @@ xargs_payload_is_denied() {
   xargs_cmd_words=("${_words[@]:$i}")
   # shellcheck disable=SC2034
   xargs_cmd_subs=("${_subs[@]:$i}")
-  command_words_are_denied xargs_cmd_words xargs_cmd_subs
+  # shellcheck disable=SC2034
+  xargs_cmd_globs=("${_globs[@]:$i}")
+  command_words_are_denied xargs_cmd_words xargs_cmd_subs xargs_cmd_globs
 }
 
 validate_kill_args() {
@@ -887,21 +905,25 @@ redact_non_shell_heredocs() {
 command_words_are_denied() {
   local words_name=$1
   local subs_name=$2
-  local alias_expand_name=${3:-}
-  local alias_names_name=${4:-}
-  local alias_payloads_name=${5:-}
+  local globs_name=$3
+  local alias_expand_name=${4:-}
+  local alias_names_name=${5:-}
+  local alias_payloads_name=${6:-}
   local -n _cmd_words=$words_name
   local -n _cmd_subs=$subs_name
+  local -n _cmd_globs=$globs_name
   local i=0 name payload direct_prefix=0 wrapped=0
   local original_words=("${_cmd_words[@]}")
   local original_subs=("${_cmd_subs[@]}")
   local normalized_words=()
   local normalized_subs=()
-  : "${original_words[@]}" "${original_subs[@]}"
+  local normalized_globs=()
+  : "${original_words[@]}" "${original_subs[@]}" "${_cmd_globs[@]}"
   words_substitutions_are_denied _cmd_words _cmd_subs && return 0
-  normalize_simple_command_words _cmd_words _cmd_subs normalized_words normalized_subs
+  normalize_simple_command_words _cmd_words _cmd_subs normalized_words normalized_subs _cmd_globs normalized_globs
   _cmd_words=("${normalized_words[@]}")
   _cmd_subs=("${normalized_subs[@]}")
+  _cmd_globs=("${normalized_globs[@]}")
   while [ "$i" -lt "${#_cmd_words[@]}" ]; do
     [[ ${_cmd_words[$i]} == *=* && ${_cmd_words[$i]} != /* ]] || break
     i=$((i + 1))
@@ -910,6 +932,7 @@ command_words_are_denied() {
   [ "$i" -lt "${#_cmd_words[@]}" ] || return 1
   while [ "$i" -lt "${#_cmd_words[@]}" ]; do
     word_is_dynamic "${_cmd_words[$i]}" && return 0
+    [ "${_cmd_globs[$i]:-0}" -eq 0 ] || return 0
     word_has_brace_expansion "${_cmd_words[$i]}" && return 0
     name=$(base_name "${_cmd_words[$i]}")
     case "$name" in
@@ -961,12 +984,13 @@ command_words_are_denied() {
         i=$(skip_wrapper_options _cmd_words $((i + 1)) "$name")
         continue
         ;;
-      xargs) xargs_payload_is_denied _cmd_words _cmd_subs $((i + 1)) && return 0; return 1 ;;
+      xargs) xargs_payload_is_denied _cmd_words _cmd_subs _cmd_globs $((i + 1)) && return 0; return 1 ;;
     esac
     break
   done
   [ "$i" -lt "${#_cmd_words[@]}" ] || return 1
   word_is_dynamic "${_cmd_words[$i]}" && return 0
+  [ "${_cmd_globs[$i]:-0}" -eq 0 ] || return 0
   word_has_brace_expansion "${_cmd_words[$i]}" && return 0
   name=$(base_name "${_cmd_words[$i]}")
   if [ -n "$alias_expand_name" ] && [ -n "$alias_names_name" ] && [ -n "$alias_payloads_name" ]; then
@@ -1007,6 +1031,7 @@ command_string_is_denied() {
   local src tok
   local current=()
   local current_subs=()
+  local current_globs=()
   local stdin_pipe=0
   # shellcheck disable=SC2034
   local alias_expand=0
@@ -1022,9 +1047,10 @@ command_string_is_denied() {
     if is_command_separator "$tok"; then
       if [ "${#current[@]}" -gt 0 ]; then
         COMMAND_STDIN_PIPE=$stdin_pipe
-        command_words_are_denied current current_subs alias_expand alias_names alias_payloads && return 0
+        command_words_are_denied current current_subs current_globs alias_expand alias_names alias_payloads && return 0
         current=()
         current_subs=()
+        current_globs=()
       fi
       case "$tok" in '|'|'|&') stdin_pipe=1 ;; *) stdin_pipe=0 ;; esac
       idx=$((idx + 1))
@@ -1032,11 +1058,12 @@ command_string_is_denied() {
     fi
     current+=("$tok")
     current_subs+=("${TOKEN_SUBS[$idx]:-0}")
+    current_globs+=("${TOKEN_GLOBS[$idx]:-0}")
     idx=$((idx + 1))
   done
   if [ "${#current[@]}" -gt 0 ]; then
     COMMAND_STDIN_PIPE=$stdin_pipe
-    command_words_are_denied current current_subs alias_expand alias_names alias_payloads && return 0
+    command_words_are_denied current current_subs current_globs alias_expand alias_names alias_payloads && return 0
   fi
   return 1
 }
