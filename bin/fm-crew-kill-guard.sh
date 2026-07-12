@@ -396,19 +396,58 @@ normalize_simple_command_words() {
 
 skip_sudo_options() {
   local -n _words=$1
-  local i=$2 arg opt
+  local i=$2 arg long_opt chars pos ch rest
   while [ "$i" -lt "${#_words[@]}" ]; do
     arg=${_words[$i]}
     [ "$arg" = -- ] && { printf '%s\n' $((i + 1)); return; }
     [[ $arg == -* && $arg != - ]] || break
-    opt=${arg#-}
-    opt=${opt%%=*}
-    case "$arg" in --*=*) i=$((i + 1)); continue ;; esac
-    if [[ $arg =~ ^-[CgHhprRTtUu].+ ]]; then
-      i=$((i + 1))
+    if [[ $arg == --* ]]; then
+      long_opt=${arg#--}
+      long_opt=${long_opt%%=*}
+      case "$long_opt" in
+        askpass|background|bell|edit|help|login|non-interactive|preserve-env|preserve-groups|remove-timestamp|reset-timestamp|set-home|shell|stdin|validate|version)
+          i=$((i + 1))
+          ;;
+        chdir|chroot|close-from|command-timeout|group|host|other-user|prompt|role|type|user)
+          if [[ $arg == *=* ]]; then i=$((i + 1)); else i=$((i + 2)); fi
+          ;;
+        *)
+          break
+          ;;
+      esac
       continue
     fi
-    case "$opt" in *[CgHhprRTtUu]*) i=$((i + 2)) ;; *) i=$((i + 1)) ;; esac
+    chars=${arg#-}
+    pos=0
+    while [ "$pos" -lt "${#chars}" ]; do
+      ch=${chars:$pos:1}
+      case "$ch" in
+        A|B|b|E|e|H|i|K|k|l|N|n|P|S|s|v|V)
+          pos=$((pos + 1))
+          ;;
+        C|D|g|h|p|r|R|t|T|u|U)
+          rest=${chars:$((pos + 1))}
+          if [ -n "$rest" ]; then i=$((i + 1)); else i=$((i + 2)); fi
+          pos=${#chars}
+          ;;
+        *)
+          pos=${#chars}
+          break 2
+          ;;
+      esac
+    done
+    [ "$pos" -ge "${#chars}" ] || break
+    case "$chars" in *[CDghprRtTuU]*) : ;; *) i=$((i + 1)) ;; esac
+  done
+  printf '%s\n' "$i"
+}
+
+skip_env_assignments() {
+  local -n _words=$1
+  local i=$2
+  while [ "$i" -lt "${#_words[@]}" ]; do
+    [[ ${_words[$i]} == *=* && ${_words[$i]} != /* ]] || break
+    i=$((i + 1))
   done
   printf '%s\n' "$i"
 }
@@ -749,7 +788,7 @@ simple_command_feeds_shell_interpreter() {
       command) i=$(skip_command_options _words $((i + 1))); continue ;;
       builtin) i=$(skip_builtin_options _words $((i + 1))); continue ;;
       exec) i=$(skip_exec_options _words $((i + 1))); continue ;;
-      sudo) i=$(skip_sudo_options _words $((i + 1))); continue ;;
+      sudo) i=$(skip_sudo_options _words $((i + 1))); i=$(skip_env_assignments _words "$i"); continue ;;
       env) i=$(skip_env_options _words $((i + 1))); continue ;;
       busybox|toybox)
         i=$((i + 1))
@@ -891,7 +930,7 @@ command_words_are_denied() {
         ;;
       command) direct_prefix=1; i=$(skip_command_options _cmd_words $((i + 1))); continue ;;
       builtin) direct_prefix=1; i=$(skip_builtin_options _cmd_words $((i + 1))); continue ;;
-      sudo) direct_prefix=1; i=$(skip_sudo_options _cmd_words $((i + 1))); continue ;;
+      sudo) direct_prefix=1; i=$(skip_sudo_options _cmd_words $((i + 1))); i=$(skip_env_assignments _cmd_words "$i"); continue ;;
       env)
         env_split_payloads_are_denied _cmd_words $((i + 1)) && return 0
         wrapped=1
