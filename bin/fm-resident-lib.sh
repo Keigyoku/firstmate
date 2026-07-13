@@ -6,6 +6,7 @@
 
 fm_resident_atomic_json() {  # <destination>
   local destination=$1 directory temporary
+  [ ! -d "$destination" ] || return 1
   directory=$(dirname "$destination")
   mkdir -p "$directory"
   temporary=$(mktemp "$directory/.$(basename "$destination").tmp.XXXXXX") || return 1
@@ -27,7 +28,7 @@ fm_resident_rfc3339() {
 }
 
 fm_resident_container_id() {  # <home>
-  jq -er 'select(.schema == "dev.vellum.god-node/1") | .container_id' "$1/.god-node/contract.json"
+  jq -er 'select(.schema == "dev.vellum.god-node.provision/1") | .container_id' "$1/.god-node/provision.json"
 }
 
 fm_resident_process_identity() {  # <pid>

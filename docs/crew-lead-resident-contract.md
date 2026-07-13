@@ -5,16 +5,19 @@ Internal protocol paths retain the ratified `god-node` names.
 
 ## Provisioned metadata
 
-`bin/fm-resident-setup.sh` provisions `.god-node/contract.json` exactly once with schema `dev.vellum.god-node/1`, a UUID-v4 `container_id`, an RFC3339 `created_at`, `identity_kind` set to `resident-container`, and `minimum_reader` set to `1`.
-The container identifier is immutable during ordinary setup and upgrades.
-Copies of a provisioned home must receive a new identity through an explicit future identity-repair operation rather than rerunning setup.
+`bin/fm-resident-setup.sh` provisions `.god-node/contract.json` with schema `dev.vellum.god-node/1` and `minimum_reader` set to `1`.
+This file is tracked template metadata and must not contain per-home instance identity.
+
+Setup also provisions the gitignored `.god-node/provision.json` with schema `dev.vellum.god-node.provision/1`, a UUID-v4 `container_id`, an RFC3339 `created_at`, and `identity_kind` set to `resident-container`.
+The container identifier is immutable during ordinary setup and upgrades once present in `provision.json`.
+Copies of a tracked home template receive a new identity because `provision.json` is local state.
 
 Setup also atomically replaces `.god-node/resident.json` with schema `dev.vellum.resident/1`.
 The descriptor declares resident type `firstmate`, the installed Git revision, supported contract major versions, argv-array entrypoints, and input and transcript capabilities.
 Entrypoint paths are relative to the Crew Lead home.
 The adoption entrypoint provisions and validates metadata in place without moving or rewriting private operational data.
 
-Both documents are written to unique same-directory temporary files, validated as JSON, flushed, and renamed into place.
+Provisioned documents are written to unique same-directory temporary files, validated as JSON, flushed, and renamed into place.
 The directory is flushed on a best-effort basis after the rename.
 
 ## Current-state pointer
@@ -45,14 +48,14 @@ Adapters and rotation hooks may call `bin/fm-resident-publish.sh` for lifecycle,
 ## Versioning rules
 
 The integer after the slash in each schema string is its major version.
-Readers must fail closed on an unsupported major version or a pointer whose `container_id` differs from `.god-node/contract.json`.
+Readers must fail closed on an unsupported major version or a pointer whose `container_id` differs from `.god-node/provision.json`.
 Additive fields within a supported major version may be ignored by readers.
 Breaking field or semantic changes require a new major schema and an added entry in `resident.json` only when the installed producer supports that version.
-An upgrade replaces `resident.json` but never rewrites `contract.json` or resets the pointer epoch.
+An upgrade replaces `resident.json` but never rewrites `provision.json` or resets the pointer epoch.
 
 ## Empirical verification
 
-Verification was run on 2026-07-12 against firstmate base commit `4679f18f2b513a76238f67132304b69096411d2b`, jq 1.8.1, and ShellCheck 0.11.0.
+Verification was run on 2026-07-13 against firstmate base commit `4679f18f2b513a76238f67132304b69096411d2b`, jq 1.8.1, and ShellCheck 0.11.0.
 
 Command:
 
@@ -63,7 +66,9 @@ tests/fm-resident-producer.test.sh
 Output:
 
 ```text
-ok - provisioning creates immutable identity and versioned manifest
+ok - provisioning creates local immutable identity and versioned manifest
+ok - session lock acquisition fails closed when resident publication fails
+ok - publisher lock recovers abandoned owner state
 ok - session rotation publishes endpoint, transcript, process identity, and monotonic epoch
 ok - failed pre-rename writes leave the previous complete pointer intact
 ok - concurrent publishers serialize atomic epoch updates

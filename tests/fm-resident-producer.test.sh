@@ -21,19 +21,27 @@ publish() {
 }
 
 run_setup
-CONTAINER_ID=$(jq -r '.container_id' "$HOME_DIR/.god-node/contract.json")
+CONTAINER_ID=$(jq -r '.container_id' "$HOME_DIR/.god-node/provision.json")
 [[ "$CONTAINER_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] \
   || fail "setup did not provision a UUID-v4 container_id"
 FIRST_ID=$CONTAINER_ID
 run_setup
-[ "$(jq -r '.container_id' "$HOME_DIR/.god-node/contract.json")" = "$FIRST_ID" ] \
+[ "$(jq -r '.container_id' "$HOME_DIR/.god-node/provision.json")" = "$FIRST_ID" ] \
   || fail "idempotent setup replaced immutable container identity"
+jq -e 'has("container_id") == false and has("created_at") == false and has("identity_kind") == false' "$HOME_DIR/.god-node/contract.json" >/dev/null \
+  || fail "tracked contract retained local container identity"
 jq -e '.schema == "dev.vellum.resident/1" and .contract_versions == [1] and .entrypoints.adopt == ["bin/fm-resident-adopt.sh"]' "$HOME_DIR/.god-node/resident.json" >/dev/null \
   || fail "setup did not write the versioned resident manifest"
-pass "provisioning creates immutable identity and versioned manifest"
+SECOND_HOME="$TEST_ROOT/second-home"
+mkdir -p "$SECOND_HOME/.god-node" "$SECOND_HOME/state" "$SECOND_HOME/data" "$SECOND_HOME/config" "$SECOND_HOME/projects"
+cp "$HOME_DIR/.god-node/contract.json" "$SECOND_HOME/.god-node/contract.json"
+FM_HOME="$SECOND_HOME" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-resident-setup.sh"
+[ "$(jq -r '.container_id' "$SECOND_HOME/.god-node/provision.json")" != "$FIRST_ID" ] \
+  || fail "copied tracked contract reused the first home container identity"
+pass "provisioning creates local immutable identity and versioned manifest"
 
 LOCK_HOME="$TEST_ROOT/lock-home"
-mkdir -p "$LOCK_HOME/state/resident-current.lock"
+mkdir -p "$LOCK_HOME/state/resident-current.json"
 FAKEBIN=$(fm_fakebin "$TEST_ROOT")
 cat > "$FAKEBIN/ps" <<'SH'
 #!/usr/bin/env bash
@@ -45,7 +53,7 @@ esac
 SH
 chmod +x "$FAKEBIN/ps"
 set +e
-LOCK_OUTPUT=$(PATH="$FAKEBIN:$PATH" FM_HOME="$LOCK_HOME" FM_ROOT_OVERRIDE="$ROOT" FM_RESIDENT_LOCK_POLLS=1 "$ROOT/bin/fm-lock.sh" 2>&1)
+LOCK_OUTPUT=$(PATH="$FAKEBIN:$PATH" FM_HOME="$LOCK_HOME" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-lock.sh" 2>&1)
 LOCK_STATUS=$?
 set -e
 [ "$LOCK_STATUS" -ne 0 ] || fail "fm-lock succeeded after resident publication failed"
@@ -53,6 +61,18 @@ case "$LOCK_OUTPUT" in
   *"lock acquired"*) fail "fm-lock printed success after resident publication failed" ;;
 esac
 pass "session lock acquisition fails closed when resident publication fails"
+
+STALE_HOME="$TEST_ROOT/stale-lock-home"
+mkdir -p "$STALE_HOME/state/resident-current.lock"
+printf '999999\n' > "$STALE_HOME/state/resident-current.lock/pid"
+FM_HOME="$STALE_HOME" FM_ROOT_OVERRIDE="$ROOT" \
+  FM_RESIDENT_PID="$$" FM_RESIDENT_HARNESS=codex \
+  FM_RESIDENT_BACKEND_KIND=herdr FM_RESIDENT_WORKSPACE_ID=crew-lead \
+  FM_RESIDENT_PANE_ID=pane-1 "$ROOT/bin/fm-resident-publish.sh" ready
+jq -e '.schema == "dev.vellum.resident-current/1" and .epoch == 1' "$STALE_HOME/state/resident-current.json" >/dev/null \
+  || fail "stale publisher lock recovery did not publish a pointer"
+[ ! -e "$STALE_HOME/state/resident-current.lock" ] || fail "stale publisher lock recovery left the lock held"
+pass "publisher lock recovers abandoned owner state"
 
 TRANSCRIPT_ONE="$TEST_ROOT/rollout-one.jsonl"
 TRANSCRIPT_TWO="$TEST_ROOT/rollout-two.jsonl"

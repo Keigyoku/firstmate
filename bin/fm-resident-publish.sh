@@ -17,6 +17,8 @@ LIFECYCLE=${1:-ready}
 . "$SCRIPT_DIR/fm-resident-lib.sh"
 # shellcheck source=bin/fm-watchdog-lib.sh
 . "$SCRIPT_DIR/fm-watchdog-lib.sh"
+# shellcheck source=bin/fm-wake-lib.sh
+. "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
 
@@ -25,17 +27,13 @@ case "$LIFECYCLE" in
   *) echo "usage: fm-resident-publish.sh [starting|ready|waiting|blocked|degraded|stopped|failed]" >&2; exit 2 ;;
 esac
 
-[ -s "$FM_HOME/.god-node/contract.json" ] || "$SCRIPT_DIR/fm-resident-setup.sh"
+if [ ! -s "$FM_HOME/.god-node/contract.json" ] || [ ! -s "$FM_HOME/.god-node/provision.json" ]; then
+  "$SCRIPT_DIR/fm-resident-setup.sh"
+fi
 CONTAINER_ID=$(fm_resident_container_id "$FM_HOME")
 mkdir -p "$STATE"
-
-WAITED=0
-until mkdir "$SERIAL" 2>/dev/null; do
-  WAITED=$((WAITED + 1))
-  [ "$WAITED" -lt "${FM_RESIDENT_LOCK_POLLS:-100}" ] || { echo "fm-resident-publish: publisher lock timed out" >&2; exit 1; }
-  sleep 0.05
-done
-trap 'rmdir "$SERIAL" 2>/dev/null || true' EXIT
+fm_lock_acquire_wait "$SERIAL"
+trap 'fm_lock_release "$SERIAL" 2>/dev/null || true' EXIT
 
 OLD_EPOCH=0
 if [ -s "$POINTER" ]; then

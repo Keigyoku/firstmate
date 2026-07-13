@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Provision the Crew Lead producer metadata in an existing firstmate home.
 # Usage: fm-resident-setup.sh
-# Idempotent: contract.json and its container UUID are never replaced.
+# Idempotent: the local provision container UUID is never replaced.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,6 +9,7 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${GOD_NODE_HOME:-${RESIDENT_HOME:-${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}}}"
 CONTRACT_DIR="$FM_HOME/.god-node"
 CONTRACT="$CONTRACT_DIR/contract.json"
+PROVISION="$CONTRACT_DIR/provision.json"
 RESIDENT="$CONTRACT_DIR/resident.json"
 
 # shellcheck source=bin/fm-resident-lib.sh
@@ -18,6 +19,17 @@ command -v jq >/dev/null 2>&1 || { echo "fm-resident-setup: jq is required" >&2;
 mkdir -p "$CONTRACT_DIR" "$FM_HOME/state" "$FM_HOME/inbox/requests" "$FM_HOME/inbox/results"
 
 if [ ! -e "$CONTRACT" ]; then
+  jq -n \
+    '{schema:"dev.vellum.god-node/1",minimum_reader:1}' \
+    | fm_resident_atomic_json "$CONTRACT"
+fi
+
+if ! jq -e '.schema == "dev.vellum.god-node/1" and .minimum_reader == 1 and has("container_id") == false and has("created_at") == false and has("identity_kind") == false' "$CONTRACT" >/dev/null; then
+  echo "fm-resident-setup: contract.json must carry only schema and minimum_reader" >&2
+  exit 1
+fi
+
+if ! jq -e '.schema == "dev.vellum.god-node.provision/1" and (.container_id | type == "string")' "$PROVISION" >/dev/null 2>&1; then
   if command -v uuidgen >/dev/null 2>&1; then
     CONTAINER_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
   elif [ -r /proc/sys/kernel/random/uuid ]; then
@@ -30,14 +42,14 @@ if [ ! -e "$CONTRACT" ]; then
   jq -n \
     --arg container_id "$CONTAINER_ID" \
     --arg created_at "$CREATED_AT" \
-    '{schema:"dev.vellum.god-node/1",container_id:$container_id,created_at:$created_at,identity_kind:"resident-container",minimum_reader:1}' \
-    | fm_resident_atomic_json "$CONTRACT"
+    '{schema:"dev.vellum.god-node.provision/1",container_id:$container_id,created_at:$created_at,identity_kind:"resident-container"}' \
+    | fm_resident_atomic_json "$PROVISION"
 fi
 
 CONTAINER_ID=$(fm_resident_container_id "$FM_HOME")
 case "$CONTAINER_ID" in
   ????????-????-4???-[89ab]???-????????????) ;;
-  *) echo "fm-resident-setup: contract.json has an invalid UUID-v4 container_id" >&2; exit 1 ;;
+  *) echo "fm-resident-setup: provision.json has an invalid UUID-v4 container_id" >&2; exit 1 ;;
 esac
 
 REVISION=$(git -C "$FM_ROOT" rev-parse HEAD 2>/dev/null || printf unknown)
