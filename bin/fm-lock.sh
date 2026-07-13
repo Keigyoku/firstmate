@@ -5,7 +5,7 @@
 # PID of any one tool call, which is dead moments after it is written.
 # Usage: fm-lock.sh           acquire; exit 1 if another live session holds it
 #        fm-lock.sh status    print holder and liveness; always exits 0
-set -u
+set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -51,12 +51,33 @@ if [ "${1:-}" = "status" ]; then
 fi
 
 me=$(harness_pid) || { echo "error: cannot locate harness process in ancestry" >&2; exit 1; }
+lock_existed=0
+previous_lock=
 if [ -f "$LOCK" ]; then
   old=$(cat "$LOCK")
   if [ "$old" != "$me" ] && holder_alive "$old"; then
     echo "error: another live firstmate session holds the lock (pid $old); operate read-only until resolved" >&2
     exit 1
   fi
+  lock_existed=1
+  previous_lock=$old
 fi
 echo "$me" > "$LOCK"
+rollback_lock() {
+  current=$(cat "$LOCK" 2>/dev/null || true)
+  [ "$current" = "$me" ] || return 0
+  if [ "$lock_existed" -eq 1 ]; then
+    printf '%s\n' "$previous_lock" > "$LOCK"
+  else
+    rm -f "$LOCK"
+  fi
+}
+if ! FM_RESIDENT_PID="$me" "$SCRIPT_DIR/fm-resident-setup.sh" >/dev/null; then
+  rollback_lock
+  exit 1
+fi
+if ! FM_RESIDENT_PID="$me" "$SCRIPT_DIR/fm-resident-publish.sh" ready; then
+  rollback_lock
+  exit 1
+fi
 echo "lock acquired: harness pid $me"

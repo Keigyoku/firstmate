@@ -8,6 +8,7 @@ fm-scratch/
 .fm-secondmate-home
 .DS_Store
 .env
+inbox/
 config/crew-harness
 config/crew-dispatch.json
 config/secondmate-harness
@@ -18,3 +19,4 @@ config/watchdog.json
 config/x-mode.env
 config/cmux-socket-password
 config/wedge-alarm
+.god-node/provision.json
