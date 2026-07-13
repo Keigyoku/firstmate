@@ -30,8 +30,12 @@ run_setup
   || fail "idempotent setup replaced immutable container identity"
 jq -e 'has("container_id") == false and has("created_at") == false and has("identity_kind") == false' "$HOME_DIR/.god-node/contract.json" >/dev/null \
   || fail "tracked contract retained local container identity"
-jq -e '.schema == "dev.vellum.resident/1" and .contract_versions == [1] and .entrypoints.adopt == ["bin/fm-resident-adopt.sh"]' "$HOME_DIR/.god-node/resident.json" >/dev/null \
+jq -e '.schema == "dev.vellum.resident/1" and .resident_version == "dev.vellum.firstmate-resident/1" and .contract_versions == [1] and .entrypoints.adopt == ["bin/fm-resident-adopt.sh"]' "$HOME_DIR/.god-node/resident.json" >/dev/null \
   || fail "setup did not write the versioned resident manifest"
+git -C "$ROOT" check-ignore -q inbox/requests/request.json \
+  || fail "file-v1 request inbox path is not ignored operational data"
+git -C "$ROOT" check-ignore -q inbox/results/result.json \
+  || fail "file-v1 result inbox path is not ignored operational data"
 SECOND_HOME="$TEST_ROOT/second-home"
 mkdir -p "$SECOND_HOME/.god-node" "$SECOND_HOME/state" "$SECOND_HOME/data" "$SECOND_HOME/config" "$SECOND_HOME/projects"
 cp "$HOME_DIR/.god-node/contract.json" "$SECOND_HOME/.god-node/contract.json"

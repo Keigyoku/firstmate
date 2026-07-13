@@ -8,6 +8,7 @@ fm-scratch/
 .fm-secondmate-home
 .DS_Store
 .env
+inbox/
 config/crew-harness
 config/crew-dispatch.json
 config/secondmate-harness

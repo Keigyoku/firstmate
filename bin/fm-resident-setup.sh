@@ -11,6 +11,7 @@ CONTRACT_DIR="$FM_HOME/.god-node"
 CONTRACT="$CONTRACT_DIR/contract.json"
 PROVISION="$CONTRACT_DIR/provision.json"
 RESIDENT="$CONTRACT_DIR/resident.json"
+RESIDENT_VERSION="dev.vellum.firstmate-resident/1"
 
 # shellcheck source=bin/fm-resident-lib.sh
 . "$SCRIPT_DIR/fm-resident-lib.sh"
@@ -52,8 +53,7 @@ case "$CONTAINER_ID" in
   *) echo "fm-resident-setup: provision.json has an invalid UUID-v4 container_id" >&2; exit 1 ;;
 esac
 
-REVISION=$(git -C "$FM_ROOT" rev-parse HEAD 2>/dev/null || printf unknown)
 jq -n \
-  --arg version "git:$REVISION" \
+  --arg version "$RESIDENT_VERSION" \
   '{schema:"dev.vellum.resident/1",resident_type:"firstmate",resident_version:$version,contract_versions:[1],entrypoints:{setup:["bin/fm-resident-setup.sh"],adopt:["bin/fm-resident-adopt.sh"],start:["bin/fm-resident-start.sh"],restart:["bin/fm-resident-restart.sh"],doctor:["bin/fm-resident-doctor.sh"]},capabilities:["input.file-v1","input.backend-v1","transcript.claude-jsonl-v1","transcript.codex-jsonl-v1"]}' \
   | fm_resident_atomic_json "$RESIDENT"

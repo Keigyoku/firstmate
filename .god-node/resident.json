@@ -1,7 +1,7 @@
 {
   "schema": "dev.vellum.resident/1",
   "resident_type": "firstmate",
-  "resident_version": "git:0791d9eb67e0b4bf3b070196676bdb84851ffe1c",
+  "resident_version": "dev.vellum.firstmate-resident/1",
   "contract_versions": [
     1
   ],

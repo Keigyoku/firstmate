@@ -12,8 +12,8 @@ Setup also provisions the gitignored `.god-node/provision.json` with schema `dev
 The container identifier is immutable during ordinary setup and upgrades once present in `provision.json`.
 Copies of a tracked home template receive a new identity because `provision.json` is local state.
 
-Setup also atomically replaces `.god-node/resident.json` with schema `dev.vellum.resident/1`.
-The descriptor declares resident type `firstmate`, the installed Git revision, supported contract major versions, argv-array entrypoints, and input and transcript capabilities.
+Setup also atomically writes `.god-node/resident.json` with schema `dev.vellum.resident/1`.
+The descriptor is tracked template metadata and declares resident type `firstmate`, the stable producer descriptor version, supported contract major versions, argv-array entrypoints, and input and transcript capabilities.
 Entrypoint paths are relative to the Crew Lead home.
 The adoption entrypoint provisions and validates metadata in place without moving or rewriting private operational data.
 
@@ -50,8 +50,8 @@ Adapters and rotation hooks may call `bin/fm-resident-publish.sh` for lifecycle,
 The integer after the slash in each schema string is its major version.
 Readers must fail closed on an unsupported major version or a pointer whose `container_id` differs from `.god-node/provision.json`.
 Additive fields within a supported major version may be ignored by readers.
-Breaking field or semantic changes require a new major schema and an added entry in `resident.json` only when the installed producer supports that version.
-An upgrade replaces `resident.json` but never rewrites `provision.json` or resets the pointer epoch.
+Breaking field or semantic changes require a new major schema and an added entry in the tracked `resident.json` template only when the installed producer supports that version.
+An upgrade changes tracked descriptor metadata but never rewrites `provision.json` or resets the pointer epoch.
 
 ## Empirical verification
 
