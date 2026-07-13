@@ -538,7 +538,7 @@ $rec
 EOF
   make_fake_toolchain "$fakebin"
   make_fake_ps_claude "$fakebin"
-  fm_fake_exit0 "$fakebin" curl jq
+  fm_fake_exit0 "$fakebin" curl
   printf 'FMX_PAIRING_TOKEN=tok-next-step\n' > "$home/.env"
 
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
