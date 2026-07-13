@@ -206,20 +206,15 @@ fi
 # scope the cursor mid-turn queue-push Enter - snapshot BEFORE typing so an idle
 # composer that becomes busy after a normal submit is not double-Entered.
 fm_send_target_is_busy() {
-  local bs
+  local bs tail40
   bs=$(fm_backend_busy_state "$TARGET_BACKEND" "$T" 2>/dev/null || printf 'unknown')
   case "$bs" in
     busy) return 0 ;;
   esac
-  case "$TARGET_BACKEND" in
-    tmux)
-      fm_backend_source tmux || return 1
-      fm_pane_is_busy "$T"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
+  fm_backend_source tmux || return 1
+  tail40=$(fm_backend_capture "$TARGET_BACKEND" "$T" 40 "$EXPECTED_LABEL" 2>/dev/null) || return 1
+  printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -6 \
+    | grep -qiE "${FM_BUSY_REGEX:-$FM_TMUX_BUSY_REGEX_DEFAULT}"
 }
 
 if [ "${1:-}" = "--key" ]; then
