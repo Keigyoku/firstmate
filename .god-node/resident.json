@@ -1,0 +1,31 @@
+{
+  "schema": "dev.vellum.resident/1",
+  "resident_type": "firstmate",
+  "resident_version": "git:0791d9eb67e0b4bf3b070196676bdb84851ffe1c",
+  "contract_versions": [
+    1
+  ],
+  "entrypoints": {
+    "setup": [
+      "bin/fm-resident-setup.sh"
+    ],
+    "adopt": [
+      "bin/fm-resident-adopt.sh"
+    ],
+    "start": [
+      "bin/fm-resident-start.sh"
+    ],
+    "restart": [
+      "bin/fm-resident-restart.sh"
+    ],
+    "doctor": [
+      "bin/fm-resident-doctor.sh"
+    ]
+  },
+  "capabilities": [
+    "input.file-v1",
+    "input.backend-v1",
+    "transcript.claude-jsonl-v1",
+    "transcript.codex-jsonl-v1"
+  ]
+}

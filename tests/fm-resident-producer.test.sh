@@ -32,6 +32,28 @@ jq -e '.schema == "dev.vellum.resident/1" and .contract_versions == [1] and .ent
   || fail "setup did not write the versioned resident manifest"
 pass "provisioning creates immutable identity and versioned manifest"
 
+LOCK_HOME="$TEST_ROOT/lock-home"
+mkdir -p "$LOCK_HOME/state/resident-current.lock"
+FAKEBIN=$(fm_fakebin "$TEST_ROOT")
+cat > "$FAKEBIN/ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"comm="*) printf 'codex\n' ;;
+  *"args="*) printf 'codex test harness\n' ;;
+  *"ppid="*) printf '1\n' ;;
+esac
+SH
+chmod +x "$FAKEBIN/ps"
+set +e
+LOCK_OUTPUT=$(PATH="$FAKEBIN:$PATH" FM_HOME="$LOCK_HOME" FM_ROOT_OVERRIDE="$ROOT" FM_RESIDENT_LOCK_POLLS=1 "$ROOT/bin/fm-lock.sh" 2>&1)
+LOCK_STATUS=$?
+set -e
+[ "$LOCK_STATUS" -ne 0 ] || fail "fm-lock succeeded after resident publication failed"
+case "$LOCK_OUTPUT" in
+  *"lock acquired"*) fail "fm-lock printed success after resident publication failed" ;;
+esac
+pass "session lock acquisition fails closed when resident publication fails"
+
 TRANSCRIPT_ONE="$TEST_ROOT/rollout-one.jsonl"
 TRANSCRIPT_TWO="$TEST_ROOT/rollout-two.jsonl"
 printf '%s\n' '{"type":"session_meta","payload":{"session_id":"session-one"}}' > "$TRANSCRIPT_ONE"
