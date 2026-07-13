@@ -64,6 +64,7 @@ set -e
 case "$LOCK_OUTPUT" in
   *"lock acquired"*) fail "fm-lock printed success after resident publication failed" ;;
 esac
+[ ! -e "$LOCK_HOME/state/.lock" ] || fail "fm-lock left a new live session lock after resident publication failed"
 pass "session lock acquisition fails closed when resident publication fails"
 
 STALE_HOME="$TEST_ROOT/stale-lock-home"
