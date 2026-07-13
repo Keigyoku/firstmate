@@ -309,7 +309,7 @@ The UI shows a `follow-ups` box with `enter send now · ↑ select/edit · esc c
 A second Enter pushes that queued item for immediate delivery (observed: tool run `Interrupted by follow-up`).
 `fm-send` therefore scopes a post-submit extra Enter when the target's recorded meta harness is `cursor` AND the pane shows the busy signature before typing (same meta scoping pattern as the codex `$`-settle).
 Idle cursor, non-cursor harnesses, and explicit `session:window` targets with no meta stay on a single Enter.
-Owners: `bin/fm-send.sh` (scoping), `bin/fm-tmux-lib.sh` `fm_tmux_submit_core` (optional `push_queued`), and the herdr submit path (same optional push, because the queue is cursor-agent TUI behavior host-backend-agnostic).
+Owners: `bin/fm-send.sh` (scoping), `bin/fm-tmux-lib.sh` `fm_tmux_submit_core`, and each submit-verifying backend adapter's optional `push_queued` handling.
 
 Turn-end hook: none is wired.
 cursor-agent is Claude-Code-compatible but its interactive Stop/turn-end hook surface is unverified, so firstmate does not assume one and relies on the busy signature (provably-working check) plus stale-pane detection, the same hookless path as opencode.

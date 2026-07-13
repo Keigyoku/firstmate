@@ -580,8 +580,8 @@ fm_backend_cmux_composer_state() {  # <target> [expected-label] -> empty|pending
 # no analogous native primitive, so this composer-row approach remains
 # cmux's own confirmation strategy. Echoes empty|pending|unknown|send-failed, the
 # SAME vocabulary every existing backend already speaks.
-fm_backend_cmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [expected-label]
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-} i=0 state
+fm_backend_cmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [expected-label] [push_queued]
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-} push_queued=${7:-0} i=0 state
   fm_backend_cmux_parse_target "$target" || { printf 'unknown'; return 0; }
   fm_backend_cmux_send_literal "$target" "$text" "$expected_label" || { printf 'send-failed'; return 0; }
   sleep "$settle"
@@ -589,7 +589,14 @@ fm_backend_cmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> 
     fm_backend_cmux_send_key "$target" Enter "$expected_label" || true
     sleep "$sleep_s"
     state=$(fm_backend_cmux_composer_state "$target" "$expected_label")
-    [ "$state" = pending ] || { printf '%s' "$state"; return 0; }
+    if [ "$state" != pending ]; then
+      if [ "$push_queued" = 1 ]; then
+        fm_backend_cmux_send_key "$target" Enter "$expected_label" || true
+        sleep "$sleep_s"
+      fi
+      printf '%s' "$state"
+      return 0
+    fi
     i=$((i + 1))
     [ "$i" -lt "$retries" ] || { printf 'pending'; return 0; }
   done

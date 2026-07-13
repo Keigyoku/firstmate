@@ -252,8 +252,7 @@ else
   fi
   # Type once, submit, verify. Lenient: only a positively-confirmed swallow
   # (text still in the composer) is an error; an unreadable pane is assumed sent.
-  # Trailing push_queued is honored by tmux/herdr submit cores; other backends
-  # ignore an unknown trailing arg safely when they only read the first five.
+  # Trailing push_queued is honored by submit-verifying backend adapters.
   if ! verdict=$(fm_backend_send_text_submit "$TARGET_BACKEND" "$T" "$MARK_PREFIX$*" "$retries" "$sleep_s" "$settle" "$EXPECTED_LABEL" "$push_queued"); then
     echo "error: text not sent to $T ($TARGET_BACKEND send failed; tried $RESOLUTION_TRIED)" >&2
     exit 1
