@@ -9,6 +9,13 @@ If you have changed away from the firstmate home in an interactive shell, invoke
 | `check-personal-references.sh` | Reject tracked text containing known local-operator identifiers, with narrow allowlist support |
 | `fm-session-start.sh`    | Compose lock, bootstrap, and wake drain into the single ordered session-start digest |
 | `fm-bootstrap.sh`        | Detect toolchain and fleet problems, run the locked session-start sweeps, and install approved tools |
+| `fm-resident-setup.sh`   | Provision Crew Lead contract metadata and local file input directories               |
+| `fm-resident-adopt.sh`   | Adopt the current home as a Crew Lead container and validate its metadata            |
+| `fm-resident-start.sh`   | Acquire the session lock and publish the current Crew Lead session                   |
+| `fm-resident-restart.sh` | Re-acquire the session lock and refresh the Crew Lead current-state pointer          |
+| `fm-resident-doctor.sh`  | Validate Crew Lead contract metadata and the current pointer when present            |
+| `fm-resident-publish.sh` | Publish one atomic Crew Lead current-state pointer snapshot                          |
+| `fm-resident-lib.sh`     | Shared Crew Lead resident-container helpers                                         |
 | `fm-fleet-sync.sh`       | Refresh project clones with safe fast-forwards, self-heals, `STUCK:` reports, and branch pruning |
 | `fm-fleet-snapshot.sh`   | Print the read-only structured fleet snapshot JSON (schema `fm-fleet-snapshot.v1`)   |
 | `fm-fleet-view.sh`       | Render the fleet snapshot as a human Markdown view                                   |
