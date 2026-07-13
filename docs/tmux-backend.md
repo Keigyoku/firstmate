@@ -74,6 +74,8 @@ You should see a `fm-<id>` window for the task, live and updating as the crewmat
 It captures only the cursor row with ANSI styling, strips dim/faint ghost or placeholder text, strips known composer borders, and then decides whether real unsubmitted text remains.
 An idle Codex composer whose row is a bold `›` prompt followed by dim suggestion text therefore reads as empty, while the same `›` prompt followed by normal-intensity typed text still reads as pending.
 Submit verification types the message once and retries Enter only until the composer clears, preserving the swallowed-Enter protection without duplicating text.
+When `fm-send.sh` has already scoped a target as cursor-agent mid-turn, the submit core can send one additional Enter after that verified clear to push cursor's follow-up queue immediately.
+Idle cursor panes, non-cursor harnesses, and explicit tmux targets without task metadata still use the normal single-submit path.
 
 ## Agent liveness probe
 
