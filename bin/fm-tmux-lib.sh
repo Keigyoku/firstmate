@@ -145,6 +145,12 @@ fm_pane_is_busy() {  # <target>
 #     not be mistaken for a delivered escalation).
 #   - fm-send fails only on "pending" (lenient: a positively-confirmed swallow),
 #     so an unreadable pane never turns a normal steer into a false error.
+# Optional 6th arg push_queued=1: after a verified non-pending submit, send one
+# extra Enter. Cursor mid-turn steers need this: the first Enter only queues the
+# follow-up (composer clears, so submit looks landed) and a second Enter pushes
+# it for immediate delivery (harness-adapters cursor section; scoped by fm-send
+# when harness=cursor and the pane is busy). Idle composers and other harnesses
+# leave this unset/0.
 fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep>
   local target=$1 retries=$2 sleep_s=$3 i=0 state
   while :; do
@@ -157,9 +163,16 @@ fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep>
   done
 }
 
-fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5
+fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle> [push_queued]
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 push_queued=${6:-0} state
   tmux send-keys -t "$target" -l "$text" 2>/dev/null || { printf 'send-failed'; return 0; }
   sleep "$settle"
-  fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s"
+  state=$(fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s")
+  # Mid-turn cursor queue push: composer already empty after the verified submit,
+  # so the Enter-retry loop will not send this on its own. One more Enter only.
+  if [ "$push_queued" = 1 ] && [ "$state" != pending ] && [ "$state" != send-failed ]; then
+    tmux send-keys -t "$target" Enter 2>/dev/null || true
+    sleep "$sleep_s"
+  fi
+  printf '%s' "$state"
 }

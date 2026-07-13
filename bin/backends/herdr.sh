@@ -831,8 +831,13 @@ fm_backend_herdr_composer_state() {  # <target> -> empty|pending|unknown
 # already branches on for tmux ("empty" means "confirmed submitted" for every
 # backend; how each backend confirms it is an internal decision - herdr's is
 # no longer literally "the composer read empty").
-fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle>
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 i=0 verdict baseline confirm_sleep
+# Optional expected-label (6th) is unused here; optional push_queued (7th) sends
+# one extra Enter after a verified non-pending submit so a mid-turn cursor
+# follow-up queued by the first Enter is pushed for immediate delivery (same
+# cursor-agent TUI queue as the tmux path; harness-adapters cursor section).
+fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [expected-label] [push_queued]
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 push_queued=${7:-0}
+  local i=0 verdict baseline confirm_sleep final
   fm_backend_herdr_parse_target "$target" || { printf 'unknown'; return 0; }
   fm_backend_herdr_send_literal "$target" "$text" || { printf 'send-failed'; return 0; }
   sleep "$settle"
@@ -849,10 +854,19 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
       verdict=$(fm_backend_herdr_composer_state "$target")
     fi
     case "$verdict" in
-      busy) printf 'empty'; return 0 ;;
-      empty) printf 'empty'; return 0 ;;
-      unknown) printf 'unknown'; return 0 ;;
+      busy) final=empty ;;
+      empty) final=empty ;;
+      unknown) final=unknown ;;
+      *) final="" ;;
     esac
+    if [ -n "$final" ]; then
+      if [ "$push_queued" = 1 ]; then
+        fm_backend_herdr_send_key "$target" Enter || true
+        sleep "$sleep_s"
+      fi
+      printf '%s' "$final"
+      return 0
+    fi
     i=$((i + 1))
     [ "$i" -lt "$retries" ] || { printf 'pending'; return 0; }
   done
