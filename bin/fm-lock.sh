@@ -59,4 +59,6 @@ if [ -f "$LOCK" ]; then
   fi
 fi
 echo "$me" > "$LOCK"
+FM_RESIDENT_PID="$me" "$SCRIPT_DIR/fm-resident-setup.sh" >/dev/null
+FM_RESIDENT_PID="$me" "$SCRIPT_DIR/fm-resident-publish.sh" ready
 echo "lock acquired: harness pid $me"
