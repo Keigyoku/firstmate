@@ -113,7 +113,9 @@ case "${1:-}" in
       fi
       count=$((count + 1))
       printf '%s\n' "$count" > "$FM_HERDR_AGENT_GET_COUNT"
-      if [ "$count" -le 2 ]; then
+      if [ "${FM_HERDR_AGENT_ALWAYS_IDLE:-0}" = 1 ]; then
+        printf '{"result":{"agent":{"agent_status":"idle"}}}\n'
+      elif [ "$count" -le 2 ]; then
         printf '{"result":{"agent":{"agent_status":"idle"}}}\n'
       else
         printf '{"result":{"agent":{"agent_status":"working"}}}\n'
@@ -175,6 +177,7 @@ run_herdr_case() {
     FM_ROOT_OVERRIDE="$home" FM_HOME="$home" \
     FM_SLEEP_LOG="$log" FM_SEND_KEYS_LOG="$keys" \
     FM_HERDR_CAPTURE_MODE="$mode" FM_HERDR_AGENT_GET_COUNT="$get_count" \
+    FM_HERDR_AGENT_ALWAYS_IDLE="$([ "$mode" = busy ] && printf 1 || printf 0)" \
     "$SEND" "fm-cqherdr" "steer me" 2>/dev/null; rc=$?
   expect_code 0 "$rc" "$label: send should succeed"
   count=$(grep -c '^Enter$' "$keys" || true)
