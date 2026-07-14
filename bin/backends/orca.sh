@@ -323,8 +323,10 @@ fm_backend_orca_send_key() {  # <terminal-id> <key>
 # fm_backend_orca_send_text_submit: type <text> once, then retry Enter until
 # the composer row reads empty. Retries send only Enter, so a slash-command
 # popup placeholder fill gets the required second Enter without duplicating text.
-fm_backend_orca_send_text_submit() {  # <terminal-id> <text> <retries> <enter-sleep> <settle>
-  local terminal=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 i=0 state
+# Optional push_queued sends one extra Enter after a verified submit for cursor's
+# mid-turn follow-up queue, scoped by fm-send before this adapter is called.
+fm_backend_orca_send_text_submit() {  # <terminal-id> <text> <retries> <enter-sleep> <settle> [expected-label] [push_queued]
+  local terminal=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 push_queued=${7:-0} i=0 state
   fm_backend_orca_tool_check || { printf 'send-failed'; return 0; }
   fm_backend_orca_send_literal "$terminal" "$text" || { printf 'send-failed'; return 0; }
   sleep "$settle"
@@ -332,7 +334,14 @@ fm_backend_orca_send_text_submit() {  # <terminal-id> <text> <retries> <enter-sl
     fm_backend_orca_send_key "$terminal" Enter || true
     sleep "$sleep_s"
     state=$(fm_backend_orca_composer_state "$terminal")
-    [ "$state" = pending ] || { printf '%s' "$state"; return 0; }
+    if [ "$state" != pending ]; then
+      if [ "$push_queued" = 1 ]; then
+        fm_backend_orca_send_key "$terminal" Enter || true
+        sleep "$sleep_s"
+      fi
+      printf '%s' "$state"
+      return 0
+    fi
     i=$((i + 1))
     [ "$i" -lt "$retries" ] || { printf 'pending'; return 0; }
   done

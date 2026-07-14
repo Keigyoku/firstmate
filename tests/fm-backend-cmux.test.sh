@@ -764,6 +764,23 @@ test_send_text_submit_detects_landed_send() {
   pass "fm_backend_cmux_send_text_submit: reports 'empty' once the composer row reads empty after one Enter"
 }
 
+test_send_text_submit_push_queued_after_landed_send() {
+  local dir fb out enter_count
+  dir="$TMP_ROOT/submit-push-queued"; mkdir -p "$dir/responses"
+  cmux_panes_response "$dir" 1 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_panes_response "$dir" 3 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_panes_response "$dir" 5 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_panes_response "$dir" 7 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_read_screen_response "$dir" 6 $'  ╭────────────────────────╮\n  │ ❯                      │\n  ╰──────── Composer ─────╯'
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_send_text_submit "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "hello captain" 3 0.01 0.01 "" 1' "$ROOT" )
+  [ "$out" = empty ] || fail "send_text_submit should report empty after push_queued submit, got '$out'"
+  enter_count=$(grep -c $'\x1f''send-key'$'\x1f''--workspace'$'\x1f''aaaaaaaa-0000-0000-0000-000000000000'$'\x1f''--surface'$'\x1f''bbbbbbbb-1111-1111-1111-111111111111'$'\x1f''enter' "$dir/log")
+  [ "$enter_count" -eq 2 ] || fail "push_queued cmux submit should send one submit Enter and one push Enter, sent $enter_count"
+  pass "fm_backend_cmux_send_text_submit: push_queued sends one extra Enter after a verified submit"
+}
+
 test_send_text_submit_detects_swallowed_enter() {
   local dir fb out
   dir="$TMP_ROOT/submit-swallow"; mkdir -p "$dir/responses"
@@ -962,6 +979,7 @@ test_composer_state_popup_placeholder_fill_is_pending
 test_composer_state_unknown_on_capture_failure
 test_composer_state_unknown_when_no_composer_row_found
 test_send_text_submit_detects_landed_send
+test_send_text_submit_push_queued_after_landed_send
 test_send_text_submit_detects_swallowed_enter
 test_send_text_submit_popup_autocomplete_requires_second_enter
 test_send_text_submit_send_failed_when_target_absent

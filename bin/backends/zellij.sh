@@ -498,9 +498,11 @@ fm_backend_zellij_capture() {  # <target> <lines> [expected-label]
 # unconditional-exit-0 CLI quirk documented in the file header: a truly dead
 # target never shows a change, so it correctly reports pending/unknown rather
 # than a false "sent". Echoes empty|pending|unknown|send-failed, the SAME
-# vocabulary fm-send.sh already branches on for tmux and herdr.
-fm_backend_zellij_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [expected-label]
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-} typed after i=0
+# vocabulary fm-send.sh already branches on for tmux and herdr. Optional
+# push_queued sends one extra Enter after a verified submit for cursor's
+# mid-turn follow-up queue, scoped by fm-send before this adapter is called.
+fm_backend_zellij_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [expected-label] [push_queued]
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-} push_queued=${7:-0} typed after i=0
   fm_backend_zellij_send_literal "$target" "$text" "$expected_label" || { printf 'send-failed'; return 0; }
   sleep "$settle"
   typed=$(fm_backend_zellij_capture "$target" 6 "$expected_label") || { printf 'unknown'; return 0; }
@@ -509,6 +511,10 @@ fm_backend_zellij_send_text_submit() {  # <target> <text> <retries> <enter-sleep
     sleep "$sleep_s"
     after=$(fm_backend_zellij_capture "$target" 6 "$expected_label") || { printf 'unknown'; return 0; }
     if [ "$after" != "$typed" ]; then
+      if [ "$push_queued" = 1 ]; then
+        fm_backend_zellij_send_key "$target" Enter "$expected_label" || true
+        sleep "$sleep_s"
+      fi
       printf 'empty'
       return 0
     fi

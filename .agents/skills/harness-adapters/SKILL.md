@@ -111,7 +111,10 @@ Natural language is acceptable if uncertain.
 - opencode: no separate verified skill invocation beyond normal slash-command behavior; use natural language if the exact skill command is uncertain.
 - pi: no separate verified skill invocation beyond normal command behavior; use natural language if the exact skill command is uncertain.
 - grok: `/<skill>`, for example `/no-mistakes` (same form as claude). Verified end to end: grok discovers the user-level `no-mistakes` skill, `/no-mistakes` invokes it, and grok drives a real `no-mistakes axi run`. Like codex's `$`/`/` popups, typing `/<skill>` opens grok's slash-autocomplete, so a too-fast Enter selects the popup entry instead of sending, and for an argument-taking command (like `/no-mistakes`'s optional task-first argument) that first Enter only expands the popup selection into an argument-hint placeholder rather than submitting - a genuine second Enter is required (see the grok section below for the 2026-07-03 incident and fix). `fm_tmux_submit_core`'s retried Enter (used by `fm-send` on the tmux backend) already handles this correctly by reading the cursor row; the herdr backend needed a dedicated fix (`fm_backend_herdr_composer_state`, docs/herdr-backend.md) because its prior delta-based verification false-positived on that same popup-close content change.
-- cursor: `/<skill>`, for example `/no-mistakes` (same form as claude). Verified 2026-07-05: cursor discovers the user-level `no-mistakes` skill and surfaces it in the `/` slash-autocomplete popup. Same popup submit-hazard as claude/grok - a too-fast Enter selects the popup entry instead of sending - but `fm_tmux_submit_core`'s retried Enter (used by `fm-send` on the tmux backend) handles it by reading the cursor row (verified: a plain steer submitted cleanly on the first landed Enter).
+- cursor: `/<skill>`, for example `/no-mistakes` (same form as claude).
+  Verified 2026-07-05: cursor discovers the user-level `no-mistakes` skill and surfaces it in the `/` slash-autocomplete popup.
+  Same popup submit-hazard as claude/grok - a too-fast Enter selects the popup entry instead of sending - but the shared submit retry handles it by verifying the composer cleared.
+  Re-verified 2026-07-13: cursor mid-turn steers need one extra post-submit Enter to push the follow-up queue, and `fm-send` scopes that push to recorded `harness=cursor` targets that were already busy before typing.
 - hermes: no verified slash form for `no-mistakes` - hermes has its own separate skills ecosystem (`hermes skills`, 68 skills preloadable via `--skills`), and `no-mistakes` is not among them. Its built-in slash commands are session controls (`/exit`, `/help`, `/queue`, `/bg`, `/steer`, `/rollback`). Use natural language to trigger validation.
 
 ## claude (VERIFIED)
@@ -279,7 +282,7 @@ It does not pass `--permission-mode`, so the passive hook cannot escalate the pr
 Project-local Grok hooks require folder trust, verified with launch-time `--trust`; if the primary firstmate checkout is not trusted for Grok hooks, this primary guard fails open and `fm-guard.sh` remains the next-command alarm.
 Grok's primary watcher protocol is Claude-shaped background-notify around `bin/fm-watch-arm.sh`; the passive Stop hook is only a backstop for blind turn ends.
 
-## cursor (VERIFIED 2026-07-05, cursor-agent 2026.07.01-41b2de7)
+## cursor (VERIFIED 2026-07-05, cursor-agent 2026.07.01-41b2de7; mid-turn queue re-verified 2026-07-13 on cursor-agent 2026.07.09-a3815c0)
 
 Cursor Agent (`cursor-agent`), Cursor's Claude-Code-compatible CLI.
 Binary at `~/.local/bin/cursor-agent`; `~/.local/bin` must be on PATH for the spawn shell to find it.
@@ -293,16 +296,23 @@ Launch with a positional prompt: `cursor-agent --force "$(cat <brief>)"`.
 | Skill invocation | `/<skill>`, e.g. `/no-mistakes`. Opens the `/` slash-autocomplete popup (built-in commands like `/model`, `/plan` plus discovered skills such as `/no-mistakes`), so the same too-fast-Enter popup hazard as claude/grok applies; the shared submit retry handles it (see below). |
 | Autonomy | `--force` (alias `--yolo`, footer shows `Run Everything`); runs every tool without the per-command allowlist approval dialog. The targeted equivalent of claude's `--dangerously-skip-permissions`. |
 | Env marker | `CURSOR_AGENT=1` (also sets `CURSOR_INVOKED_AS=cursor-agent` and `CURSOR_CONVERSATION_ID`). IMPORTANT: cursor ALSO sets `CLAUDECODE=1` and `AI_AGENT=claude-code_*` (it is Claude-Code-compatible under the hood), so `bin/fm-harness.sh` checks `CURSOR_AGENT` BEFORE the claude marker; a claude-first check would misdetect a cursor session as claude. |
-| Resume | `cursor-agent --resume=<id>` (id printed on exit) or `--continue`. |
+| Resume | `cursor-agent --resume=<id>` or `--continue`. |
 | Model / effort | `--model <id>`; effort rides the model string as a bracket parameter, e.g. `--model 'claude-opus-4-8[effort=high]'`. `fm-spawn` folds a valid effort into that bracket; a model without bracket support ignores the parameter. |
 
 Trust dialog on first interactive launch per workspace: "Do you trust the contents of this directory?" with `[a] Trust this workspace` / `[q] Quit` (the selector defaults to Trust).
 Accept with Enter.
 The `--trust` flag exists but works only in `--print`/headless mode, so it cannot be used to pre-clear the interactive dialog; peek the pane after spawn and accept with `bin/fm-send.sh <window> --key Enter`.
 
-Submit hazard and its handling (verified 2026-07-05): a `/`-command or any steer sent via `fm-send` on the tmux backend submits cleanly.
-`fm_tmux_submit_core`'s cursor-row-read retry (`bin/fm-tmux-lib.sh`) recognizes the composer's post-submit empty state and does not false-retry; a plain steer landed and was processed on the first landed Enter, so no bespoke settle is needed.
+Submit hazard and its handling (verified 2026-07-05; mid-turn queue re-verified 2026-07-13 on cursor-agent 2026.07.09-a3815c0 / tmux 3.6b):
+Idle composers submit cleanly on the first landed Enter.
+`fm_tmux_submit_core`'s cursor-row-read retry recognizes the post-submit empty composer and does not false-retry, and no bespoke pre-Enter settle is needed.
 Cursor's idle `→ Add a follow-up` footer sits below the composer, not on the cursor row, so an idle cursor pane reads as an empty composer without a `FM_COMPOSER_IDLE_RE` override.
+Mid-turn is different: while `ctrl+c to stop` is showing, the first Enter only queues the follow-up.
+The UI shows a `follow-ups` box with `enter send now · ↑ select/edit · esc cancel`; the composer clears, so a single verified submit silently looks landed.
+A second Enter pushes that queued item for immediate delivery (observed: tool run `Interrupted by follow-up`).
+`fm-send` therefore scopes a post-submit extra Enter when the target's recorded meta harness is `cursor` AND the pane shows the busy signature before typing (same meta scoping pattern as the codex `$`-settle).
+Idle cursor, non-cursor harnesses, and explicit `session:window` targets with no meta stay on a single Enter.
+Owners: `bin/fm-send.sh` (scoping), `bin/fm-tmux-lib.sh` `fm_tmux_submit_core`, and each submit-verifying backend adapter's optional `push_queued` handling.
 
 Turn-end hook: none is wired.
 cursor-agent is Claude-Code-compatible but its interactive Stop/turn-end hook surface is unverified, so firstmate does not assume one and relies on the busy signature (provably-working check) plus stale-pane detection, the same hookless path as opencode.

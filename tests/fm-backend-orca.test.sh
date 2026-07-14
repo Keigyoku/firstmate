@@ -172,6 +172,22 @@ test_send_text_submit_verifies_empty_composer_after_enter() {
   pass "fm_backend_orca_send_text_submit: verifies empty composer after Enter"
 }
 
+test_send_text_submit_push_queued_after_landed_send() {
+  local out log_text enter_count
+  orca_case send-submit-push-queued
+  printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true}}}\n' > "$RESP/1.out"
+  printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true}}}\n' > "$RESP/2.out"
+  printf '{"ok":true,"result":{"terminal":{"tail":["╭──╮","│ > │","╰──╯"]}}}\n' > "$RESP/3.out"
+  printf '{"ok":true,"result":{"send":{"handle":"term-123","accepted":true}}}\n' > "$RESP/4.out"
+  out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_send_text_submit term-123 "hello captain" 3 0.01 0.01 "" 1' "$ROOT" )
+  [ "$out" = empty ] || fail "send_text_submit should report empty after push_queued submit, got '$out'"
+  log_text=$(cat "$LOG")
+  enter_count=$(printf '%s\n' "$log_text" | grep -c $'orca\x1fterminal\x1fsend\x1f--terminal\x1fterm-123\x1f--text\x1f\x1f--enter\x1f--json')
+  [ "$enter_count" -eq 2 ] || fail "push_queued orca submit should send one submit Enter and one push Enter, got $enter_count"
+  pass "fm_backend_orca_send_text_submit: push_queued sends one extra Enter after a verified submit"
+}
+
 test_send_text_submit_keeps_current_tail_when_limited() {
   local out log_text enter_count
   orca_case send-submit-limited-current-pending
@@ -1299,6 +1315,7 @@ test_runtime_check_accepts_ready_orca_status
 test_runtime_check_refuses_unready_orca_status
 test_tool_check_requires_all_orca_commands
 test_send_text_submit_verifies_empty_composer_after_enter
+test_send_text_submit_push_queued_after_landed_send
 test_send_text_submit_keeps_current_tail_when_limited
 test_send_text_submit_retries_when_composer_stays_pending
 test_composer_state_popup_placeholder_fill_is_pending

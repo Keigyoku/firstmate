@@ -1221,6 +1221,43 @@ test_send_text_submit_detects_swallowed_enter() {
   pass "fm_backend_herdr_send_text_submit: reports 'pending' when agent_status never reports working after retried Enters (swallowed)"
 }
 
+test_send_text_submit_push_queued_uses_composer_after_native_idle() {
+  local dir log resp fb out enter_count agent_get_count pane_read_count
+  dir="$TMP_ROOT/submit-push-queued-native-idle"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/2.out"
+  printf '  ╭────────────────────────╮\n  │ ❯                      │\n  ╰──────── Composer ─────╯\n\n  Shift+Tab:mode\n' > "$resp/4.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "hello captain" 1 0.01 0.01 "" 1' "$ROOT" )
+  [ "$out" = empty ] || fail "send_text_submit should report empty after composer confirmation and push_queued Enter, got '$out'"
+  enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
+  [ "$enter_count" -eq 2 ] || fail "push_queued native-idle submit should send exactly two Enters, sent $enter_count"
+  agent_get_count=$(grep -c $'\x1f''agent'$'\x1f''get'$'\x1f''w1:p2' "$log")
+  [ "$agent_get_count" -eq 1 ] || fail "push_queued native-idle submit should not wait on a post-Enter native busy state, read agent get $agent_get_count times"
+  pane_read_count=$(grep -c $'\x1f''pane'$'\x1f''read'$'\x1f''w1:p2' "$log")
+  [ "$pane_read_count" -eq 1 ] || fail "push_queued native-idle submit should read composer state once before push, read pane $pane_read_count times"
+  pass "fm_backend_herdr_send_text_submit: push_queued uses composer state after native-idle first Enter"
+}
+
+test_send_text_submit_push_queued_retries_pending_composer() {
+  local dir log resp fb out enter_count agent_get_count pane_read_count
+  dir="$TMP_ROOT/submit-push-queued-pending"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/2.out"
+  printf '  ╭──────────────────────────────────────╮\n  │ ❯ /compact compaction instructions    │\n  ╰──────────────── Composer ─────────────╯\n\n  Enter:send\n' > "$resp/4.out"
+  printf '  ╭────────────────────────╮\n  │ ❯                      │\n  ╰──────── Composer ─────╯\n\n  Shift+Tab:mode\n' > "$resp/6.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_send_text_submit default:w1:p2 "/compact" 2 0.01 0.01 "" 1' "$ROOT" )
+  [ "$out" = empty ] || fail "send_text_submit should retry while composer state is pending, got '$out'"
+  enter_count=$(grep -c $'\x1f''pane'$'\x1f''send-keys'$'\x1f''w1:p2'$'\x1f''enter' "$log")
+  [ "$enter_count" -eq 3 ] || fail "push_queued should retry pending composer before pushing queued steer, sent $enter_count Enter(s)"
+  agent_get_count=$(grep -c $'\x1f''agent'$'\x1f''get'$'\x1f''w1:p2' "$log")
+  [ "$agent_get_count" -eq 1 ] || fail "push_queued pending-composer path should not wait on native busy state, read agent get $agent_get_count times"
+  pane_read_count=$(grep -c $'\x1f''pane'$'\x1f''read'$'\x1f''w1:p2' "$log")
+  [ "$pane_read_count" -eq 2 ] || fail "push_queued pending-composer path should read composer state after each submit Enter, read pane $pane_read_count times"
+  pass "fm_backend_herdr_send_text_submit: push_queued retries while native-idle composer state is pending"
+}
+
 # Regression coverage for the 2026-07-03 incident using the NEW mechanism: a
 # slash command's first Enter can close a completion popup and fill an
 # argument-hint placeholder WITHOUT submitting. In the idle-baseline path,
@@ -1755,6 +1792,8 @@ test_wait_for_working_returns_unknown_when_never_readable
 test_wait_for_working_treats_blocked_as_submit_active
 test_send_text_submit_detects_landed_send
 test_send_text_submit_detects_swallowed_enter
+test_send_text_submit_push_queued_uses_composer_after_native_idle
+test_send_text_submit_push_queued_retries_pending_composer
 test_send_text_submit_popup_autocomplete_requires_second_enter
 test_send_text_submit_confirms_blocked_after_enter
 test_send_text_submit_preexisting_working_does_not_false_confirm_swallowed_enter

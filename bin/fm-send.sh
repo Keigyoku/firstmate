@@ -20,6 +20,8 @@
 # Tune with FM_SEND_RETRIES (default 3) / FM_SEND_SLEEP (0.4).
 # Slash commands, and codex `$...` skill invocations resolved through harness
 # meta, get a longer pre-Enter settle so completion popups do not swallow Enter.
+# Cursor mid-turn steers need a post-submit extra Enter (composer queue push);
+# see the TARGET_HARNESS=cursor busy path below and harness-adapters.
 #
 # From-firstmate marker: when the resolved target is a task selector whose meta
 # records kind=secondmate, the text is prefixed with the from-firstmate marker
@@ -185,10 +187,11 @@ if [ -n "$TARGET_SELECTOR" ] && [ -n "$TARGET_META" ] && grep -q '^kind=secondma
   MARK_PREFIX="$FM_FROMFIRST_MARK"
 fi
 
-# Resolve the target's harness from its meta (recorded by fm-spawn), used only to
-# scope the codex `$<skill>` popup-settle below. A task selector carries
-# meta; an explicit backend-target escape hatch has none, so its harness is
-# unknown and treated as non-codex (the safe default that keeps the fast path).
+# Resolve the target's harness from its meta (recorded by fm-spawn), used to
+# scope the codex `$<skill>` popup-settle and the cursor mid-turn queue-push
+# below. A task selector carries meta; an explicit backend-target escape hatch
+# has none, so its harness is unknown and treated as non-codex / non-cursor
+# (the safe default that keeps the fast single-Enter path).
 # The target's BACKEND comes from selector meta, from matching an explicit target
 # back to recorded meta, or from strict explicit-target shape validation.
 # Do not add a separate passive liveness preflight here. Active send paths own
@@ -196,6 +199,23 @@ fi
 # target_ready path before sending, while zellij verifies pane labels in its
 # send implementation. A failed backend send is still surfaced below as a hard
 # error with the attempted resolution attached.
+
+# fm_send_target_is_busy: 0 if the target pane shows a mid-turn busy signature.
+# Prefers a backend's native busy-state (herdr); falls back to the shared tmux
+# pane-regex reader for tmux (and for native-unknown backends). Used only to
+# scope the cursor mid-turn queue-push Enter - snapshot BEFORE typing so an idle
+# composer that becomes busy after a normal submit is not double-Entered.
+fm_send_target_is_busy() {
+  local bs tail40
+  bs=$(fm_backend_busy_state "$TARGET_BACKEND" "$T" 2>/dev/null || printf 'unknown')
+  case "$bs" in
+    busy) return 0 ;;
+  esac
+  fm_backend_source tmux || return 1
+  tail40=$(fm_backend_capture "$TARGET_BACKEND" "$T" 40 "$EXPECTED_LABEL" 2>/dev/null) || return 1
+  printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -6 \
+    | grep -qiE "${FM_BUSY_REGEX:-$FM_TMUX_BUSY_REGEX_DEFAULT}"
+}
 
 if [ "${1:-}" = "--key" ]; then
   if ! fm_backend_send_key "$TARGET_BACKEND" "$T" "$2" "$EXPECTED_LABEL"; then
@@ -220,9 +240,20 @@ else
   esac
   retries=${FM_SEND_RETRIES:-3}
   sleep_s=${FM_SEND_SLEEP:-0.4}
+  # Cursor mid-turn queue push (verified cursor-agent 2026.07.09 on tmux,
+  # 2026-07-13): while a turn runs, the first Enter only queues the follow-up
+  # (composer clears, submit looks landed) and a second Enter pushes it for
+  # immediate delivery. Snapshot busy BEFORE typing; scope to recorded
+  # harness=cursor only - idle cursor, other harnesses, and explicit
+  # session:window targets with no meta stay on a single Enter.
+  push_queued=0
+  if [ "$TARGET_HARNESS" = cursor ] && fm_send_target_is_busy; then
+    push_queued=1
+  fi
   # Type once, submit, verify. Lenient: only a positively-confirmed swallow
   # (text still in the composer) is an error; an unreadable pane is assumed sent.
-  if ! verdict=$(fm_backend_send_text_submit "$TARGET_BACKEND" "$T" "$MARK_PREFIX$*" "$retries" "$sleep_s" "$settle" "$EXPECTED_LABEL"); then
+  # Trailing push_queued is honored by submit-verifying backend adapters.
+  if ! verdict=$(fm_backend_send_text_submit "$TARGET_BACKEND" "$T" "$MARK_PREFIX$*" "$retries" "$sleep_s" "$settle" "$EXPECTED_LABEL" "$push_queued"); then
     echo "error: text not sent to $T ($TARGET_BACKEND send failed; tried $RESOLUTION_TRIED)" >&2
     exit 1
   fi
