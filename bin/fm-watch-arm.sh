@@ -15,8 +15,9 @@
 # docs/arm-pretool-check.md for the blessed tree and deny reason codes. It is a
 # pre-execution seatbelt, not a substitute for the verification here.
 #
-# This script starts the watcher in a separate process session, keeps waiting on
-# that child for wake delivery, and VERIFIES the outcome before it settles in.
+# This script starts the watcher in a separate process session with its standard
+# file descriptors detached from the arm task, keeps waiting on that child for
+# wake delivery, and VERIFIES the outcome before it settles in.
 # It confirms a watcher process is genuinely alive AND the
 # liveness beacon (state/.last-watcher-beat) is fresh within FM_GUARD_GRACE (the
 # single source of truth, shared with fm-watch.sh and fm-guard.sh), and prints
@@ -169,7 +170,8 @@ if [ "$mode" = arm ] && healthy_watcher; then
   attach_and_wait "$HEALTHY_PID"
 fi
 
-# Start a watcher in a separate process session and confirm it before settling in.
+# Start a watcher in a separate process session with detached standard file
+# descriptors and confirm it before settling in.
 # The arm still waits on the watcher so a normal wake exit propagates to the harness,
 # but a harness task-manager stop cannot take the watcher down with the arm process
 # group.
@@ -238,10 +240,11 @@ while :; do
 done
 
 trap - HUP TERM INT
-echo "watcher: FAILED - no live watcher with a fresh beacon"
 if [ -n "$child" ] && fm_pid_alive "$child"; then
   kill -TERM "$child" 2>/dev/null || true
 fi
-cleanup_child
 wait "$child" 2>/dev/null || true
+print_watch_output "$child_out"
+cleanup_child
+echo "watcher: FAILED - no live watcher with a fresh beacon"
 exit 1

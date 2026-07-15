@@ -15,6 +15,22 @@ LIB="$ROOT/bin/fm-wake-lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-watcher-lock-tests)
 
+file_mtime() {
+  if [ "$(uname)" = Darwin ]; then
+    stat -f %m "$1" 2>/dev/null
+  else
+    stat -c %Y "$1" 2>/dev/null
+  fi
+}
+
+process_fd_target() {
+  lsof -a -p "$1" -d "$2" -Fn 2>/dev/null | sed -n 's/^n//p' | head -1
+}
+
+process_fd_type() {
+  lsof -a -p "$1" -d "$2" -Ft 2>/dev/null | sed -n 's/^t//p' | head -1
+}
+
 
 test_singleton_start() {
   local dir state fakebin out1 out2 pid1 pid2 live i
@@ -662,14 +678,15 @@ SH
   pass "arm fails loudly when neither session launcher is available"
 }
 
-test_arm_hup_preserves_watcher_and_cleans_temp_output() {
-  local dir state fakebin armout i armpid arm_pgid lock_pid watcher_pgid status
+test_arm_hup_preserves_fully_detached_watcher() {
+  local dir state fakebin armout armerr i armpid arm_pgid lock_pid watcher_pgid status beat_before beat_after fd fd_type target
   dir=$(make_case arm-hup-cleanup)
   state="$dir/state"
   fakebin="$dir/fakebin"
   armout="$dir/arm.out"
+  armerr="$dir/arm.err"
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
-    perl -MPOSIX=setsid -e 'setsid() >= 0 or die "setsid: $!\n"; exec @ARGV or die "exec: $!\n"' "$WATCH_ARM" > "$armout" &
+    perl -MPOSIX=setsid -e 'setsid() >= 0 or die "setsid: $!\n"; exec @ARGV or die "exec: $!\n"' "$WATCH_ARM" > "$armout" 2> >(cat > "$armerr") &
   armpid=$!
   i=0
   while [ "$i" -lt 80 ]; do
@@ -684,15 +701,34 @@ test_arm_hup_preserves_watcher_and_cleans_temp_output() {
   [ "$arm_pgid" = "$armpid" ] || fail "arm did not start in an isolated process group"
   [ "$watcher_pgid" = "$lock_pid" ] || fail "watcher did not start in an isolated process group"
   [ "$watcher_pgid" != "$arm_pgid" ] || fail "watcher remained in the arm process group"
+  target=$(process_fd_target "$lock_pid" 0 || true)
+  [ "$target" = /dev/null ] || fail "watcher stdin remained attached to the arm task (got '$target')"
+  for fd in 1 2; do
+    fd_type=$(process_fd_type "$lock_pid" "$fd" || true)
+    [ "$fd_type" = REG ] || fail "watcher fd $fd remained attached to the arm task (type '$fd_type')"
+  done
+  beat_before=$(file_mtime "$state/.last-watcher-beat")
   kill -HUP -- "-$arm_pgid" 2>/dev/null || fail "could not send HUP to arm process group"
   wait_for_exit "$armpid" 80
   status=$?
   [ "$status" -eq 129 ] || fail "arm did not exit with HUP status (got $status)"
   is_live_non_zombie "$lock_pid" || fail "HUP of the arm task process group also killed the watcher"
   ! ls "$state"/.watch-arm-output.* >/dev/null 2>&1 || fail "HUP cleanup left temp output behind"
+  i=0
+  beat_after=$beat_before
+  while [ "$i" -lt 80 ]; do
+    beat_after=$(file_mtime "$state/.last-watcher-beat" 2>/dev/null || true)
+    [ -n "$beat_after" ] && [ "$beat_after" -gt "$beat_before" ] && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if [ -z "$beat_after" ] || [ "$beat_after" -le "$beat_before" ]; then
+    fail "watcher stopped beating after its arm task pipe closed"
+  fi
+  is_live_non_zombie "$lock_pid" || fail "watcher died while continuing after arm task pipe closure"
   kill "$lock_pid" 2>/dev/null || true
   wait "$lock_pid" 2>/dev/null || true
-  pass "arm process-group HUP leaves the watcher alive and cleans temporary output"
+  pass "arm task death leaves a fully detached watcher alive and beating"
 }
 
 test_arm_propagates_immediate_wake_before_confirmation() {
@@ -778,6 +814,7 @@ test_arm_fails_loud_when_no_fresh_watcher_confirmable() {
   status=$?
   [ "$status" -ne 124 ] || fail "arm never returned for an unconfirmable watcher"
   [ "$status" -ne 0 ] || fail "arm exited zero when no fresh watcher could be confirmed"
+  grep -F 'heartbeat is stale' "$armout" >/dev/null || fail "arm discarded the watcher startup diagnostic"
   grep -F 'watcher: FAILED - no live watcher with a fresh beacon' "$armout" >/dev/null || fail "arm did not print the FAILED line"
   ! grep -qE 'watcher: (healthy|attached)' "$armout" || fail "arm reported attached/healthy off a stale beacon"
   ! grep -qF 'watcher: started' "$armout" || fail "arm falsely reported started"
@@ -831,7 +868,7 @@ test_arm_starts_and_self_heals
 test_arm_prefers_native_setsid
 test_arm_uses_perl_setsid_fallback
 test_arm_fails_without_session_launcher
-test_arm_hup_preserves_watcher_and_cleans_temp_output
+test_arm_hup_preserves_fully_detached_watcher
 test_arm_propagates_immediate_wake_before_confirmation
 test_arm_waits_for_peer_beacon_after_child_stands_down
 test_arm_fails_loud_when_no_fresh_watcher_confirmable
