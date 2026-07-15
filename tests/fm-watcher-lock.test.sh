@@ -662,14 +662,15 @@ SH
   pass "arm fails loudly when neither session launcher is available"
 }
 
-test_arm_hup_preserves_watcher_and_cleans_temp_output() {
-  local dir state fakebin armout i armpid arm_pgid lock_pid watcher_pgid status
+test_arm_hup_preserves_fully_detached_watcher() {
+  local dir state fakebin armout armerr i armpid arm_pgid lock_pid watcher_pgid status beat_before beat_after fd target
   dir=$(make_case arm-hup-cleanup)
   state="$dir/state"
   fakebin="$dir/fakebin"
   armout="$dir/arm.out"
+  armerr="$dir/arm.err"
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
-    perl -MPOSIX=setsid -e 'setsid() >= 0 or die "setsid: $!\n"; exec @ARGV or die "exec: $!\n"' "$WATCH_ARM" > "$armout" &
+    perl -MPOSIX=setsid -e 'setsid() >= 0 or die "setsid: $!\n"; exec @ARGV or die "exec: $!\n"' "$WATCH_ARM" > "$armout" 2> >(cat > "$armerr") &
   armpid=$!
   i=0
   while [ "$i" -lt 80 ]; do
@@ -684,15 +685,34 @@ test_arm_hup_preserves_watcher_and_cleans_temp_output() {
   [ "$arm_pgid" = "$armpid" ] || fail "arm did not start in an isolated process group"
   [ "$watcher_pgid" = "$lock_pid" ] || fail "watcher did not start in an isolated process group"
   [ "$watcher_pgid" != "$arm_pgid" ] || fail "watcher remained in the arm process group"
+  target=$(readlink "/proc/$lock_pid/fd/0" 2>/dev/null || true)
+  [ "$target" = /dev/null ] || fail "watcher stdin remained attached to the arm task (got '$target')"
+  for fd in 1 2; do
+    target=$(readlink "/proc/$lock_pid/fd/$fd" 2>/dev/null || true)
+    case "$target" in
+      pipe:*|socket:*) fail "watcher fd $fd remained attached to the arm task ($target)" ;;
+    esac
+  done
+  beat_before=$(stat -c %Y "$state/.last-watcher-beat")
   kill -HUP -- "-$arm_pgid" 2>/dev/null || fail "could not send HUP to arm process group"
   wait_for_exit "$armpid" 80
   status=$?
   [ "$status" -eq 129 ] || fail "arm did not exit with HUP status (got $status)"
   is_live_non_zombie "$lock_pid" || fail "HUP of the arm task process group also killed the watcher"
   ! ls "$state"/.watch-arm-output.* >/dev/null 2>&1 || fail "HUP cleanup left temp output behind"
+  i=0
+  beat_after=$beat_before
+  while [ "$i" -lt 80 ]; do
+    beat_after=$(stat -c %Y "$state/.last-watcher-beat" 2>/dev/null || true)
+    [ -n "$beat_after" ] && [ "$beat_after" -gt "$beat_before" ] && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -n "$beat_after" ] && [ "$beat_after" -gt "$beat_before" ] || fail "watcher stopped beating after its arm task pipe closed"
+  is_live_non_zombie "$lock_pid" || fail "watcher died while continuing after arm task pipe closure"
   kill "$lock_pid" 2>/dev/null || true
   wait "$lock_pid" 2>/dev/null || true
-  pass "arm process-group HUP leaves the watcher alive and cleans temporary output"
+  pass "arm task death leaves a fully detached watcher alive and beating"
 }
 
 test_arm_propagates_immediate_wake_before_confirmation() {
@@ -831,7 +851,7 @@ test_arm_starts_and_self_heals
 test_arm_prefers_native_setsid
 test_arm_uses_perl_setsid_fallback
 test_arm_fails_without_session_launcher
-test_arm_hup_preserves_watcher_and_cleans_temp_output
+test_arm_hup_preserves_fully_detached_watcher
 test_arm_propagates_immediate_wake_before_confirmation
 test_arm_waits_for_peer_beacon_after_child_stands_down
 test_arm_fails_loud_when_no_fresh_watcher_confirmable
