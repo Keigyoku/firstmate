@@ -905,6 +905,57 @@ SH
   pass "watcher revalidates Codex generation at backend send"
 }
 
+test_wrap_ack_partial_codex_tail_fails_closed() {
+  local home config session_dir worktree rollout double log pending ack request partial status event timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping partial Codex tail coverage"
+    return
+  fi
+  home="$TMP_ROOT/wrap-partial-tail-home"
+  config="$TMP_ROOT/wrap-partial-tail-config"
+  session_dir="$TMP_ROOT/wrap-partial-tail-sessions"
+  worktree="$TMP_ROOT/wrap-partial-tail-worktree"
+  rollout="$session_dir/rollout-demo.jsonl"
+  double="$TMP_ROOT/wrap-partial-tail-double"
+  log="$TMP_ROOT/wrap-partial-tail.log"
+  partial="$TMP_ROOT/wrap-partial-tail-append"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  make_success_double "$double" "$log"
+  write_codex_rollout "$rollout" "$worktree" 900 old-sid
+  cat > "$partial" <<'SH'
+#!/usr/bin/env bash
+printf '%s' '{"type":"compacted"' >> "$FM_PARTIAL_ROLLOUT"
+SH
+  chmod +x "$partial"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial partial-tail pass should arm the session"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "partial-tail request pass should keep polling"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  request=$(sed -n '4p' "$pending")
+  ack="$home/state/watchdog/.compact-wrap-ack-demo"
+  printf '%s\n' "$request" > "$ack"
+
+  "$timeout_cmd" 3 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_STEER_BEFORE_DELIVERY_ATTEMPT_CMD="$partial" FM_PARTIAL_ROLLOUT="$rollout" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "partial-tail guarded delivery should keep polling"
+  [ "$(grep -cF 'tmux|target-pane|/compact' "$log" || true)" = 0 ] || fail "partial Codex tail must prevent compact delivery"
+  [ "$(sed -n '6p' "$pending")" = wrap_requested ] || fail "partial Codex tail should leave the wrap pending"
+  [ "$(cat "$ack")" = "$request" ] || fail "partial Codex tail should preserve the matching acknowledgement"
+  event="$home/fm-state/watchdog.events"
+  [ "$(grep -c '"type":"compact_wrap_acknowledged"' "$event" || true)" = 0 ] || fail "partial Codex tail must not acknowledge compact delivery"
+  pass "partial Codex rollout tails fail closed"
+}
+
 test_metrics_collection_failure_is_visible_and_throttled() {
   local home config session_dir worktree status event failure_count timeout_cmd fakebin find_log real_find
   if command -v timeout >/dev/null 2>&1; then
@@ -1390,6 +1441,7 @@ test_wrap_ack_deadline_starts_after_delivery
 test_compact_delivery_does_not_retry_across_rotation
 test_wrap_rotation_wins_expired_deadline
 test_wrap_ack_revalidates_at_backend_send
+test_wrap_ack_partial_codex_tail_fails_closed
 test_metrics_collection_failure_is_visible_and_throttled
 test_unsupported_harness_skips_watchdog_metrics
 test_stale_meta_skips_watchdog_threshold_scan

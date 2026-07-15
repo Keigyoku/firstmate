@@ -593,13 +593,20 @@ fm_watchdog_file_identity() {
 }
 
 fm_watchdog_compact_generation() {
-  local harness=$1 file=$2
+  local harness=$1 file=$2 matches count
   case "$harness" in
     claude)
-      jq -r 'select(.isCompactSummary == true) | .uuid // empty' "$file" 2>/dev/null | tail -1
+      matches=$(jq -r 'select(.isCompactSummary == true) | .uuid // empty' "$file" 2>/dev/null) || return 1
+      printf '%s\n' "$matches" | tail -1
       ;;
     codex)
-      printf 'codex:%s\n' "$(jq -r 'select(.type == "compacted") | 1' "$file" 2>/dev/null | wc -l | tr -d '[:space:]')"
+      matches=$(jq -r 'select(.type == "compacted") | 1' "$file" 2>/dev/null) || return 1
+      if [ -n "$matches" ]; then
+        count=$(printf '%s\n' "$matches" | wc -l | tr -d '[:space:]')
+      else
+        count=0
+      fi
+      printf 'codex:%s\n' "$count"
       ;;
     *)
       return 1
@@ -615,7 +622,7 @@ fm_watchdog_compact_pending_identity_current() {
   [ -n "$file" ] || return 2
   sig=$(fm_watchdog_file_identity "$file" 2>/dev/null || true)
   [ -n "$sig" ] || return 2
-  generation=$(fm_watchdog_compact_generation "$harness" "$file" 2>/dev/null || true)
+  generation=$(fm_watchdog_compact_generation "$harness" "$file" 2>/dev/null) || return 2
   [ "$sig" = "$old_sig" ] || return 1
   [ -z "$generation" ] || [ "$generation" = "$old_generation" ]
 }
