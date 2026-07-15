@@ -494,6 +494,8 @@ watchdog_start_compact_delivery() {
         FM_COMPACT_GUARD_HARNESS="$harness" \
         FM_COMPACT_GUARD_PENDING="$pending" \
         "$SCRIPT_DIR/fm-steer.sh" "$task" "/compact"; then
+        now=$(date -u +%s)
+        sed -e "5s/.*/$now/" -e '6s/.*/compact_sent/' "$pending" > "$pending.tmp" && mv -f "$pending.tmp" "$pending"
         rm -f "$ack"
         fm_watchdog_event compact_wrap_acknowledged "$task" accepted "request=$request context_pct=$context"
       else
@@ -544,30 +546,39 @@ watchdog_compact_wrap_pending() {
   local task=$1 harness=$2 pending=$3 inflight=$4 ack_timeout=$5 key=$6 deadline_only=${7:-false} phase request requested_at context ack age now event_type reason
   [ -s "$pending" ] || return 1
   phase=$(sed -n '6p' "$pending")
-  case "$phase" in wrap_requested|compact_ambiguous) ;; *) return 1 ;; esac
+  case "$phase" in wrap_requested|compact_sent|compact_ambiguous|compact_successor) ;; *) return 1 ;; esac
   request=$(sed -n '4p' "$pending")
   requested_at=$(sed -n '5p' "$pending")
   context=$(sed -n '7p' "$pending")
   [ -n "$context" ] || context=unknown
   ack="$STATE/watchdog/.compact-wrap-ack-$key"
+  [ "$phase" = compact_successor ] && return 0
   case "$ack_timeout" in ''|null|*[!0-9]*) ack_timeout=600 ;; esac
   [ "$ack_timeout" -gt 0 ] || ack_timeout=600
   case "$requested_at" in ''|*[!0-9]*) requested_at=$(date -u +%s) ;; esac
   now=$(date -u +%s)
   age=$((now - requested_at))
   if [ "$age" -ge "$ack_timeout" ]; then
-    rm -f "$pending" "$ack"
     event_type=compact_wrap_timeout
     reason=compact_wrap_timeout
     if [ "$phase" = compact_ambiguous ]; then
       event_type=compact_ambiguous_timeout
       reason=compact_ambiguous_timeout
+    elif [ "$phase" = compact_sent ]; then
+      event_type=compact_sent_timeout
+      reason=compact_sent_timeout
+      sed '6s/.*/compact_successor/' "$pending" > "$pending.tmp" && mv -f "$pending.tmp" "$pending"
+      rm -f "$ack"
+      fm_watchdog_event "$event_type" "$task" successor "request=$request age_sec=$age timeout_sec=$ack_timeout context_pct=$context"
+      watchdog_start_successor "$task" "$context" "$reason"
+      return 0
     fi
+    rm -f "$pending" "$ack"
     fm_watchdog_event "$event_type" "$task" successor "request=$request age_sec=$age timeout_sec=$ack_timeout context_pct=$context"
     watchdog_start_successor "$task" "$context" "$reason"
     return 0
   fi
-  [ "$phase" = compact_ambiguous ] && return 0
+  case "$phase" in compact_sent|compact_ambiguous) return 0 ;; esac
   [ "$deadline_only" = true ] && return 1
   if [ -s "$ack" ] && [ "$(sed -n '1p' "$ack")" = "$request" ]; then
     watchdog_start_compact_delivery "$task" "$harness" "$context" "$pending" "$inflight" "$ack" "$request"
@@ -684,6 +695,10 @@ watchdog_threshold_scan() {
         watchdog_compact_wrap_pending "$task" "$harness" "$pending" "$inflight" "$wrap_ack_timeout" "$key" true && continue
         ;;
       compact_ambiguous)
+        watchdog_steer_inflight "$inflight" && continue
+        watchdog_compact_wrap_pending "$task" "$harness" "$pending" "$inflight" "$wrap_ack_timeout" "$key" && continue
+        ;;
+      compact_sent|compact_successor)
         watchdog_steer_inflight "$inflight" && continue
         watchdog_compact_wrap_pending "$task" "$harness" "$pending" "$inflight" "$wrap_ack_timeout" "$key" && continue
         ;;

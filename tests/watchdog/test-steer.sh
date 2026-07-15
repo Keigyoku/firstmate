@@ -1174,6 +1174,86 @@ SH
   pass "ambiguous compact recovery expires into successor"
 }
 
+test_successful_compact_tracks_delayed_generation() {
+  local home config session_dir worktree rollout double log pending ack request successor successor_log status event compact_count wrap_count timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping successful delayed generation coverage"
+    return
+  fi
+  home="$TMP_ROOT/compact-success-delayed-generation-home"
+  config="$TMP_ROOT/compact-success-delayed-generation-config"
+  session_dir="$TMP_ROOT/compact-success-delayed-generation-sessions"
+  worktree="$TMP_ROOT/compact-success-delayed-generation-worktree"
+  rollout="$session_dir/rollout-demo.jsonl"
+  double="$TMP_ROOT/compact-success-delayed-generation-double"
+  log="$TMP_ROOT/compact-success-delayed-generation.log"
+  successor="$TMP_ROOT/compact-success-delayed-generation-successor"
+  successor_log="$TMP_ROOT/compact-success-delayed-generation-successor.log"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  jq '.compact_pending_retry_sec = 1 | .compact_wrap_ack_timeout_sec = 5' "$config/watchdog.json" > "$config/watchdog.json.tmp"
+  mv "$config/watchdog.json.tmp" "$config/watchdog.json"
+  write_codex_rollout "$rollout" "$worktree" 900 same-sid
+  make_success_double "$double" "$log"
+  cat > "$successor" <<'SH'
+#!/usr/bin/env bash
+printf '%s|%s\n' "$1" "$2" >> "$FM_SUCCESSOR_LOG"
+SH
+  chmod +x "$successor"
+  : > "$successor_log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial successful delayed generation pass should arm the session"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "successful delayed generation request pass should keep polling"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  request=$(sed -n '4p' "$pending")
+  ack="$home/state/watchdog/.compact-wrap-ack-demo"
+  printf '%s\n' "$request" > "$ack"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "successful compact attempt should keep polling"
+  [ "$(sed -n '6p' "$pending")" = compact_sent ] || fail "successful compact should preserve pending rotation proof"
+  sleep 3
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "successful compact proof should survive generic pending expiry"
+  [ "$(sed -n '6p' "$pending")" = compact_sent ] || fail "successful compact proof must not use generic pending expiry"
+  sleep 2
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_WATCHDOG_SUCCESSOR_CMD="$successor" FM_SUCCESSOR_LOG="$successor_log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "successful compact recovery should enter successor handoff"
+  [ "$(sed -n '6p' "$pending")" = compact_successor ] || fail "successful compact successor handoff should retain rotation proof"
+  [ -s "$successor_log" ] || fail "successful compact recovery timeout should start successor handoff"
+  append_codex_compaction "$rollout" delayed-success-generation
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "delayed successful compact generation should be marked handled"
+  [ ! -e "$pending" ] || fail "delayed successful compact generation should clear pending proof"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" 'compact_generation=codex:1' "delayed successful compact generation should be recorded as handled"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "handled successful generation should keep polling without another wrap"
+  compact_count=$(grep -cF 'tmux|target-pane|/compact' "$log" || true)
+  wrap_count=$(grep -c 'WATCHDOG WRAP REQUEST' "$log" || true)
+  [ "$compact_count" = 1 ] || fail "delayed successful generation must not trigger a second compact, got $compact_count"
+  [ "$wrap_count" = 1 ] || fail "delayed successful generation must not trigger another wrap, got $wrap_count"
+  pass "successful compact tracks and handles delayed generation"
+}
+
 test_metrics_collection_failure_is_visible_and_throttled() {
   local home config session_dir worktree status event failure_count timeout_cmd fakebin find_log real_find
   if command -v timeout >/dev/null 2>&1; then
@@ -1663,6 +1743,7 @@ test_wrap_ack_partial_codex_tail_fails_closed
 test_transient_generation_unavailable_restores_bounded_wrap
 test_ambiguous_compact_tracks_delayed_generation
 test_ambiguous_compact_timeout_starts_successor
+test_successful_compact_tracks_delayed_generation
 test_metrics_collection_failure_is_visible_and_throttled
 test_unsupported_harness_skips_watchdog_metrics
 test_stale_meta_skips_watchdog_threshold_scan
