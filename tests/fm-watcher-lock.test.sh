@@ -27,6 +27,10 @@ process_fd_target() {
   lsof -a -p "$1" -d "$2" -Fn 2>/dev/null | sed -n 's/^n//p' | head -1
 }
 
+process_fd_type() {
+  lsof -a -p "$1" -d "$2" -Ft 2>/dev/null | sed -n 's/^t//p' | head -1
+}
+
 
 test_singleton_start() {
   local dir state fakebin out1 out2 pid1 pid2 live i
@@ -675,7 +679,7 @@ SH
 }
 
 test_arm_hup_preserves_fully_detached_watcher() {
-  local dir state fakebin armout armerr i armpid arm_pgid lock_pid watcher_pgid status beat_before beat_after fd target
+  local dir state fakebin armout armerr i armpid arm_pgid lock_pid watcher_pgid status beat_before beat_after fd fd_type target
   dir=$(make_case arm-hup-cleanup)
   state="$dir/state"
   fakebin="$dir/fakebin"
@@ -700,10 +704,8 @@ test_arm_hup_preserves_fully_detached_watcher() {
   target=$(process_fd_target "$lock_pid" 0 || true)
   [ "$target" = /dev/null ] || fail "watcher stdin remained attached to the arm task (got '$target')"
   for fd in 1 2; do
-    target=$(process_fd_target "$lock_pid" "$fd" || true)
-    case "$target" in
-      *pipe*|*socket*) fail "watcher fd $fd remained attached to the arm task ($target)" ;;
-    esac
+    fd_type=$(process_fd_type "$lock_pid" "$fd" || true)
+    [ "$fd_type" = REG ] || fail "watcher fd $fd remained attached to the arm task (type '$fd_type')"
   done
   beat_before=$(file_mtime "$state/.last-watcher-beat")
   kill -HUP -- "-$arm_pgid" 2>/dev/null || fail "could not send HUP to arm process group"
