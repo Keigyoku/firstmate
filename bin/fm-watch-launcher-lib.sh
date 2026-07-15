@@ -24,7 +24,8 @@ fm_watch_launch_session() {
   # A new session and detached descriptors are not enough for task managers that
   # discover and kill descendants by walking /proc.  Launch through a short-lived
   # session leader so the watcher is orphaned before this function returns.
-  # The pid handoff preserves the arm script's confirmation and wait contracts.
+  # The pid-and-identity handoff preserves the arm script's confirmation and
+  # monitoring contracts without risking a recycled pid.
   case "$launcher" in
     setsid)
       (

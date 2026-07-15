@@ -16,8 +16,9 @@
 # pre-execution seatbelt, not a substitute for the verification here.
 #
 # This script starts the watcher orphaned in a separate process session with its
-# standard file descriptors detached from the arm task, keeps waiting on that
-# process for wake delivery, and VERIFIES the outcome before it settles in.
+# standard file descriptors detached from the arm task, keeps identity-matched
+# watch over that process for wake delivery, and VERIFIES the outcome before it
+# settles in.
 # It confirms a watcher process is genuinely alive AND the
 # liveness beacon (state/.last-watcher-beat) is fresh within FM_GUARD_GRACE (the
 # single source of truth, shared with fm-watch.sh and fm-guard.sh), and prints
@@ -32,12 +33,13 @@
 # It NEVER reports started/attached/healthy off a stale beacon or a dead/reused pid: a
 # stale-beacon or dead-pid holder either self-heals (the fresh child steals the
 # dead lock per the singleton self-eviction/steal path and is confirmed) or this
-# returns the FAILED line. On started it waits the child and propagates the wake
-# reason; on attached it stays live until the identity-matched holder is no longer
-# healthy, then exits zero so the harness background-notify fires then (not as a
-# false empty wake). On restart-only healthy it exits zero after the duplicate
-# child stands down. On FAILED it exits non-zero so the failure is loud. A live
-# cycle already present means re-arm attaches - do not start a second watcher.
+# returns the FAILED line. On started it monitors the identity-matched process and
+# propagates the wake reason; on attached it stays live until the identity-matched
+# holder is no longer healthy, then exits zero so the harness background-notify
+# fires then (not as a false empty wake). On restart-only healthy it exits zero
+# after the duplicate child stands down. On FAILED it exits non-zero so the
+# failure is loud. A live cycle already present means re-arm attaches - do not
+# start a second watcher.
 #
 # --restart: stop ONLY this FM_HOME's watcher (the pid recorded in THIS home's
 # state/.watch.lock) and own a fresh cycle, or report restart-only healthy if a
