@@ -15,6 +15,18 @@ LIB="$ROOT/bin/fm-wake-lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-watcher-lock-tests)
 
+file_mtime() {
+  if [ "$(uname)" = Darwin ]; then
+    stat -f %m "$1" 2>/dev/null
+  else
+    stat -c %Y "$1" 2>/dev/null
+  fi
+}
+
+process_fd_target() {
+  lsof -a -p "$1" -d "$2" -Fn 2>/dev/null | sed -n 's/^n//p' | head -1
+}
+
 
 test_singleton_start() {
   local dir state fakebin out1 out2 pid1 pid2 live i
@@ -685,15 +697,15 @@ test_arm_hup_preserves_fully_detached_watcher() {
   [ "$arm_pgid" = "$armpid" ] || fail "arm did not start in an isolated process group"
   [ "$watcher_pgid" = "$lock_pid" ] || fail "watcher did not start in an isolated process group"
   [ "$watcher_pgid" != "$arm_pgid" ] || fail "watcher remained in the arm process group"
-  target=$(readlink "/proc/$lock_pid/fd/0" 2>/dev/null || true)
+  target=$(process_fd_target "$lock_pid" 0 || true)
   [ "$target" = /dev/null ] || fail "watcher stdin remained attached to the arm task (got '$target')"
   for fd in 1 2; do
-    target=$(readlink "/proc/$lock_pid/fd/$fd" 2>/dev/null || true)
+    target=$(process_fd_target "$lock_pid" "$fd" || true)
     case "$target" in
-      pipe:*|socket:*) fail "watcher fd $fd remained attached to the arm task ($target)" ;;
+      *pipe*|*socket*) fail "watcher fd $fd remained attached to the arm task ($target)" ;;
     esac
   done
-  beat_before=$(stat -c %Y "$state/.last-watcher-beat")
+  beat_before=$(file_mtime "$state/.last-watcher-beat")
   kill -HUP -- "-$arm_pgid" 2>/dev/null || fail "could not send HUP to arm process group"
   wait_for_exit "$armpid" 80
   status=$?
@@ -703,7 +715,7 @@ test_arm_hup_preserves_fully_detached_watcher() {
   i=0
   beat_after=$beat_before
   while [ "$i" -lt 80 ]; do
-    beat_after=$(stat -c %Y "$state/.last-watcher-beat" 2>/dev/null || true)
+    beat_after=$(file_mtime "$state/.last-watcher-beat" 2>/dev/null || true)
     [ -n "$beat_after" ] && [ "$beat_after" -gt "$beat_before" ] && break
     sleep 0.1
     i=$((i + 1))
@@ -798,6 +810,7 @@ test_arm_fails_loud_when_no_fresh_watcher_confirmable() {
   status=$?
   [ "$status" -ne 124 ] || fail "arm never returned for an unconfirmable watcher"
   [ "$status" -ne 0 ] || fail "arm exited zero when no fresh watcher could be confirmed"
+  grep -F 'heartbeat is stale' "$armout" >/dev/null || fail "arm discarded the watcher startup diagnostic"
   grep -F 'watcher: FAILED - no live watcher with a fresh beacon' "$armout" >/dev/null || fail "arm did not print the FAILED line"
   ! grep -qE 'watcher: (healthy|attached)' "$armout" || fail "arm reported attached/healthy off a stale beacon"
   ! grep -qF 'watcher: started' "$armout" || fail "arm falsely reported started"

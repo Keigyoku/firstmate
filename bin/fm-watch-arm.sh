@@ -238,10 +238,11 @@ while :; do
 done
 
 trap - HUP TERM INT
-echo "watcher: FAILED - no live watcher with a fresh beacon"
 if [ -n "$child" ] && fm_pid_alive "$child"; then
   kill -TERM "$child" 2>/dev/null || true
 fi
-cleanup_child
 wait "$child" 2>/dev/null || true
+print_watch_output "$child_out"
+cleanup_child
+echo "watcher: FAILED - no live watcher with a fresh beacon"
 exit 1
