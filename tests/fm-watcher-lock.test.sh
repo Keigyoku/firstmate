@@ -559,12 +559,13 @@ test_arm_starts_and_self_heals() {
 }
 
 test_arm_hup_preserves_watcher_and_cleans_temp_output() {
-  local dir state fakebin armout i armpid lock_pid status
+  local dir state fakebin armout i armpid arm_pgid lock_pid watcher_pgid status
   dir=$(make_case arm-hup-cleanup)
   state="$dir/state"
   fakebin="$dir/fakebin"
   armout="$dir/arm.out"
-  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    perl -MPOSIX=setsid -e 'setsid() >= 0 or die "setsid: $!\n"; exec @ARGV or die "exec: $!\n"' "$WATCH_ARM" > "$armout" &
   armpid=$!
   i=0
   while [ "$i" -lt 80 ]; do
@@ -574,15 +575,20 @@ test_arm_hup_preserves_watcher_and_cleans_temp_output() {
   done
   grep -qF 'watcher: started pid=' "$armout" || fail "arm did not start before HUP cleanup check"
   lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
-  kill -HUP "$armpid" 2>/dev/null || fail "could not send HUP to arm"
+  arm_pgid=$(ps -o pgid= -p "$armpid" 2>/dev/null | tr -d ' ')
+  watcher_pgid=$(ps -o pgid= -p "$lock_pid" 2>/dev/null | tr -d ' ')
+  [ "$arm_pgid" = "$armpid" ] || fail "arm did not start in an isolated process group"
+  [ "$watcher_pgid" = "$lock_pid" ] || fail "watcher did not start in an isolated process group"
+  [ "$watcher_pgid" != "$arm_pgid" ] || fail "watcher remained in the arm process group"
+  kill -HUP -- "-$arm_pgid" 2>/dev/null || fail "could not send HUP to arm process group"
   wait_for_exit "$armpid" 80
   status=$?
   [ "$status" -eq 129 ] || fail "arm did not exit with HUP status (got $status)"
-  is_live_non_zombie "$lock_pid" || fail "HUP of the arm task also killed the watcher"
+  is_live_non_zombie "$lock_pid" || fail "HUP of the arm task process group also killed the watcher"
   ! ls "$state"/.watch-arm-output.* >/dev/null 2>&1 || fail "HUP cleanup left temp output behind"
   kill "$lock_pid" 2>/dev/null || true
   wait "$lock_pid" 2>/dev/null || true
-  pass "arm task HUP leaves the watcher alive and cleans temporary output"
+  pass "arm process-group HUP leaves the watcher alive and cleans temporary output"
 }
 
 test_arm_propagates_immediate_wake_before_confirmation() {

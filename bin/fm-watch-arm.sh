@@ -186,11 +186,7 @@ child_out=$(mktemp "$STATE/.watch-arm-output.XXXXXX") || {
   echo "watcher: FAILED - no live watcher with a fresh beacon"
   exit 1
 }
-if command -v setsid >/dev/null 2>&1; then
-  setsid "$WATCH" >"$child_out" &
-else
-  "$WATCH" >"$child_out" &
-fi
+perl -MPOSIX=setsid -e 'setsid() >= 0 or die "setsid: $!\n"; exec @ARGV or die "exec: $!\n"' "$WATCH" >"$child_out" &
 child=$!
 child_done=0
 
