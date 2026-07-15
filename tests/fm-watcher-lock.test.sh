@@ -722,7 +722,9 @@ test_arm_hup_preserves_fully_detached_watcher() {
     sleep 0.1
     i=$((i + 1))
   done
-  [ -n "$beat_after" ] && [ "$beat_after" -gt "$beat_before" ] || fail "watcher stopped beating after its arm task pipe closed"
+  if [ -z "$beat_after" ] || [ "$beat_after" -le "$beat_before" ]; then
+    fail "watcher stopped beating after its arm task pipe closed"
+  fi
   is_live_non_zombie "$lock_pid" || fail "watcher died while continuing after arm task pipe closure"
   kill "$lock_pid" 2>/dev/null || true
   wait "$lock_pid" 2>/dev/null || true
