@@ -168,16 +168,13 @@ if [ "$mode" = arm ] && healthy_watcher; then
   attach_and_wait "$HEALTHY_PID"
 fi
 
-# Start a watcher as a tracked child and confirm it before settling in. The child
-# stays our child for its whole life: we wait on it, so killing this arm (the
-# harness-tracked task) tears the watcher down too, and the watcher's eventual
-# wake exit propagates out so the harness re-notifies firstmate.
+# Start a watcher in a separate process session and confirm it before settling in.
+# The arm still waits on the watcher so a normal wake exit propagates to the harness,
+# but a harness task-manager stop cannot take the watcher down with the arm process
+# group.
 child=
 child_out=
 cleanup_child() {
-  if [ -n "$child" ] && fm_pid_alive "$child"; then
-    kill -TERM "$child" 2>/dev/null || true
-  fi
   if [ -n "$child_out" ]; then
     rm -f "$child_out" 2>/dev/null || true
   fi
@@ -189,7 +186,11 @@ child_out=$(mktemp "$STATE/.watch-arm-output.XXXXXX") || {
   echo "watcher: FAILED - no live watcher with a fresh beacon"
   exit 1
 }
-"$WATCH" >"$child_out" &
+if command -v setsid >/dev/null 2>&1; then
+  setsid "$WATCH" >"$child_out" &
+else
+  "$WATCH" >"$child_out" &
+fi
 child=$!
 child_done=0
 
@@ -238,6 +239,9 @@ done
 
 trap - HUP TERM INT
 echo "watcher: FAILED - no live watcher with a fresh beacon"
+if [ -n "$child" ] && fm_pid_alive "$child"; then
+  kill -TERM "$child" 2>/dev/null || true
+fi
 cleanup_child
 wait "$child" 2>/dev/null || true
 exit 1
