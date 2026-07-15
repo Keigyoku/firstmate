@@ -35,6 +35,7 @@ fm_watchdog_default_config() {
   },
   "steer_retries": 3,
   "steer_timeout_sec": 120,
+  "compact_wrap_ack_timeout_sec": 600,
   "compact_pending_retry_sec": 900,
   "metrics_failure_event_interval_sec": 300,
   "rotate_to": ["codex", "opencode"],

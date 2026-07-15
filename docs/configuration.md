@@ -195,9 +195,13 @@ When it is absent, `bin/fm-watchdog-lib.sh` uses the same defaults as the exampl
 Set `FM_WATCHDOG_CONFIG` to point at a different JSON file, `FM_WATCHDOG_CLAUDE_CHECKPOINT_DIR` to override Claude checkpoint discovery, or `FM_WATCHDOG_CODEX_SESSION_DIR` to override Codex rollout discovery.
 Metrics parsing supports Claude token-optimizer checkpoints, Codex rollout files, and an unknown-harness fallback record.
 When it is malformed, bootstrap reports `WATCHDOG: invalid config/watchdog.json - malformed JSON; using defaults`, and the watcher records a `watchdog_config` event before falling back to defaults.
-The active fields are `poll_interval_sec`, `thresholds.compact_at_context_pct`, `thresholds.successor_at_context_pct`, `thresholds.embargo_at_5hr_pct`, `thresholds.embargo_at_7d_pct`, `rotate_to`, `steer_retries`, `steer_timeout_sec`, `compact_pending_retry_sec`, `metrics_failure_event_interval_sec`, and `parser_version`.
+The active fields are `poll_interval_sec`, `thresholds.compact_at_context_pct`, `thresholds.successor_at_context_pct`, `thresholds.embargo_at_5hr_pct`, `thresholds.embargo_at_7d_pct`, `rotate_to`, `steer_retries`, `steer_timeout_sec`, `compact_wrap_ack_timeout_sec`, `compact_pending_retry_sec`, `metrics_failure_event_interval_sec`, and `parser_version`.
 `poll_interval_sec` becomes the watcher's default poll cadence when `FM_POLL` is unset.
-When a non-secondmate Claude or Codex task reaches `thresholds.compact_at_context_pct`, `fm-watch.sh` records a `compact_threshold` event and starts `fm-steer.sh` to ask the task to complete its current unit and run `/compact`.
+When a non-secondmate Claude or Codex task reaches `thresholds.compact_at_context_pct`, `fm-watch.sh` records a `compact_threshold` event and sends a uniquely identified wrap request that tells the task to complete and land its current unit without running `/compact`.
+The request gives the task an exact atomic command that writes the request token to its per-task `state/watchdog/.compact-wrap-ack-<task-key>` marker.
+Only a token-matched acknowledgement causes the watcher to deliver `/compact`.
+The pending marker also records the transcript identity and compact generation observed at request time, so a new transcript or harness auto-compact generation cancels the request and marks that generation handled before an acknowledgement can trigger a second compact.
+An unresponsive wrap request expires after `compact_wrap_ack_timeout_sec` and enters the existing successor handoff path instead of delivering `/compact` blindly.
 When the task reaches `thresholds.successor_at_context_pct`, `fm-watch.sh` records a `clear_threshold` event and asks the task to complete its current unit and run `/clear`.
 When a harness reaches either budget embargo threshold, the watcher writes `fm-state/watchdog/embargo-<harness>` atomically and records an `embargo` event.
 `fm-spawn.sh` checks that flag only at entry and exits 7 for new spawns on the embargoed harness, so in-flight work continues.
