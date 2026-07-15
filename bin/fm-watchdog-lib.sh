@@ -598,10 +598,26 @@ fm_watchdog_compact_generation() {
     claude)
       jq -r 'select(.isCompactSummary == true) | .uuid // empty' "$file" 2>/dev/null | tail -1
       ;;
+    codex)
+      printf 'codex:%s\n' "$(jq -r 'select(.type == "compacted") | 1' "$file" 2>/dev/null | wc -l | tr -d '[:space:]')"
+      ;;
     *)
       return 1
       ;;
   esac
+}
+
+fm_watchdog_compact_pending_identity_current() {
+  local task=$1 harness=$2 pending=$3 old_sig old_generation file sig generation
+  old_sig=$(sed -n '1p' "$pending")
+  old_generation=$(sed -n '3p' "$pending")
+  file=$(fm_watchdog_session_file "$harness" "$task" 2>/dev/null || true)
+  [ -n "$file" ] || return 2
+  sig=$(fm_watchdog_file_identity "$file" 2>/dev/null || true)
+  [ -n "$sig" ] || return 2
+  generation=$(fm_watchdog_compact_generation "$harness" "$file" 2>/dev/null || true)
+  [ "$sig" = "$old_sig" ] || return 1
+  [ -z "$generation" ] || [ "$generation" = "$old_generation" ]
 }
 
 fm_watchdog_marker_key() {

@@ -46,6 +46,12 @@ write_codex_rollout() {
     '{type:"event_msg",payload:{type:"token_count",info:{last_token_usage:{total_tokens:$total},model_context_window:1000},rate_limits:{primary:{used_percent:11},secondary:{used_percent:22}}}}' >> "$path"
 }
 
+append_codex_compaction() {
+  local path=$1 generation=$2
+  jq -cn --arg generation "$generation" '{type:"compacted",payload:{message:$generation,replacement_history:[]}}' >> "$path"
+  jq -cn '{type:"event_msg",payload:{type:"context_compacted"}}' >> "$path"
+}
+
 write_claude_jsonl() {
   local path=$1 session_id=$2 compact_uuid=${3:-}
   mkdir -p "$(dirname "$path")"
@@ -531,6 +537,50 @@ test_same_file_claude_compact_summary_rearms_session() {
   pass "watcher re-arms after same-file Claude compact summary"
 }
 
+test_same_file_codex_compaction_cancels_wrap() {
+  local home config session_dir worktree rollout double log pending status event timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping same-file Codex compact coverage"
+    return
+  fi
+  home="$TMP_ROOT/codex-same-file-home"
+  config="$TMP_ROOT/codex-same-file-config"
+  session_dir="$TMP_ROOT/codex-same-file-sessions"
+  worktree="$TMP_ROOT/codex-same-file-worktree"
+  rollout="$session_dir/rollout-demo.jsonl"
+  double="$TMP_ROOT/codex-same-file-double"
+  log="$TMP_ROOT/codex-same-file.log"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  write_codex_rollout "$rollout" "$worktree" 900 same-sid
+  make_success_double "$double" "$log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial same-file Codex pass should arm the session"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "same-file Codex request pass should keep polling"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  assert_present "$pending" "same-file Codex test should create a pending wrap"
+  [ "$(sed -n '3p' "$pending")" = codex:0 ] || fail "pending wrap should record the initial Codex compact generation"
+  append_codex_compaction "$rollout" compact-one
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "same-file Codex compaction cancellation should keep polling"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"type":"compact_rotated"' "same-rollout Codex compaction should cancel the pending wrap"
+  assert_contains "$(cat "$event")" 'compact_generation=codex:1' "same-rollout Codex event should record the new generation"
+  [ "$(grep -cF 'tmux|target-pane|/compact' "$log" || true)" = 0 ] || fail "same-rollout Codex compaction must prevent compact delivery"
+  pass "watcher detects same-rollout Codex compaction"
+}
+
 test_wrap_ack_delivers_compact() {
   local home config session_dir worktree double log pending ack request message marker_command status event timeout_cmd
   if command -v timeout >/dev/null 2>&1; then
@@ -805,8 +855,8 @@ SH
   pass "transcript rotation wins over an expired wrap deadline"
 }
 
-test_wrap_ack_revalidates_before_compact() {
-  local home config session_dir worktree double log pending ack request rotate status event timeout_cmd
+test_wrap_ack_revalidates_at_backend_send() {
+  local home config session_dir worktree rollout double log pending ack request compact status event timeout_cmd
   if command -v timeout >/dev/null 2>&1; then
     timeout_cmd=timeout
   elif command -v gtimeout >/dev/null 2>&1; then
@@ -821,19 +871,19 @@ test_wrap_ack_revalidates_before_compact() {
   worktree="$TMP_ROOT/wrap-race-worktree"
   double="$TMP_ROOT/wrap-race-double"
   log="$TMP_ROOT/wrap-race.log"
-  rotate="$TMP_ROOT/wrap-race-rotate"
+  rollout="$session_dir/rollout-demo.jsonl"
+  compact="$TMP_ROOT/wrap-race-compact"
   mkdir -p "$home/state" "$worktree"
   fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
   write_fast_threshold_config "$config"
   make_success_double "$double" "$log"
-  write_codex_rollout "$session_dir/rollout-demo.jsonl" "$worktree" 900 old-sid
-  cat > "$rotate" <<'SH'
+  write_codex_rollout "$rollout" "$worktree" 900 old-sid
+  cat > "$compact" <<'SH'
 #!/usr/bin/env bash
-sleep 1
-jq -cn --arg cwd "$FM_RACE_WORKTREE" '{type:"session_meta",payload:{session_id:"new-sid",cwd:$cwd}}' > "$FM_RACE_SESSION_DIR/rollout-new.jsonl"
-jq -cn '{type:"event_msg",payload:{type:"token_count",info:{last_token_usage:{total_tokens:0},model_context_window:1000}}}' >> "$FM_RACE_SESSION_DIR/rollout-new.jsonl"
+jq -cn '{type:"compacted",payload:{message:"setup-gap",replacement_history:[]}}' >> "$FM_RACE_ROLLOUT"
+jq -cn '{type:"event_msg",payload:{type:"context_compacted"}}' >> "$FM_RACE_ROLLOUT"
 SH
-  chmod +x "$rotate"
+  chmod +x "$compact"
 
   "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
   status=$?
@@ -846,13 +896,13 @@ SH
   ack="$home/state/watchdog/.compact-wrap-ack-demo"
   printf '%s\n' "$request" > "$ack"
 
-  "$timeout_cmd" 3 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_WATCHDOG_BEFORE_COMPACT_DELIVERY="$rotate" FM_RACE_SESSION_DIR="$session_dir" FM_RACE_WORKTREE="$worktree" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  "$timeout_cmd" 3 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_STEER_BEFORE_DELIVERY_ATTEMPT_CMD="$compact" FM_RACE_ROLLOUT="$rollout" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
   status=$?
   expect_code 124 "$status" "pre-delivery rotation cancellation should keep polling"
   event="$home/fm-state/watchdog.events"
-  assert_contains "$(cat "$event")" '"type":"compact_rotated"' "rotation immediately before delivery should cancel the pending compact"
-  [ "$(grep -cF 'tmux|target-pane|/compact' "$log" || true)" = 0 ] || fail "pre-delivery identity change must prevent compact delivery"
-  pass "watcher revalidates transcript identity immediately before compact"
+  assert_contains "$(cat "$event")" '"type":"compact_rotated"' "same-rollout compaction during steer setup should cancel the pending compact"
+  [ "$(grep -cF 'tmux|target-pane|/compact' "$log" || true)" = 0 ] || fail "backend-send guard must prevent compact after setup-gap compaction"
+  pass "watcher revalidates Codex generation at backend send"
 }
 
 test_metrics_collection_failure_is_visible_and_throttled() {
@@ -1333,12 +1383,13 @@ test_watcher_starts_compact_steer_without_blocking
 test_unarmed_session_is_not_steered_on_first_discovery
 test_rotation_rearms_new_session
 test_same_file_claude_compact_summary_rearms_session
+test_same_file_codex_compaction_cancels_wrap
 test_wrap_ack_delivers_compact
 test_wrap_ack_timeout_starts_successor
 test_wrap_ack_deadline_starts_after_delivery
 test_compact_delivery_does_not_retry_across_rotation
 test_wrap_rotation_wins_expired_deadline
-test_wrap_ack_revalidates_before_compact
+test_wrap_ack_revalidates_at_backend_send
 test_metrics_collection_failure_is_visible_and_throttled
 test_unsupported_harness_skips_watchdog_metrics
 test_stale_meta_skips_watchdog_threshold_scan

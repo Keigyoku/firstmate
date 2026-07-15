@@ -45,10 +45,10 @@ esac
 
 deliver_once() {
   if [ -n "${FM_STEER_BACKEND_CMD:-}" ]; then
-    with_timeout "$FM_STEER_BACKEND_CMD" "$BACKEND" "$TARGET" "$TEXT"
+    with_timeout "$SCRIPT_DIR/fm-guarded-delivery.sh" "${FM_STEER_PRE_DELIVERY_GUARD_CMD:-}" "$FM_STEER_BACKEND_CMD" "$BACKEND" "$TARGET" "$TEXT"
     return $?
   fi
-  with_timeout env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_SEND_SETTLE="${FM_STEER_SEND_SETTLE:-0}" "$SCRIPT_DIR/fm-send.sh" "$SID" "$TEXT"
+  with_timeout "$SCRIPT_DIR/fm-guarded-delivery.sh" "${FM_STEER_PRE_DELIVERY_GUARD_CMD:-}" env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_SEND_SETTLE="${FM_STEER_SEND_SETTLE:-0}" "$SCRIPT_DIR/fm-send.sh" "$SID" "$TEXT"
 }
 
 with_timeout() {
@@ -66,10 +66,16 @@ with_timeout() {
 
 attempt=1
 while [ "$attempt" -le "$RETRIES" ]; do
+  if [ -n "${FM_STEER_BEFORE_DELIVERY_ATTEMPT_CMD:-}" ]; then
+    "$FM_STEER_BEFORE_DELIVERY_ATTEMPT_CMD"
+  fi
   if deliver_once; then
     fm_watchdog_event steer "$SID" delivered "backend=$BACKEND attempts=$attempt"
     exit 0
+  else
+    rc=$?
   fi
+  case "$rc" in 10|11) exit "$rc" ;; esac
   [ "$attempt" -lt "$RETRIES" ] && sleep "${FM_STEER_BACKOFF_SEC:-5}"
   attempt=$((attempt + 1))
 done

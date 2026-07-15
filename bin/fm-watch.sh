@@ -432,19 +432,6 @@ watchdog_start_compact_wrap() {
   fi
 }
 
-watchdog_compact_wrap_identity_current() {
-  local task=$1 harness=$2 pending=$3 old_sig old_generation file sig generation
-  old_sig=$(sed -n '1p' "$pending")
-  old_generation=$(sed -n '3p' "$pending")
-  file=$(fm_watchdog_session_file "$harness" "$task" 2>/dev/null || true)
-  [ -n "$file" ] || return 2
-  sig=$(fm_watchdog_file_identity "$file" 2>/dev/null || true)
-  [ -n "$sig" ] || return 2
-  generation=$(fm_watchdog_compact_generation "$harness" "$file" 2>/dev/null || true)
-  [ "$sig" = "$old_sig" ] || return 1
-  [ -z "$generation" ] || [ "$generation" = "$old_generation" ]
-}
-
 watchdog_cancel_compact_wrap_rotation() {
   local task=$1 harness=$2 pending=$3 old_sig old_sid file sig new_sid generation
   old_sig=$(sed -n '1p' "$pending")
@@ -470,7 +457,7 @@ watchdog_start_compact_delivery() {
     if [ -n "${FM_WATCHDOG_BEFORE_COMPACT_DELIVERY:-}" ]; then
       "$FM_WATCHDOG_BEFORE_COMPACT_DELIVERY" "$task" "$harness"
     fi
-    watchdog_compact_wrap_identity_current "$task" "$harness" "$pending"
+    fm_watchdog_compact_pending_identity_current "$task" "$harness" "$pending"
     identity_rc=$?
     if [ "$identity_rc" -ne 0 ]; then
       if [ "$identity_rc" -eq 1 ]; then
@@ -481,7 +468,7 @@ watchdog_start_compact_delivery() {
       return 0
     fi
     sed '6s/.*/compact_sent/' "$pending" > "$pending.tmp" && mv -f "$pending.tmp" "$pending"
-    watchdog_compact_wrap_identity_current "$task" "$harness" "$pending"
+    fm_watchdog_compact_pending_identity_current "$task" "$harness" "$pending"
     identity_rc=$?
     if [ "$identity_rc" -ne 0 ]; then
       if [ "$identity_rc" -eq 1 ]; then
@@ -493,17 +480,30 @@ watchdog_start_compact_delivery() {
       rm -f "$inflight"
       return 0
     fi
-    if watchdog_compact_wrap_identity_current "$task" "$harness" "$pending"; then
-      if FM_STEER_RETRIES_OVERRIDE=1 "$SCRIPT_DIR/fm-steer.sh" "$task" "/compact"; then
+    if fm_watchdog_compact_pending_identity_current "$task" "$harness" "$pending"; then
+      if FM_STEER_RETRIES_OVERRIDE=1 \
+        FM_STEER_PRE_DELIVERY_GUARD_CMD="$SCRIPT_DIR/fm-compact-delivery-guard.sh" \
+        FM_COMPACT_GUARD_TASK="$task" \
+        FM_COMPACT_GUARD_HARNESS="$harness" \
+        FM_COMPACT_GUARD_PENDING="$pending" \
+        "$SCRIPT_DIR/fm-steer.sh" "$task" "/compact"; then
         rm -f "$ack"
         fm_watchdog_event compact_wrap_acknowledged "$task" accepted "request=$request context_pct=$context"
       else
         rc=$?
-        watchdog_compact_wrap_identity_current "$task" "$harness" "$pending"
-        identity_rc=$?
+        if [ "$rc" -eq 10 ]; then
+          identity_rc=1
+        elif [ "$rc" -eq 11 ]; then
+          identity_rc=2
+        else
+          fm_watchdog_compact_pending_identity_current "$task" "$harness" "$pending"
+          identity_rc=$?
+        fi
         if [ "$identity_rc" -eq 1 ]; then
           watchdog_cancel_compact_wrap_rotation "$task" "$harness" "$pending"
           rm -f "$ack"
+        elif [ "$identity_rc" -eq 2 ]; then
+          sed '6s/.*/wrap_requested/' "$pending" > "$pending.tmp" && mv -f "$pending.tmp" "$pending"
         else
           rm -f "$ack"
           fm_watchdog_event compact_steer_failed "$task" "rc=$rc" "context_pct=$context request=$request"

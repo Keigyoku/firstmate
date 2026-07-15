@@ -200,7 +200,8 @@ The active fields are `poll_interval_sec`, `thresholds.compact_at_context_pct`, 
 When a non-secondmate Claude or Codex task reaches `thresholds.compact_at_context_pct`, `fm-watch.sh` records a `compact_threshold` event and sends a uniquely identified wrap request that tells the task to complete and land its current unit without running `/compact`.
 The request gives the task an exact atomic command that writes the request token to its per-task `state/watchdog/.compact-wrap-ack-<task-key>` marker.
 Only a token-matched acknowledgement causes the watcher to deliver `/compact`.
-The pending marker also records the transcript identity and compact generation observed at request time, so a new transcript or harness auto-compact generation cancels the request and marks that generation handled before an acknowledgement can trigger a second compact.
+The pending marker also records the transcript identity and compact generation observed at request time, using Claude's compact-summary UUID or Codex's same-rollout `compacted` record count, so a new transcript or harness auto-compact generation cancels the request and marks that generation handled before an acknowledgement can trigger a second compact.
+The final identity and generation validation runs inside the timed delivery process immediately before its backend send.
 The acknowledgement deadline starts only after wrap delivery succeeds, and `/compact` uses one bounded delivery attempt so an ambiguous attempt cannot retry across a transcript rotation.
 An unresponsive wrap request expires after `compact_wrap_ack_timeout_sec` and enters the existing successor handoff path instead of delivering `/compact` blindly, even if all thresholds are disabled while the request is pending.
 When the task reaches `thresholds.successor_at_context_pct`, `fm-watch.sh` records a `clear_threshold` event and asks the task to complete its current unit and run `/clear`.
