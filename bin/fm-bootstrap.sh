@@ -100,6 +100,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-x-lib.sh"
 # shellcheck source=bin/fm-backend.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-watch-launcher-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-watch-launcher-lib.sh"
 
 fleet_sync_origin_backed_project_count() {
   local count proj
@@ -317,6 +319,7 @@ secondmate_liveness_sweep() {
 install_cmd() {
   case "$1" in
     tmux|node|git|gh|curl|jq|orca) echo "brew install $1  # or the platform's package manager" ;;
+    setsid) echo "brew install util-linux  # or the platform's package manager" ;;
     treehouse) echo "curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh" ;;
     no-mistakes) echo "curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh" ;;
     gh-axi|chrome-devtools-axi|lavish-axi) echo "npm install -g $1 && $1 setup hooks" ;;
@@ -590,6 +593,9 @@ for t in $TOOLS; do
     command -v "$t" >/dev/null || echo "MISSING: $t (install: $(install_cmd "$t"))"
   fi
 done
+if ! fm_watch_session_launcher >/dev/null; then
+  echo "MISSING: setsid (install: $(install_cmd setsid))"
+fi
 if command -v treehouse >/dev/null 2>&1 && ! treehouse_supports_lease; then
   echo "MISSING: treehouse (install: $(install_cmd treehouse))"
 fi

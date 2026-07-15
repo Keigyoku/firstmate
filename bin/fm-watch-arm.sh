@@ -52,6 +52,8 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-watch-launcher-lib.sh
+. "$SCRIPT_DIR/fm-watch-launcher-lib.sh"
 
 WATCH="$SCRIPT_DIR/fm-watch.sh"
 WATCH_LOCK="$STATE/.watch.lock"
@@ -186,8 +188,11 @@ child_out=$(mktemp "$STATE/.watch-arm-output.XXXXXX") || {
   echo "watcher: FAILED - no live watcher with a fresh beacon"
   exit 1
 }
-perl -MPOSIX=setsid -e 'setsid() >= 0 or die "setsid: $!\n"; exec @ARGV or die "exec: $!\n"' "$WATCH" >"$child_out" &
-child=$!
+if ! fm_watch_launch_session child "$child_out" "$WATCH"; then
+  echo "watcher: FAILED - no session launcher (requires setsid or Perl POSIX)" >&2
+  cleanup_child
+  exit 1
+fi
 child_done=0
 
 # Verify the outcome: poll until this child is the confirmed healthy watcher, or
