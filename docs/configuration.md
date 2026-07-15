@@ -201,7 +201,8 @@ When a non-secondmate Claude or Codex task reaches `thresholds.compact_at_contex
 The request gives the task an exact atomic command that writes the request token to its per-task `state/watchdog/.compact-wrap-ack-<task-key>` marker.
 Only a token-matched acknowledgement causes the watcher to deliver `/compact`.
 The pending marker also records the transcript identity and compact generation observed at request time, so a new transcript or harness auto-compact generation cancels the request and marks that generation handled before an acknowledgement can trigger a second compact.
-An unresponsive wrap request expires after `compact_wrap_ack_timeout_sec` and enters the existing successor handoff path instead of delivering `/compact` blindly.
+The acknowledgement deadline starts only after wrap delivery succeeds, and `/compact` uses one bounded delivery attempt so an ambiguous attempt cannot retry across a transcript rotation.
+An unresponsive wrap request expires after `compact_wrap_ack_timeout_sec` and enters the existing successor handoff path instead of delivering `/compact` blindly, even if all thresholds are disabled while the request is pending.
 When the task reaches `thresholds.successor_at_context_pct`, `fm-watch.sh` records a `clear_threshold` event and asks the task to complete its current unit and run `/clear`.
 When a harness reaches either budget embargo threshold, the watcher writes `fm-state/watchdog/embargo-<harness>` atomically and records an `embargo` event.
 `fm-spawn.sh` checks that flag only at entry and exits 7 for new spawns on the embargoed harness, so in-flight work continues.

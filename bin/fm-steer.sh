@@ -22,7 +22,7 @@ SID=$1
 shift
 TEXT=$*
 CONFIG=$(fm_watchdog_thresholds)
-RETRIES=$(printf '%s' "$CONFIG" | jq -r '.steer_retries // 3')
+RETRIES=${FM_STEER_RETRIES_OVERRIDE:-$(printf '%s' "$CONFIG" | jq -r '.steer_retries // 3')}
 case "$RETRIES" in ''|*[!0-9]*) RETRIES=3 ;; esac
 [ "$RETRIES" -gt 0 ] || RETRIES=1
 TIMEOUT_SEC=$(printf '%s' "$CONFIG" | jq -r '.steer_timeout_sec // 120')

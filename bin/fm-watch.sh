@@ -398,10 +398,9 @@ watchdog_collect_failure_recent() {
 }
 
 watchdog_start_compact_wrap() {
-  local task=$1 context=$2 compact=$3 sig=$4 sid=$5 key=$6 pending=$7 inflight=$8 generation=$9 pid claim request ack ack_q ack_tmp_q request_q message requested_at
+  local task=$1 context=$2 compact=$3 sig=$4 sid=$5 key=$6 pending=$7 inflight=$8 generation=$9 pid claim request ack ack_q ack_tmp_q request_q message
   request="$(date -u +%s)-${BASHPID:-$$}-${RANDOM:-0}"
   ack="$STATE/watchdog/.compact-wrap-ack-$key"
-  requested_at=$(date -u +%s)
   printf -v ack_q '%q' "$ack"
   printf -v ack_tmp_q '%q' "$ack.tmp.$request"
   printf -v request_q '%q' "$request"
@@ -409,9 +408,10 @@ watchdog_start_compact_wrap() {
   claim=$(watchdog_resident_rotation_claim "$task" compact-wrap) || return 0
   fm_watchdog_event compact_threshold "$task" triggered "context_pct=$context threshold=$compact sid=$sid"
   (
-    local rc
+    local rc requested_at
     trap 'watchdog_resident_rotation_release "$task" "$claim"' EXIT
     if "$SCRIPT_DIR/fm-steer.sh" "$task" "$message"; then
+      requested_at=$(date -u +%s)
       printf '%s\n%s\n%s\n%s\n%s\nwrap_requested\n%s\n' "$sig" "$sid" "$generation" "$request" "$requested_at" "$context" > "$pending"
       fm_watchdog_event compact_wrap_requested "$task" pending "request=$request context_pct=$context threshold=$compact"
     else
@@ -494,16 +494,23 @@ watchdog_start_compact_delivery() {
       return 0
     fi
     if watchdog_compact_wrap_identity_current "$task" "$harness" "$pending"; then
-      if "$SCRIPT_DIR/fm-steer.sh" "$task" "/compact"; then
+      if FM_STEER_RETRIES_OVERRIDE=1 "$SCRIPT_DIR/fm-steer.sh" "$task" "/compact"; then
         rm -f "$ack"
         fm_watchdog_event compact_wrap_acknowledged "$task" accepted "request=$request context_pct=$context"
       else
         rc=$?
-        rm -f "$ack"
-        fm_watchdog_event compact_steer_failed "$task" "rc=$rc" "context_pct=$context request=$request"
-        rm -f "$pending"
-        if [ "$rc" -eq 4 ]; then
-          watchdog_start_successor "$task" "$context" "steer_undeliverable" "$rc"
+        watchdog_compact_wrap_identity_current "$task" "$harness" "$pending"
+        identity_rc=$?
+        if [ "$identity_rc" -eq 1 ]; then
+          watchdog_cancel_compact_wrap_rotation "$task" "$harness" "$pending"
+          rm -f "$ack"
+        else
+          rm -f "$ack"
+          fm_watchdog_event compact_steer_failed "$task" "rc=$rc" "context_pct=$context request=$request"
+          rm -f "$pending"
+          if [ "$rc" -eq 4 ]; then
+            watchdog_start_successor "$task" "$context" "steer_undeliverable" "$rc"
+          fi
         fi
       fi
     else
@@ -622,7 +629,7 @@ watchdog_successor_supported() {
 }
 
 watchdog_threshold_scan() {
-  local config compact successor embargo_5hr embargo_7d pending_retry wrap_ack_timeout failure_interval meta task harness metrics context five seven five_reset seven_reset file sig sid generation key handled pending inflight clear_pending clear_inflight err_file embargo_reason unsupported_marker phase
+  local config compact successor embargo_5hr embargo_7d pending_retry wrap_ack_timeout failure_interval thresholds_enabled meta task harness metrics context five seven five_reset seven_reset file sig sid generation key handled pending inflight clear_pending clear_inflight err_file embargo_reason unsupported_marker phase
   watchdog_halted && exit 0
   config=$(fm_watchdog_thresholds 2>/dev/null) || return 0
   compact=$(printf '%s' "$config" | jq -r '.thresholds.compact_at_context_pct // empty' 2>/dev/null || true)
@@ -633,7 +640,8 @@ watchdog_threshold_scan() {
   case "$successor" in ''|null|*[!0-9.]* ) successor= ;; esac
   case "$embargo_5hr" in ''|null|*[!0-9.]* ) embargo_5hr= ;; esac
   case "$embargo_7d" in ''|null|*[!0-9.]* ) embargo_7d= ;; esac
-  [ -n "$compact$successor$embargo_5hr$embargo_7d" ] || return 0
+  thresholds_enabled=true
+  [ -n "$compact$successor$embargo_5hr$embargo_7d" ] || thresholds_enabled=false
   pending_retry=$(printf '%s' "$config" | jq -r '.compact_pending_retry_sec // empty' 2>/dev/null || true)
   wrap_ack_timeout=$(printf '%s' "$config" | jq -r '.compact_wrap_ack_timeout_sec // empty' 2>/dev/null || true)
   failure_interval=$(printf '%s' "$config" | jq -r '.metrics_failure_event_interval_sec // empty' 2>/dev/null || true)
@@ -669,6 +677,7 @@ watchdog_threshold_scan() {
       watchdog_steer_inflight "$inflight" && continue
       watchdog_compact_wrap_pending "$task" "$harness" "$pending" "$inflight" "$wrap_ack_timeout" "$key" && continue
     fi
+    [ "$thresholds_enabled" = true ] || continue
     watchdog_pending_active "$pending" "$task" "$pending_retry" "$key" compact && continue
     watchdog_steer_inflight "$inflight" && continue
     watchdog_collect_failure_recent "$key" "$failure_interval" && continue
