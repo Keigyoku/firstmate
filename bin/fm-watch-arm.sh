@@ -8,17 +8,16 @@
 # call and NOTIFIES on exit, so firstmate must run this script as the harness's
 # own tracked background task (e.g. run_in_background). Run it as its own
 # standalone background task, never bundled onto the tail of another command.
-# NEVER fire it and forget with a shell `&` inside another call: that backgrounded
-# child is reaped when the call returns, leaving NO watcher running and a false
-# "already running" off the dying process. That exact mistake silently took
-# supervision down for ~30 minutes.
+# NEVER fire it and forget with a shell `&` inside another call: that hides launch
+# failure and severs the harness notification path when the watcher exits.
 # On a harness with a PreToolUse-equivalent hook, bin/fm-arm-pretool-check.sh
 # applies the command-position policy before the command runs; see
 # docs/arm-pretool-check.md for the blessed tree and deny reason codes. It is a
 # pre-execution seatbelt, not a substitute for the verification here.
 #
-# This script forks the watcher as a tracked child, then VERIFIES the outcome
-# before it settles in. It confirms a watcher process is genuinely alive AND the
+# This script starts the watcher in a separate process session, keeps waiting on
+# that child for wake delivery, and VERIFIES the outcome before it settles in.
+# It confirms a watcher process is genuinely alive AND the
 # liveness beacon (state/.last-watcher-beat) is fresh within FM_GUARD_GRACE (the
 # single source of truth, shared with fm-watch.sh and fm-guard.sh), and prints
 # exactly one unambiguous status line:

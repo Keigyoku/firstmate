@@ -59,7 +59,7 @@ Full detail on every feature lives in [docs/architecture.md](docs/architecture.m
 - A verified agent harness: Claude Code, Grok, Pi, Codex, OpenCode, Cursor, or Hermes.
 - Git and the GitHub CLI, authenticated through `gh auth login`.
 - tmux, for the reference session backend.
-- A watcher session launcher: `setsid`, or Perl with POSIX support as the macOS fallback.
+- The [universal toolchain and watcher launcher requirements](docs/configuration.md#toolchain).
 
 The first mate detects and offers to install everything else.
 
