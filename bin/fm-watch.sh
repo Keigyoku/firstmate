@@ -258,7 +258,7 @@ watchdog_marker_key() {
 }
 
 watchdog_check_rotation() {  # <task> <harness> <marker-file>
-  local task=$1 harness=$2 marker=$3 old_sig old_sid old_generation file sig new_sid generation claim
+  local task=$1 harness=$2 marker=$3 old_sig old_sid old_generation file sig new_sid generation claim key
   [ -s "$marker" ] || return 0
   old_sig=$(sed -n '1p' "$marker")
   old_sid=$(sed -n '2p' "$marker")
@@ -276,8 +276,9 @@ watchdog_check_rotation() {  # <task> <harness> <marker-file>
   new_sid=$(fm_watchdog_session_id_from_file "$harness" "$file" 2>/dev/null || basename "$file")
   fm_watchdog_event compact_rotated "$task" rearmed "old_sid=$old_sid new_sid=$new_sid file=$file compact_generation=$generation"
   fm_watchdog_arm_session "$task" "$harness" "$file"
-  printf '%s\n%s\n%s\n' "$old_sig" "$old_sid" "$generation" > "$STATE/watchdog/.compact-handled-$(watchdog_marker_key "$task")"
-  rm -f "$marker"
+  key=$(watchdog_marker_key "$task")
+  printf '%s\n%s\n%s\n' "$old_sig" "$old_sid" "$generation" > "$STATE/watchdog/.compact-handled-$key"
+  rm -f "$marker" "$STATE/watchdog/.compact-wrap-ack-$key"
   watchdog_resident_rotation_release "$task" "$claim"
 }
 
@@ -452,7 +453,7 @@ watchdog_start_compact_delivery() {
   local task=$1 harness=$2 context=$3 pending=$4 inflight=$5 ack=$6 request=$7 pid claim
   claim=$(watchdog_resident_rotation_claim "$task" compact-steer) || return 0
   (
-    local rc identity_rc
+    local rc identity_rc now
     trap 'watchdog_resident_rotation_release "$task" "$claim"' EXIT
     if [ -n "${FM_WATCHDOG_BEFORE_COMPACT_DELIVERY:-}" ]; then
       "$FM_WATCHDOG_BEFORE_COMPACT_DELIVERY" "$task" "$harness"
@@ -505,12 +506,9 @@ watchdog_start_compact_delivery() {
         elif [ "$identity_rc" -eq 2 ]; then
           sed '6s/.*/wrap_requested/' "$pending" > "$pending.tmp" && mv -f "$pending.tmp" "$pending"
         else
-          rm -f "$ack"
+          now=$(date -u +%s)
+          sed -e "5s/.*/$now/" -e '6s/.*/compact_ambiguous/' "$pending" > "$pending.tmp" && mv -f "$pending.tmp" "$pending"
           fm_watchdog_event compact_steer_failed "$task" "rc=$rc" "context_pct=$context request=$request"
-          rm -f "$pending"
-          if [ "$rc" -eq 4 ]; then
-            watchdog_start_successor "$task" "$context" "steer_undeliverable" "$rc"
-          fi
         fi
       fi
     else
@@ -534,10 +532,10 @@ watchdog_start_compact_delivery() {
 }
 
 watchdog_compact_wrap_pending() {
-  local task=$1 harness=$2 pending=$3 inflight=$4 ack_timeout=$5 key=$6 deadline_only=${7:-false} phase request requested_at context ack age now
+  local task=$1 harness=$2 pending=$3 inflight=$4 ack_timeout=$5 key=$6 deadline_only=${7:-false} phase request requested_at context ack age now event_type reason
   [ -s "$pending" ] || return 1
   phase=$(sed -n '6p' "$pending")
-  [ "$phase" = wrap_requested ] || return 1
+  case "$phase" in wrap_requested|compact_ambiguous) ;; *) return 1 ;; esac
   request=$(sed -n '4p' "$pending")
   requested_at=$(sed -n '5p' "$pending")
   context=$(sed -n '7p' "$pending")
@@ -550,10 +548,17 @@ watchdog_compact_wrap_pending() {
   age=$((now - requested_at))
   if [ "$age" -ge "$ack_timeout" ]; then
     rm -f "$pending" "$ack"
-    fm_watchdog_event compact_wrap_timeout "$task" successor "request=$request age_sec=$age timeout_sec=$ack_timeout context_pct=$context"
-    watchdog_start_successor "$task" "$context" "compact_wrap_timeout"
+    event_type=compact_wrap_timeout
+    reason=compact_wrap_timeout
+    if [ "$phase" = compact_ambiguous ]; then
+      event_type=compact_ambiguous_timeout
+      reason=compact_ambiguous_timeout
+    fi
+    fm_watchdog_event "$event_type" "$task" successor "request=$request age_sec=$age timeout_sec=$ack_timeout context_pct=$context"
+    watchdog_start_successor "$task" "$context" "$reason"
     return 0
   fi
+  [ "$phase" = compact_ambiguous ] && return 0
   [ "$deadline_only" = true ] && return 1
   if [ -s "$ack" ] && [ "$(sed -n '1p' "$ack")" = "$request" ]; then
     watchdog_start_compact_delivery "$task" "$harness" "$context" "$pending" "$inflight" "$ack" "$request"
@@ -664,10 +669,16 @@ watchdog_threshold_scan() {
     watchdog_resident_rotation_active "$task" && continue
     watchdog_check_rotation "$task" "$harness" "$pending"
     phase=$(sed -n '6p' "$pending" 2>/dev/null || true)
-    if [ "$phase" = wrap_requested ]; then
-      watchdog_steer_inflight "$inflight" && continue
-      watchdog_compact_wrap_pending "$task" "$harness" "$pending" "$inflight" "$wrap_ack_timeout" "$key" true && continue
-    fi
+    case "$phase" in
+      wrap_requested)
+        watchdog_steer_inflight "$inflight" && continue
+        watchdog_compact_wrap_pending "$task" "$harness" "$pending" "$inflight" "$wrap_ack_timeout" "$key" true && continue
+        ;;
+      compact_ambiguous)
+        watchdog_steer_inflight "$inflight" && continue
+        watchdog_compact_wrap_pending "$task" "$harness" "$pending" "$inflight" "$wrap_ack_timeout" "$key" && continue
+        ;;
+    esac
     watchdog_meta_target_exists "$meta" "$task" || continue
     watchdog_check_clear_rotation "$task" "$harness" "$clear_pending"
     watchdog_pending_active "$clear_pending" "$task" "$pending_retry" "$key" clear && continue

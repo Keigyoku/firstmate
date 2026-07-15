@@ -204,6 +204,7 @@ The pending marker also records the transcript identity and compact generation o
 The final identity and generation validation runs inside the timed delivery process immediately before its backend send.
 An incomplete or malformed rollout makes generation unavailable and defers delivery instead of using a partial count.
 The acknowledgement deadline starts only after wrap delivery succeeds, and `/compact` uses one bounded delivery attempt so an ambiguous attempt cannot retry across a transcript rotation.
+If that attempt returns ambiguously before rotation is visible, the watcher preserves the pending identity and generation proof without retrying, then either marks a later rotation handled or enters successor handoff after another `compact_wrap_ack_timeout_sec`.
 An unresponsive wrap request expires after `compact_wrap_ack_timeout_sec` and enters the existing successor handoff path instead of delivering `/compact` blindly, even if all thresholds are disabled while the request is pending.
 When the task reaches `thresholds.successor_at_context_pct`, `fm-watch.sh` records a `clear_threshold` event and asks the task to complete its current unit and run `/clear`.
 When a harness reaches either budget embargo threshold, the watcher writes `fm-state/watchdog/embargo-<harness>` atomically and records an `embargo` event.
