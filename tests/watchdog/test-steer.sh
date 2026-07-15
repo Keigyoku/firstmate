@@ -46,6 +46,12 @@ write_codex_rollout() {
     '{type:"event_msg",payload:{type:"token_count",info:{last_token_usage:{total_tokens:$total},model_context_window:1000},rate_limits:{primary:{used_percent:11},secondary:{used_percent:22}}}}' >> "$path"
 }
 
+append_codex_compaction() {
+  local path=$1 generation=$2
+  jq -cn --arg generation "$generation" '{type:"compacted",payload:{message:$generation,replacement_history:[]}}' >> "$path"
+  jq -cn '{type:"event_msg",payload:{type:"context_compacted"}}' >> "$path"
+}
+
 write_claude_jsonl() {
   local path=$1 session_id=$2 compact_uuid=${3:-}
   mkdir -p "$(dirname "$path")"
@@ -68,6 +74,10 @@ make_success_double() {
   cat > "$path" <<'SH'
 #!/usr/bin/env bash
 printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$FM_STEER_DOUBLE_LOG"
+if [ "${FM_STEER_ASSERT_ACK_EVENT_ABSENT:-}" = 1 ] && [ "$3" = /compact ] \
+  && grep -q '"type":"compact_wrap_acknowledged"' "$FM_HOME/fm-state/watchdog.events"; then
+  exit 9
+fi
 exit 0
 SH
   chmod +x "$path"
@@ -80,6 +90,17 @@ make_failure_double() {
 #!/usr/bin/env bash
 printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$FM_STEER_DOUBLE_LOG"
 exit 9
+SH
+  chmod +x "$path"
+  : > "$log"
+}
+
+make_compact_failure_double() {
+  local path=$1 log=$2
+  cat > "$path" <<'SH'
+#!/usr/bin/env bash
+printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$FM_STEER_DOUBLE_LOG"
+[ "$3" != /compact ]
 SH
   chmod +x "$path"
   : > "$log"
@@ -337,7 +358,7 @@ test_watcher_starts_compact_steer_without_blocking() {
   status=$?
   expect_code 124 "$status" "watcher should still be sleeping its normal poll when the test timeout stops it"
   event="$home/fm-state/watchdog.events"
-  assert_contains "$(cat "$event")" '"type":"compact_steer_started"' "watcher should record async steer start before the backend send completes"
+  assert_contains "$(cat "$event")" '"type":"compact_wrap_started"' "watcher should record async wrap start before the backend send completes"
   sleep 5
   pass "watcher starts compact steer asynchronously"
 }
@@ -377,7 +398,7 @@ test_unarmed_session_is_not_steered_on_first_discovery() {
 }
 
 test_rotation_rearms_new_session() {
-  local home config session_dir worktree double log pending handled new_sig status event threshold_count timeout_cmd
+  local home config session_dir worktree double log pending handled new_sig status event threshold_count timeout_cmd compact_count
   if command -v timeout >/dev/null 2>&1; then
     timeout_cmd=timeout
   elif command -v gtimeout >/dev/null 2>&1; then
@@ -427,6 +448,8 @@ test_rotation_rearms_new_session() {
     bash -c '. "$1"; file=$(fm_watchdog_session_file codex demo); fm_watchdog_file_identity "$file"' _ "$ROOT/bin/fm-watchdog-lib.sh")
   [ "$(sed -n '1p' "$handled")" != "$new_sig" ] || fail "rotation must not mark the new session as handled"
   [ ! -e "$pending" ] || fail "rotation should clear the old pending marker"
+  compact_count=$(grep -cF 'tmux|target-pane|/compact' "$log" || true)
+  [ "$compact_count" = 0 ] || fail "transcript rotation must cancel pending compact delivery"
 
   sleep 1
   write_codex_rollout "$session_dir/rollout-new-low.jsonl" "$worktree" 900 new-sid
@@ -438,8 +461,7 @@ test_rotation_rearms_new_session() {
   event="$home/fm-state/watchdog.events"
   threshold_count=$(grep -c '"type":"compact_threshold"' "$event")
   [ "$threshold_count" = 2 ] || fail "new session should trigger its own compact threshold, got $threshold_count"
-  [ "$(tail -n 1 "$log")" = "tmux|target-pane|/compact complete current task, then /compact" ] \
-    || fail "new session threshold should deliver a second compact steer"
+  assert_contains "$(tail -n 1 "$log")" "WATCHDOG WRAP REQUEST" "new session threshold should deliver a second wrap request"
   pass "watcher re-arms compact threshold after transcript rotation"
 }
 
@@ -503,6 +525,7 @@ test_same_file_claude_compact_summary_rearms_session() {
   expect_code 124 "$status" "same generation watcher pass should be stopped by test timeout"
   send_count=$(wc -l < "$log" | tr -d '[:space:]')
   [ "$send_count" = 1 ] || fail "handled same-file compact generation should not steer again, got $send_count sends"
+  [ "$(grep -cF 'tmux|target-pane|/compact' "$log" || true)" = 0 ] || fail "auto-compact generation change must cancel pending compact delivery"
 
   write_claude_checkpoint "$checkpoint_dir" claude-sid 0
   "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CLAUDE_SESSION_DIR="$session_dir" \
@@ -525,27 +548,69 @@ test_same_file_claude_compact_summary_rearms_session() {
   pass "watcher re-arms after same-file Claude compact summary"
 }
 
-test_stale_pending_retries_without_rotation() {
-  local home config session_dir worktree double log pending status event threshold_count send_count timeout_cmd
+test_same_file_codex_compaction_cancels_wrap() {
+  local home config session_dir worktree rollout double log pending status event timeout_cmd
   if command -v timeout >/dev/null 2>&1; then
     timeout_cmd=timeout
   elif command -v gtimeout >/dev/null 2>&1; then
     timeout_cmd=gtimeout
   else
-    pass "timeout helper unavailable; skipping stale pending retry coverage"
+    pass "timeout helper unavailable; skipping same-file Codex compact coverage"
     return
   fi
-  home="$TMP_ROOT/pending-retry-home"
-  config="$TMP_ROOT/pending-retry-config"
-  session_dir="$TMP_ROOT/pending-retry-sessions"
-  worktree="$TMP_ROOT/pending-retry-worktree"
-  double="$TMP_ROOT/pending-retry-double"
-  log="$TMP_ROOT/pending-retry.log"
+  home="$TMP_ROOT/codex-same-file-home"
+  config="$TMP_ROOT/codex-same-file-config"
+  session_dir="$TMP_ROOT/codex-same-file-sessions"
+  worktree="$TMP_ROOT/codex-same-file-worktree"
+  rollout="$session_dir/rollout-demo.jsonl"
+  double="$TMP_ROOT/codex-same-file-double"
+  log="$TMP_ROOT/codex-same-file.log"
   mkdir -p "$home/state" "$worktree"
   fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
   write_fast_threshold_config "$config"
-  jq '.compact_pending_retry_sec = 1' "$config/watchdog.json" > "$config/watchdog.json.tmp"
-  mv "$config/watchdog.json.tmp" "$config/watchdog.json"
+  write_codex_rollout "$rollout" "$worktree" 900 same-sid
+  make_success_double "$double" "$log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial same-file Codex pass should arm the session"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "same-file Codex request pass should keep polling"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  assert_present "$pending" "same-file Codex test should create a pending wrap"
+  [ "$(sed -n '3p' "$pending")" = codex:0 ] || fail "pending wrap should record the initial Codex compact generation"
+  append_codex_compaction "$rollout" compact-one
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "same-file Codex compaction cancellation should keep polling"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"type":"compact_rotated"' "same-rollout Codex compaction should cancel the pending wrap"
+  assert_contains "$(cat "$event")" 'compact_generation=codex:1' "same-rollout Codex event should record the new generation"
+  [ "$(grep -cF 'tmux|target-pane|/compact' "$log" || true)" = 0 ] || fail "same-rollout Codex compaction must prevent compact delivery"
+  pass "watcher detects same-rollout Codex compaction"
+}
+
+test_wrap_ack_delivers_compact() {
+  local home config session_dir worktree double log pending ack request message marker_command status event timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping wrap acknowledgement coverage"
+    return
+  fi
+  home="$TMP_ROOT/wrap-ack-home's"
+  config="$TMP_ROOT/wrap-ack-config"
+  session_dir="$TMP_ROOT/wrap-ack-sessions"
+  worktree="$TMP_ROOT/wrap-ack-worktree"
+  double="$TMP_ROOT/wrap-ack-double"
+  log="$TMP_ROOT/wrap-ack.log"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
   make_success_double "$double" "$log"
   write_codex_rollout "$session_dir/rollout-demo.jsonl" "$worktree" 900 same-sid
 
@@ -553,29 +618,716 @@ test_stale_pending_retries_without_rotation() {
     FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
     "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
   status=$?
-  expect_code 124 "$status" "initial pending-retry watcher pass should arm the session"
+  expect_code 124 "$status" "initial wrap-ack watcher pass should arm the session"
 
   "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
     FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
     "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
   status=$?
-  expect_code 124 "$status" "initial pending-retry watcher run should be stopped by test timeout"
+  expect_code 124 "$status" "wrap-request watcher run should be stopped by test timeout"
   pending="$home/state/watchdog/.compact-pending-demo"
-  assert_present "$pending" "successful compact steer should leave a pending marker"
+  assert_present "$pending" "successful wrap request should leave a pending marker"
+  [ "$(sed -n '6p' "$pending")" = wrap_requested ] || fail "pending marker should wait for wrap acknowledgement"
+  request=$(sed -n '4p' "$pending")
+  ack="$home/state/watchdog/.compact-wrap-ack-demo"
+  message=$(cut -d'|' -f3- "$log")
+  assert_contains "$message" "WATCHDOG WRAP REQUEST $request" "delivered wrap should contain its pending token"
+  assert_contains "$message" "Complete and land the current unit of work." "delivered wrap should require complete-and-land"
+  assert_contains "$message" "Do not run /compact yourself." "delivered wrap should forbid crew-driven compact"
+  marker_command=${message#*atomically by running: }
+  bash -c "$marker_command" || fail "delivered wrap marker command should execute successfully"
+  [ "$(cat "$ack")" = "$request" ] || fail "delivered wrap marker command should atomically write the exact token"
 
-  sleep 2
   "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
-    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
+    FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_STEER_ASSERT_ACK_EVENT_ABSENT=1 FM_POLL=30 \
     "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
   status=$?
-  expect_code 124 "$status" "retry watcher run should be stopped by test timeout"
+  expect_code 124 "$status" "acknowledged watcher run should be stopped by test timeout"
   event="$home/fm-state/watchdog.events"
-  assert_contains "$(cat "$event")" '"type":"compact_pending_expired"' "stale pending marker should be reported before retry"
-  threshold_count=$(grep -c '"type":"compact_threshold"' "$event")
-  [ "$threshold_count" = 2 ] || fail "stale pending session should trigger a second compact threshold, got $threshold_count"
-  send_count=$(wc -l < "$log" | tr -d '[:space:]')
-  [ "$send_count" = 2 ] || fail "stale pending session should retry delivery exactly once, got $send_count sends"
-  pass "watcher retries stale compact pending markers"
+  assert_contains "$(cat "$event")" '"type":"compact_wrap_acknowledged"' "matching acknowledgement should be accepted"
+  [ "$(tail -n 1 "$log")" = "tmux|target-pane|/compact" ] || fail "matching acknowledgement should deliver only the compact command"
+  [ "$(sed -n '6p' "$pending")" = compact_sent ] || fail "pending marker should wait for transcript rotation after compact delivery"
+  pass "watcher walks threshold through wrap acknowledgement to compact delivery"
+}
+
+test_wrap_ack_timeout_starts_successor() {
+  local home config session_dir worktree double log successor successor_log pending ack request status event timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then timeout_cmd=timeout; elif command -v gtimeout >/dev/null 2>&1; then timeout_cmd=gtimeout; else pass "timeout helper unavailable; skipping wrap timeout coverage"; return; fi
+  home="$TMP_ROOT/wrap-timeout-home"
+  config="$TMP_ROOT/wrap-timeout-config"
+  session_dir="$TMP_ROOT/wrap-timeout-sessions"
+  worktree="$TMP_ROOT/wrap-timeout-worktree"
+  double="$TMP_ROOT/wrap-timeout-double"
+  log="$TMP_ROOT/wrap-timeout.log"
+  successor="$TMP_ROOT/wrap-timeout-successor"
+  successor_log="$TMP_ROOT/wrap-timeout-successor.log"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  jq '.compact_wrap_ack_timeout_sec = 1' "$config/watchdog.json" > "$config/watchdog.json.tmp"
+  mv "$config/watchdog.json.tmp" "$config/watchdog.json"
+  write_codex_rollout "$session_dir/rollout-demo.jsonl" "$worktree" 900 same-sid
+  make_success_double "$double" "$log"
+  cat > "$successor" <<'SH'
+#!/usr/bin/env bash
+printf '%s|%s\n' "$1" "$2" >> "$FM_SUCCESSOR_LOG"
+SH
+  chmod +x "$successor"
+  : > "$successor_log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial wrap-timeout pass should arm the session"
+  "$timeout_cmd" 2 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "wrap-timeout request pass should keep polling"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  assert_present "$pending" "wrap timeout test should create a pending request"
+  request=$(sed -n '4p' "$pending")
+  ack="$home/state/watchdog/.compact-wrap-ack-demo"
+  sleep 2
+  printf '%s\n' "$request" > "$ack"
+  rm -f "$session_dir/rollout-demo.jsonl"
+  fm_write_meta "$home/state/demo.meta" "window=missing-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  jq '.thresholds |= with_entries(.value = null)' "$config/watchdog.json" > "$config/watchdog.json.tmp"
+  mv "$config/watchdog.json.tmp" "$config/watchdog.json"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_WATCHDOG_SUCCESSOR_CMD="$successor" FM_SUCCESSOR_LOG="$successor_log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "wrap-timeout escalation should keep the watcher polling after successor handoff"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"type":"compact_wrap_timeout"' "expired wrap request should record a timeout"
+  [ -s "$successor_log" ] || fail "expired wrap request should enter the successor path"
+  [ "$(wc -l < "$log" | tr -d '[:space:]')" = 1 ] || fail "expired wrap request must not deliver compact"
+  pass "disabled thresholds still expire wrap acknowledgement without blind compact"
+}
+
+test_wrap_ack_deadline_starts_after_delivery() {
+  local home config session_dir worktree double log pending requested_at delivery_started status timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping wrap delivery deadline coverage"
+    return
+  fi
+  home="$TMP_ROOT/wrap-delivery-deadline-home"
+  config="$TMP_ROOT/wrap-delivery-deadline-config"
+  session_dir="$TMP_ROOT/wrap-delivery-deadline-sessions"
+  worktree="$TMP_ROOT/wrap-delivery-deadline-worktree"
+  double="$TMP_ROOT/wrap-delivery-deadline-double"
+  log="$TMP_ROOT/wrap-delivery-deadline.log"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  jq '.compact_wrap_ack_timeout_sec = 1' "$config/watchdog.json" > "$config/watchdog.json.tmp"
+  mv "$config/watchdog.json.tmp" "$config/watchdog.json"
+  write_codex_rollout "$session_dir/rollout-demo.jsonl" "$worktree" 900 same-sid
+  cat > "$double" <<'SH'
+#!/usr/bin/env bash
+printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$FM_STEER_DOUBLE_LOG"
+case "$3" in WATCHDOG\ WRAP\ REQUEST*) sleep 2 ;; esac
+exit 0
+SH
+  chmod +x "$double"
+  : > "$log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial wrap delivery deadline pass should arm the session"
+  delivery_started=$(date -u +%s)
+  "$timeout_cmd" 4 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "slow wrap delivery should keep polling after delivery"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  assert_present "$pending" "slow successful wrap delivery should create a pending request"
+  requested_at=$(sed -n '5p' "$pending")
+  [ "$requested_at" -ge $((delivery_started + 2)) ] || fail "acknowledgement deadline should start after slow wrap delivery succeeds"
+  pass "wrap acknowledgement deadline starts after delivery"
+}
+
+test_compact_delivery_does_not_retry_across_rotation() {
+  local home config session_dir worktree double log pending ack request successor successor_log status event compact_count timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping compact retry rotation coverage"
+    return
+  fi
+  home="$TMP_ROOT/compact-retry-rotation-home"
+  config="$TMP_ROOT/compact-retry-rotation-config"
+  session_dir="$TMP_ROOT/compact-retry-rotation-sessions"
+  worktree="$TMP_ROOT/compact-retry-rotation-worktree"
+  double="$TMP_ROOT/compact-retry-rotation-double"
+  log="$TMP_ROOT/compact-retry-rotation.log"
+  successor="$TMP_ROOT/compact-retry-rotation-successor"
+  successor_log="$TMP_ROOT/compact-retry-rotation-successor.log"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  jq '.steer_retries = 3' "$config/watchdog.json" > "$config/watchdog.json.tmp"
+  mv "$config/watchdog.json.tmp" "$config/watchdog.json"
+  write_codex_rollout "$session_dir/rollout-old.jsonl" "$worktree" 900 old-sid
+  cat > "$double" <<'SH'
+#!/usr/bin/env bash
+printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$FM_STEER_DOUBLE_LOG"
+if [ "$3" = /compact ]; then
+  sleep 1
+  jq -cn --arg cwd "$FM_RETRY_WORKTREE" '{type:"session_meta",payload:{session_id:"new-sid",cwd:$cwd}}' > "$FM_RETRY_SESSION_DIR/rollout-new.jsonl"
+  jq -cn '{type:"event_msg",payload:{type:"token_count",info:{last_token_usage:{total_tokens:0},model_context_window:1000}}}' >> "$FM_RETRY_SESSION_DIR/rollout-new.jsonl"
+  exit 9
+fi
+exit 0
+SH
+  chmod +x "$double"
+  : > "$log"
+  cat > "$successor" <<'SH'
+#!/usr/bin/env bash
+printf '%s|%s\n' "$1" "$2" >> "$FM_SUCCESSOR_LOG"
+SH
+  chmod +x "$successor"
+  : > "$successor_log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial compact retry rotation pass should arm the session"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "compact retry rotation request pass should keep polling"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  request=$(sed -n '4p' "$pending")
+  ack="$home/state/watchdog/.compact-wrap-ack-demo"
+  printf '%s\n' "$request" > "$ack"
+
+  "$timeout_cmd" 4 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_STEER_BACKOFF_SEC=0 FM_WATCHDOG_SUCCESSOR_CMD="$successor" FM_SUCCESSOR_LOG="$successor_log" FM_RETRY_SESSION_DIR="$session_dir" FM_RETRY_WORKTREE="$worktree" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "ambiguous compact delivery should keep polling after rotation cancellation"
+  compact_count=$(grep -cF 'tmux|target-pane|/compact' "$log" || true)
+  [ "$compact_count" = 1 ] || fail "compact delivery must make exactly one attempt across rotation, got $compact_count"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"type":"compact_rotated"' "rotation after an ambiguous compact attempt should cancel delivery"
+  [ ! -s "$successor_log" ] || fail "rotation after an ambiguous compact attempt should not start a successor"
+  pass "compact delivery does not retry across rotation"
+}
+
+test_wrap_rotation_wins_expired_deadline() {
+  local home config session_dir worktree double log successor successor_log pending status event timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping expired rotation coverage"
+    return
+  fi
+  home="$TMP_ROOT/wrap-expired-rotation-home"
+  config="$TMP_ROOT/wrap-expired-rotation-config"
+  session_dir="$TMP_ROOT/wrap-expired-rotation-sessions"
+  worktree="$TMP_ROOT/wrap-expired-rotation-worktree"
+  double="$TMP_ROOT/wrap-expired-rotation-double"
+  log="$TMP_ROOT/wrap-expired-rotation.log"
+  successor="$TMP_ROOT/wrap-expired-rotation-successor"
+  successor_log="$TMP_ROOT/wrap-expired-rotation-successor.log"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  jq '.compact_wrap_ack_timeout_sec = 1' "$config/watchdog.json" > "$config/watchdog.json.tmp"
+  mv "$config/watchdog.json.tmp" "$config/watchdog.json"
+  write_codex_rollout "$session_dir/rollout-old.jsonl" "$worktree" 900 old-sid
+  make_success_double "$double" "$log"
+  cat > "$successor" <<'SH'
+#!/usr/bin/env bash
+printf '%s|%s\n' "$1" "$2" >> "$FM_SUCCESSOR_LOG"
+SH
+  chmod +x "$successor"
+  : > "$successor_log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial expired rotation pass should arm the session"
+  "$timeout_cmd" 2 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "expired rotation request pass should keep polling"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  assert_present "$pending" "expired rotation test should create a pending request"
+  sleep 2
+  write_codex_rollout "$session_dir/rollout-new.jsonl" "$worktree" 0 new-sid
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_WATCHDOG_SUCCESSOR_CMD="$successor" FM_SUCCESSOR_LOG="$successor_log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "expired rotation cancellation should keep polling"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"type":"compact_rotated"' "observable rotation should cancel an expired wrap"
+  [ "$(grep -c '"type":"compact_wrap_timeout"' "$event" || true)" = 0 ] || fail "observable rotation should win over timeout escalation"
+  [ ! -s "$successor_log" ] || fail "observable rotation should not start a successor for the stale request"
+  [ "$(grep -cF 'tmux|target-pane|/compact' "$log" || true)" = 0 ] || fail "observable rotation should not deliver compact"
+  pass "transcript rotation wins over an expired wrap deadline"
+}
+
+test_wrap_ack_revalidates_at_backend_send() {
+  local home config session_dir worktree rollout double log pending ack request compact status event timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping pre-delivery rotation coverage"
+    return
+  fi
+  home="$TMP_ROOT/wrap-race-home"
+  config="$TMP_ROOT/wrap-race-config"
+  session_dir="$TMP_ROOT/wrap-race-sessions"
+  worktree="$TMP_ROOT/wrap-race-worktree"
+  double="$TMP_ROOT/wrap-race-double"
+  log="$TMP_ROOT/wrap-race.log"
+  rollout="$session_dir/rollout-demo.jsonl"
+  compact="$TMP_ROOT/wrap-race-compact"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  make_success_double "$double" "$log"
+  write_codex_rollout "$rollout" "$worktree" 900 old-sid
+  cat > "$compact" <<'SH'
+#!/usr/bin/env bash
+jq -cn '{type:"compacted",payload:{message:"setup-gap",replacement_history:[]}}' >> "$FM_RACE_ROLLOUT"
+jq -cn '{type:"event_msg",payload:{type:"context_compacted"}}' >> "$FM_RACE_ROLLOUT"
+SH
+  chmod +x "$compact"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial pre-delivery rotation pass should arm the session"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "pre-delivery rotation request pass should keep polling"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  request=$(sed -n '4p' "$pending")
+  ack="$home/state/watchdog/.compact-wrap-ack-demo"
+  printf '%s\n' "$request" > "$ack"
+
+  "$timeout_cmd" 3 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_STEER_BEFORE_DELIVERY_ATTEMPT_CMD="$compact" FM_RACE_ROLLOUT="$rollout" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "pre-delivery rotation cancellation should keep polling"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"type":"compact_rotated"' "same-rollout compaction during steer setup should cancel the pending compact"
+  [ "$(grep -cF 'tmux|target-pane|/compact' "$log" || true)" = 0 ] || fail "backend-send guard must prevent compact after setup-gap compaction"
+  pass "watcher revalidates Codex generation at backend send"
+}
+
+test_wrap_ack_partial_codex_tail_fails_closed() {
+  local home config session_dir worktree rollout double log pending ack request partial status event timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping partial Codex tail coverage"
+    return
+  fi
+  home="$TMP_ROOT/wrap-partial-tail-home"
+  config="$TMP_ROOT/wrap-partial-tail-config"
+  session_dir="$TMP_ROOT/wrap-partial-tail-sessions"
+  worktree="$TMP_ROOT/wrap-partial-tail-worktree"
+  rollout="$session_dir/rollout-demo.jsonl"
+  double="$TMP_ROOT/wrap-partial-tail-double"
+  log="$TMP_ROOT/wrap-partial-tail.log"
+  partial="$TMP_ROOT/wrap-partial-tail-append"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  make_success_double "$double" "$log"
+  write_codex_rollout "$rollout" "$worktree" 900 old-sid
+  cat > "$partial" <<'SH'
+#!/usr/bin/env bash
+printf '%s' '{"type":"compacted"' >> "$FM_PARTIAL_ROLLOUT"
+SH
+  chmod +x "$partial"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial partial-tail pass should arm the session"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "partial-tail request pass should keep polling"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  request=$(sed -n '4p' "$pending")
+  ack="$home/state/watchdog/.compact-wrap-ack-demo"
+  printf '%s\n' "$request" > "$ack"
+
+  "$timeout_cmd" 3 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_STEER_BEFORE_DELIVERY_ATTEMPT_CMD="$partial" FM_PARTIAL_ROLLOUT="$rollout" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "partial-tail guarded delivery should keep polling"
+  [ "$(grep -cF 'tmux|target-pane|/compact' "$log" || true)" = 0 ] || fail "partial Codex tail must prevent compact delivery"
+  [ "$(sed -n '6p' "$pending")" = wrap_requested ] || fail "partial Codex tail should leave the wrap pending"
+  [ "$(cat "$ack")" = "$request" ] || fail "partial Codex tail should preserve the matching acknowledgement"
+  event="$home/fm-state/watchdog.events"
+  [ "$(grep -c '"type":"compact_wrap_acknowledged"' "$event" || true)" = 0 ] || fail "partial Codex tail must not acknowledge compact delivery"
+  pass "partial Codex rollout tails fail closed"
+}
+
+test_transient_generation_unavailable_restores_bounded_wrap() {
+  local home config session_dir worktree rollout double log pending ack request fakebin jq_count successor successor_log status event timeout_cmd real_jq
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping transient generation coverage"
+    return
+  fi
+  home="$TMP_ROOT/transient-generation-home"
+  config="$TMP_ROOT/transient-generation-config"
+  session_dir="$TMP_ROOT/transient-generation-sessions"
+  worktree="$TMP_ROOT/transient-generation-worktree"
+  rollout="$session_dir/rollout-demo.jsonl"
+  double="$TMP_ROOT/transient-generation-double"
+  log="$TMP_ROOT/transient-generation.log"
+  fakebin="$TMP_ROOT/transient-generation-fakebin"
+  jq_count="$TMP_ROOT/transient-generation-jq-count"
+  successor="$TMP_ROOT/transient-generation-successor"
+  successor_log="$TMP_ROOT/transient-generation-successor.log"
+  mkdir -p "$home/state" "$worktree" "$fakebin"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  jq '.compact_wrap_ack_timeout_sec = 5' "$config/watchdog.json" > "$config/watchdog.json.tmp"
+  mv "$config/watchdog.json.tmp" "$config/watchdog.json"
+  write_codex_rollout "$rollout" "$worktree" 900 same-sid
+  make_success_double "$double" "$log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial transient generation pass should arm the session"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "transient generation request pass should keep polling"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  request=$(sed -n '4p' "$pending")
+  ack="$home/state/watchdog/.compact-wrap-ack-demo"
+  printf '%s\n' "$request" > "$ack"
+  jq '.thresholds |= with_entries(.value = null)' "$config/watchdog.json" > "$config/watchdog.json.tmp"
+  mv "$config/watchdog.json.tmp" "$config/watchdog.json"
+
+  real_jq=$(command -v jq)
+  cat > "$fakebin/jq" <<'SH'
+#!/usr/bin/env bash
+last=${!#}
+if [ "$last" = "$FM_TRANSIENT_ROLLOUT" ]; then
+  case "$*" in
+    *'select(.type == "compacted")'*)
+      count=$(cat "$FM_TRANSIENT_JQ_COUNT" 2>/dev/null || printf '0\n')
+      count=$((count + 1))
+      printf '%s\n' "$count" > "$FM_TRANSIENT_JQ_COUNT"
+      if [ "$count" -eq 2 ]; then
+        output=$("$FM_REAL_JQ" "$@")
+        rc=$?
+        [ "$rc" -eq 0 ] || exit "$rc"
+        printf '%s' '{"type":"compacted"' >> "$FM_TRANSIENT_ROLLOUT"
+        printf '%s\n' "$output"
+        exit 0
+      fi
+      ;;
+  esac
+fi
+exec "$FM_REAL_JQ" "$@"
+SH
+  chmod +x "$fakebin/jq"
+  cat > "$successor" <<'SH'
+#!/usr/bin/env bash
+printf '%s|%s\n' "$1" "$2" >> "$FM_SUCCESSOR_LOG"
+SH
+  chmod +x "$successor"
+  : > "$successor_log"
+
+  "$timeout_cmd" 1 env PATH="$fakebin:$PATH" FM_REAL_JQ="$real_jq" FM_TRANSIENT_ROLLOUT="$rollout" FM_TRANSIENT_JQ_COUNT="$jq_count" FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 bash -e "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "transient generation failure should keep polling"
+  [ "$(sed -n '6p' "$pending")" = wrap_requested ] || fail "transient generation failure should restore the bounded wrap phase"
+  [ "$(cat "$ack")" = "$request" ] || fail "transient generation failure should preserve the matching acknowledgement"
+  [ "$(grep -cF 'tmux|target-pane|/compact' "$log" || true)" = 0 ] || fail "transient generation failure must prevent compact delivery"
+  sleep 6
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_WATCHDOG_SUCCESSOR_CMD="$successor" FM_SUCCESSOR_LOG="$successor_log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "transient generation timeout should keep polling after successor handoff"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"type":"compact_wrap_timeout"' "restored wrap should retain bounded timeout handling"
+  [ -s "$successor_log" ] || fail "restored wrap should enter the successor path after expiry"
+  pass "transient unavailable generation restores bounded wrap recovery"
+}
+
+test_ambiguous_compact_tracks_delayed_generation() {
+  local home config session_dir worktree rollout double log pending ack request status event compact_count wrap_count timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping delayed compact generation coverage"
+    return
+  fi
+  home="$TMP_ROOT/compact-delayed-generation-home"
+  config="$TMP_ROOT/compact-delayed-generation-config"
+  session_dir="$TMP_ROOT/compact-delayed-generation-sessions"
+  worktree="$TMP_ROOT/compact-delayed-generation-worktree"
+  rollout="$session_dir/rollout-demo.jsonl"
+  double="$TMP_ROOT/compact-delayed-generation-double"
+  log="$TMP_ROOT/compact-delayed-generation.log"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  write_codex_rollout "$rollout" "$worktree" 900 same-sid
+  make_compact_failure_double "$double" "$log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial delayed generation pass should arm the session"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "delayed generation request pass should keep polling"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  request=$(sed -n '4p' "$pending")
+  ack="$home/state/watchdog/.compact-wrap-ack-demo"
+  printf '%s\n' "$request" > "$ack"
+
+  "$timeout_cmd" 2 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "ambiguous compact attempt should keep polling"
+  [ "$(sed -n '6p' "$pending")" = compact_ambiguous ] || fail "ambiguous compact attempt should preserve pending rotation proof"
+  assert_present "$ack" "ambiguous compact attempt should preserve its acknowledgement"
+  append_codex_compaction "$rollout" delayed-generation
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "delayed compact generation should be marked handled"
+  [ ! -e "$pending" ] || fail "delayed compact generation should clear ambiguous pending state"
+  [ ! -e "$ack" ] || fail "delayed compact generation should clear its acknowledgement"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" 'compact_generation=codex:1' "delayed compact generation should be recorded as handled"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "handled delayed generation should keep polling without another wrap"
+  compact_count=$(grep -cF 'tmux|target-pane|/compact' "$log" || true)
+  wrap_count=$(grep -c 'WATCHDOG WRAP REQUEST' "$log" || true)
+  [ "$compact_count" = 1 ] || fail "delayed compact generation must not trigger a second compact, got $compact_count"
+  [ "$wrap_count" = 1 ] || fail "delayed compact generation must not trigger another wrap, got $wrap_count"
+  pass "ambiguous compact tracks and handles delayed generation"
+}
+
+test_ambiguous_compact_timeout_starts_successor() {
+  local home config session_dir worktree double log pending ack request successor successor_log status event timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping ambiguous compact timeout coverage"
+    return
+  fi
+  home="$TMP_ROOT/compact-ambiguous-timeout-home"
+  config="$TMP_ROOT/compact-ambiguous-timeout-config"
+  session_dir="$TMP_ROOT/compact-ambiguous-timeout-sessions"
+  worktree="$TMP_ROOT/compact-ambiguous-timeout-worktree"
+  double="$TMP_ROOT/compact-ambiguous-timeout-double"
+  log="$TMP_ROOT/compact-ambiguous-timeout.log"
+  successor="$TMP_ROOT/compact-ambiguous-timeout-successor"
+  successor_log="$TMP_ROOT/compact-ambiguous-timeout-successor.log"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  jq '.compact_wrap_ack_timeout_sec = 3' "$config/watchdog.json" > "$config/watchdog.json.tmp"
+  mv "$config/watchdog.json.tmp" "$config/watchdog.json"
+  write_codex_rollout "$session_dir/rollout-demo.jsonl" "$worktree" 900 same-sid
+  make_compact_failure_double "$double" "$log"
+  cat > "$successor" <<'SH'
+#!/usr/bin/env bash
+printf '%s|%s\n' "$1" "$2" >> "$FM_SUCCESSOR_LOG"
+SH
+  chmod +x "$successor"
+  : > "$successor_log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial ambiguous timeout pass should arm the session"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "ambiguous timeout request pass should keep polling"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  request=$(sed -n '4p' "$pending")
+  ack="$home/state/watchdog/.compact-wrap-ack-demo"
+  printf '%s\n' "$request" > "$ack"
+  "$timeout_cmd" 2 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "ambiguous timeout attempt should keep polling"
+  [ "$(sed -n '6p' "$pending")" = compact_ambiguous ] || fail "failed compact should enter ambiguous recovery"
+  sleep 4
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_WATCHDOG_SUCCESSOR_CMD="$successor" FM_SUCCESSOR_LOG="$successor_log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "ambiguous compact timeout should keep polling after successor handoff"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"type":"compact_ambiguous_timeout"' "ambiguous compact should record bounded timeout"
+  [ -s "$successor_log" ] || fail "ambiguous compact timeout should start successor handoff"
+  [ "$(grep -cF 'tmux|target-pane|/compact' "$log" || true)" = 1 ] || fail "ambiguous recovery must never retry compact"
+  pass "ambiguous compact recovery expires into successor"
+}
+
+test_ambiguous_compact_timeout_preserves_proof_when_successor_unsupported() {
+  local home config session_dir worktree rollout double log pending ack request status event compact_count wrap_count timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping unsupported successor proof coverage"
+    return
+  fi
+  home="$TMP_ROOT/compact-ambiguous-unsupported-successor-home"
+  config="$TMP_ROOT/compact-ambiguous-unsupported-successor-config"
+  session_dir="$TMP_ROOT/compact-ambiguous-unsupported-successor-sessions"
+  worktree="$TMP_ROOT/compact-ambiguous-unsupported-successor-worktree"
+  rollout="$session_dir/rollout-demo.jsonl"
+  double="$TMP_ROOT/compact-ambiguous-unsupported-successor-double"
+  log="$TMP_ROOT/compact-ambiguous-unsupported-successor.log"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  jq '.compact_wrap_ack_timeout_sec = 3' "$config/watchdog.json" > "$config/watchdog.json.tmp"
+  mv "$config/watchdog.json.tmp" "$config/watchdog.json"
+  write_codex_rollout "$rollout" "$worktree" 900 same-sid
+  make_compact_failure_double "$double" "$log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial unsupported successor pass should arm the session"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "unsupported successor request pass should keep polling"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  request=$(sed -n '4p' "$pending")
+  ack="$home/state/watchdog/.compact-wrap-ack-demo"
+  printf '%s\n' "$request" > "$ack"
+  "$timeout_cmd" 2 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "unsupported successor compact attempt should keep polling"
+  [ "$(sed -n '6p' "$pending")" = compact_ambiguous ] || fail "unsupported successor compact should enter ambiguous recovery"
+  sed 's/^backend=.*/backend=orca/' "$home/state/demo.meta" > "$home/state/demo.meta.tmp"
+  mv "$home/state/demo.meta.tmp" "$home/state/demo.meta"
+  sleep 4
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "unsupported successor timeout should keep polling after skipped handoff"
+  [ "$(sed -n '6p' "$pending")" = compact_successor ] || fail "skipped successor handoff should retain terminal rotation proof"
+  [ ! -e "$ack" ] || fail "terminal successor proof should remove the consumed acknowledgement"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"type":"successor_threshold","sid":"demo","status":"skipped"' "Orca successor handoff should be skipped"
+  assert_contains "$(cat "$event")" 'reason=compact_ambiguous_timeout backend=orca' "skipped successor event should retain the ambiguous timeout reason"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "terminal successor proof should keep polling without another wrap"
+  [ "$(sed -n '6p' "$pending")" = compact_successor ] || fail "unsupported successor proof should remain terminal before rotation"
+  append_codex_compaction "$rollout" unsupported-successor-generation
+  sed 's/^backend=.*/backend=tmux/' "$home/state/demo.meta" > "$home/state/demo.meta.tmp"
+  mv "$home/state/demo.meta.tmp" "$home/state/demo.meta"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "late generation after skipped handoff should be marked handled"
+  [ ! -e "$pending" ] || fail "late generation should clear terminal successor proof"
+  assert_contains "$(cat "$event")" 'compact_generation=codex:1' "late generation after skipped handoff should be recorded as handled"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "handled unsupported successor generation should not reopen compact"
+  compact_count=$(grep -cF 'tmux|target-pane|/compact' "$log" || true)
+  wrap_count=$(grep -c 'WATCHDOG WRAP REQUEST' "$log" || true)
+  [ "$compact_count" = 1 ] || fail "unsupported successor recovery must not retry compact, got $compact_count"
+  [ "$wrap_count" = 1 ] || fail "unsupported successor recovery must not reopen wrap, got $wrap_count"
+  pass "unsupported successor recovery preserves delayed rotation proof"
+}
+
+test_successful_compact_tracks_delayed_generation() {
+  local home config session_dir worktree rollout double log pending ack request successor successor_log status event compact_count wrap_count timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping successful delayed generation coverage"
+    return
+  fi
+  home="$TMP_ROOT/compact-success-delayed-generation-home"
+  config="$TMP_ROOT/compact-success-delayed-generation-config"
+  session_dir="$TMP_ROOT/compact-success-delayed-generation-sessions"
+  worktree="$TMP_ROOT/compact-success-delayed-generation-worktree"
+  rollout="$session_dir/rollout-demo.jsonl"
+  double="$TMP_ROOT/compact-success-delayed-generation-double"
+  log="$TMP_ROOT/compact-success-delayed-generation.log"
+  successor="$TMP_ROOT/compact-success-delayed-generation-successor"
+  successor_log="$TMP_ROOT/compact-success-delayed-generation-successor.log"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  jq '.compact_pending_retry_sec = 1 | .compact_wrap_ack_timeout_sec = 5' "$config/watchdog.json" > "$config/watchdog.json.tmp"
+  mv "$config/watchdog.json.tmp" "$config/watchdog.json"
+  write_codex_rollout "$rollout" "$worktree" 900 same-sid
+  make_success_double "$double" "$log"
+  cat > "$successor" <<'SH'
+#!/usr/bin/env bash
+printf '%s|%s\n' "$1" "$2" >> "$FM_SUCCESSOR_LOG"
+SH
+  chmod +x "$successor"
+  : > "$successor_log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial successful delayed generation pass should arm the session"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "successful delayed generation request pass should keep polling"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  request=$(sed -n '4p' "$pending")
+  ack="$home/state/watchdog/.compact-wrap-ack-demo"
+  printf '%s\n' "$request" > "$ack"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "successful compact attempt should keep polling"
+  [ "$(sed -n '6p' "$pending")" = compact_sent ] || fail "successful compact should preserve pending rotation proof"
+  sleep 3
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "successful compact proof should survive generic pending expiry"
+  [ "$(sed -n '6p' "$pending")" = compact_sent ] || fail "successful compact proof must not use generic pending expiry"
+  sleep 2
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_WATCHDOG_SUCCESSOR_CMD="$successor" FM_SUCCESSOR_LOG="$successor_log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "successful compact recovery should enter successor handoff"
+  [ "$(sed -n '6p' "$pending")" = compact_successor ] || fail "successful compact successor handoff should retain rotation proof"
+  [ -s "$successor_log" ] || fail "successful compact recovery timeout should start successor handoff"
+  append_codex_compaction "$rollout" delayed-success-generation
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "delayed successful compact generation should be marked handled"
+  [ ! -e "$pending" ] || fail "delayed successful compact generation should clear pending proof"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" 'compact_generation=codex:1' "delayed successful compact generation should be recorded as handled"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "handled successful generation should keep polling without another wrap"
+  compact_count=$(grep -cF 'tmux|target-pane|/compact' "$log" || true)
+  wrap_count=$(grep -c 'WATCHDOG WRAP REQUEST' "$log" || true)
+  [ "$compact_count" = 1 ] || fail "delayed successful generation must not trigger a second compact, got $compact_count"
+  [ "$wrap_count" = 1 ] || fail "delayed successful generation must not trigger another wrap, got $wrap_count"
+  pass "successful compact tracks and handles delayed generation"
 }
 
 test_metrics_collection_failure_is_visible_and_throttled() {
@@ -1056,7 +1808,19 @@ test_watcher_starts_compact_steer_without_blocking
 test_unarmed_session_is_not_steered_on_first_discovery
 test_rotation_rearms_new_session
 test_same_file_claude_compact_summary_rearms_session
-test_stale_pending_retries_without_rotation
+test_same_file_codex_compaction_cancels_wrap
+test_wrap_ack_delivers_compact
+test_wrap_ack_timeout_starts_successor
+test_wrap_ack_deadline_starts_after_delivery
+test_compact_delivery_does_not_retry_across_rotation
+test_wrap_rotation_wins_expired_deadline
+test_wrap_ack_revalidates_at_backend_send
+test_wrap_ack_partial_codex_tail_fails_closed
+test_transient_generation_unavailable_restores_bounded_wrap
+test_ambiguous_compact_tracks_delayed_generation
+test_ambiguous_compact_timeout_starts_successor
+test_ambiguous_compact_timeout_preserves_proof_when_successor_unsupported
+test_successful_compact_tracks_delayed_generation
 test_metrics_collection_failure_is_visible_and_throttled
 test_unsupported_harness_skips_watchdog_metrics
 test_stale_meta_skips_watchdog_threshold_scan

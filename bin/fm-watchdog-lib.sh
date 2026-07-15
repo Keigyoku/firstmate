@@ -35,6 +35,7 @@ fm_watchdog_default_config() {
   },
   "steer_retries": 3,
   "steer_timeout_sec": 120,
+  "compact_wrap_ack_timeout_sec": 600,
   "compact_pending_retry_sec": 900,
   "metrics_failure_event_interval_sec": 300,
   "rotate_to": ["codex", "opencode"],
@@ -592,15 +593,38 @@ fm_watchdog_file_identity() {
 }
 
 fm_watchdog_compact_generation() {
-  local harness=$1 file=$2
+  local harness=$1 file=$2 matches count
   case "$harness" in
     claude)
-      jq -r 'select(.isCompactSummary == true) | .uuid // empty' "$file" 2>/dev/null | tail -1
+      matches=$(jq -r 'select(.isCompactSummary == true) | .uuid // empty' "$file" 2>/dev/null) || return 1
+      printf '%s\n' "$matches" | tail -1
+      ;;
+    codex)
+      matches=$(jq -r 'select(.type == "compacted") | 1' "$file" 2>/dev/null) || return 1
+      if [ -n "$matches" ]; then
+        count=$(printf '%s\n' "$matches" | wc -l | tr -d '[:space:]')
+      else
+        count=0
+      fi
+      printf 'codex:%s\n' "$count"
       ;;
     *)
       return 1
       ;;
   esac
+}
+
+fm_watchdog_compact_pending_identity_current() {
+  local task=$1 harness=$2 pending=$3 old_sig old_generation file sig generation
+  old_sig=$(sed -n '1p' "$pending")
+  old_generation=$(sed -n '3p' "$pending")
+  file=$(fm_watchdog_session_file "$harness" "$task" 2>/dev/null || true)
+  [ -n "$file" ] || return 2
+  sig=$(fm_watchdog_file_identity "$file" 2>/dev/null || true)
+  [ -n "$sig" ] || return 2
+  generation=$(fm_watchdog_compact_generation "$harness" "$file" 2>/dev/null) || return 2
+  [ "$sig" = "$old_sig" ] || return 1
+  [ -z "$generation" ] || [ "$generation" = "$old_generation" ]
 }
 
 fm_watchdog_marker_key() {
