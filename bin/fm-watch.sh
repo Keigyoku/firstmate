@@ -493,16 +493,26 @@ watchdog_start_compact_delivery() {
       rm -f "$inflight"
       return 0
     fi
-    rm -f "$ack"
-    fm_watchdog_event compact_wrap_acknowledged "$task" accepted "request=$request context_pct=$context"
-    if "$SCRIPT_DIR/fm-steer.sh" "$task" "/compact"; then
-      :
+    if watchdog_compact_wrap_identity_current "$task" "$harness" "$pending"; then
+      if "$SCRIPT_DIR/fm-steer.sh" "$task" "/compact"; then
+        rm -f "$ack"
+        fm_watchdog_event compact_wrap_acknowledged "$task" accepted "request=$request context_pct=$context"
+      else
+        rc=$?
+        rm -f "$ack"
+        fm_watchdog_event compact_steer_failed "$task" "rc=$rc" "context_pct=$context request=$request"
+        rm -f "$pending"
+        if [ "$rc" -eq 4 ]; then
+          watchdog_start_successor "$task" "$context" "steer_undeliverable" "$rc"
+        fi
+      fi
     else
-      rc=$?
-      fm_watchdog_event compact_steer_failed "$task" "rc=$rc" "context_pct=$context request=$request"
-      rm -f "$pending"
-      if [ "$rc" -eq 4 ]; then
-        watchdog_start_successor "$task" "$context" "steer_undeliverable" "$rc"
+      identity_rc=$?
+      if [ "$identity_rc" -eq 1 ]; then
+        watchdog_cancel_compact_wrap_rotation "$task" "$harness" "$pending"
+        rm -f "$ack"
+      else
+        sed '6s/.*/wrap_requested/' "$pending" > "$pending.tmp" && mv -f "$pending.tmp" "$pending"
       fi
     fi
     rm -f "$inflight"
@@ -638,19 +648,19 @@ watchdog_threshold_scan() {
       claude|codex) ;;
       *) continue ;;
     esac
-    watchdog_meta_target_exists "$meta" "$task" || continue
     key=$(watchdog_marker_key "$task")
     pending="$STATE/watchdog/.compact-pending-$key"
     inflight="$STATE/watchdog/.compact-steering-$key"
     clear_pending="$STATE/watchdog/.clear-pending-$key"
     clear_inflight="$STATE/watchdog/.clear-steering-$key"
+    watchdog_resident_rotation_active "$task" && continue
+    watchdog_check_rotation "$task" "$harness" "$pending"
     phase=$(sed -n '6p' "$pending" 2>/dev/null || true)
     if [ "$phase" = wrap_requested ]; then
       watchdog_steer_inflight "$inflight" && continue
       watchdog_compact_wrap_pending "$task" "$harness" "$pending" "$inflight" "$wrap_ack_timeout" "$key" true && continue
     fi
-    watchdog_resident_rotation_active "$task" && continue
-    watchdog_check_rotation "$task" "$harness" "$pending"
+    watchdog_meta_target_exists "$meta" "$task" || continue
     watchdog_check_clear_rotation "$task" "$harness" "$clear_pending"
     watchdog_pending_active "$clear_pending" "$task" "$pending_retry" "$key" clear && continue
     watchdog_steer_inflight "$clear_inflight" && continue
