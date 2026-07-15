@@ -458,8 +458,11 @@ watchdog_start_compact_delivery() {
     if [ -n "${FM_WATCHDOG_BEFORE_COMPACT_DELIVERY:-}" ]; then
       "$FM_WATCHDOG_BEFORE_COMPACT_DELIVERY" "$task" "$harness"
     fi
-    fm_watchdog_compact_pending_identity_current "$task" "$harness" "$pending"
-    identity_rc=$?
+    if fm_watchdog_compact_pending_identity_current "$task" "$harness" "$pending"; then
+      identity_rc=0
+    else
+      identity_rc=$?
+    fi
     if [ "$identity_rc" -ne 0 ]; then
       if [ "$identity_rc" -eq 1 ]; then
         watchdog_cancel_compact_wrap_rotation "$task" "$harness" "$pending"
@@ -469,8 +472,11 @@ watchdog_start_compact_delivery() {
       return 0
     fi
     sed '6s/.*/compact_sent/' "$pending" > "$pending.tmp" && mv -f "$pending.tmp" "$pending"
-    fm_watchdog_compact_pending_identity_current "$task" "$harness" "$pending"
-    identity_rc=$?
+    if fm_watchdog_compact_pending_identity_current "$task" "$harness" "$pending"; then
+      identity_rc=0
+    else
+      identity_rc=$?
+    fi
     if [ "$identity_rc" -ne 0 ]; then
       if [ "$identity_rc" -eq 1 ]; then
         watchdog_cancel_compact_wrap_rotation "$task" "$harness" "$pending"
@@ -497,8 +503,11 @@ watchdog_start_compact_delivery() {
         elif [ "$rc" -eq 11 ]; then
           identity_rc=2
         else
-          fm_watchdog_compact_pending_identity_current "$task" "$harness" "$pending"
-          identity_rc=$?
+          if fm_watchdog_compact_pending_identity_current "$task" "$harness" "$pending"; then
+            identity_rc=0
+          else
+            identity_rc=$?
+          fi
         fi
         if [ "$identity_rc" -eq 1 ]; then
           watchdog_cancel_compact_wrap_rotation "$task" "$harness" "$pending"

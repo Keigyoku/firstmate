@@ -967,6 +967,96 @@ SH
   pass "partial Codex rollout tails fail closed"
 }
 
+test_transient_generation_unavailable_restores_bounded_wrap() {
+  local home config session_dir worktree rollout double log pending ack request fakebin jq_count successor successor_log status event timeout_cmd real_jq
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping transient generation coverage"
+    return
+  fi
+  home="$TMP_ROOT/transient-generation-home"
+  config="$TMP_ROOT/transient-generation-config"
+  session_dir="$TMP_ROOT/transient-generation-sessions"
+  worktree="$TMP_ROOT/transient-generation-worktree"
+  rollout="$session_dir/rollout-demo.jsonl"
+  double="$TMP_ROOT/transient-generation-double"
+  log="$TMP_ROOT/transient-generation.log"
+  fakebin="$TMP_ROOT/transient-generation-fakebin"
+  jq_count="$TMP_ROOT/transient-generation-jq-count"
+  successor="$TMP_ROOT/transient-generation-successor"
+  successor_log="$TMP_ROOT/transient-generation-successor.log"
+  mkdir -p "$home/state" "$worktree" "$fakebin"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  jq '.compact_wrap_ack_timeout_sec = 5' "$config/watchdog.json" > "$config/watchdog.json.tmp"
+  mv "$config/watchdog.json.tmp" "$config/watchdog.json"
+  write_codex_rollout "$rollout" "$worktree" 900 same-sid
+  make_success_double "$double" "$log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial transient generation pass should arm the session"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "transient generation request pass should keep polling"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  request=$(sed -n '4p' "$pending")
+  ack="$home/state/watchdog/.compact-wrap-ack-demo"
+  printf '%s\n' "$request" > "$ack"
+  jq '.thresholds |= with_entries(.value = null)' "$config/watchdog.json" > "$config/watchdog.json.tmp"
+  mv "$config/watchdog.json.tmp" "$config/watchdog.json"
+
+  real_jq=$(command -v jq)
+  cat > "$fakebin/jq" <<'SH'
+#!/usr/bin/env bash
+last=${!#}
+if [ "$last" = "$FM_TRANSIENT_ROLLOUT" ]; then
+  case "$*" in
+    *'select(.type == "compacted")'*)
+      count=$(cat "$FM_TRANSIENT_JQ_COUNT" 2>/dev/null || printf '0\n')
+      count=$((count + 1))
+      printf '%s\n' "$count" > "$FM_TRANSIENT_JQ_COUNT"
+      if [ "$count" -eq 2 ]; then
+        output=$("$FM_REAL_JQ" "$@")
+        rc=$?
+        [ "$rc" -eq 0 ] || exit "$rc"
+        printf '%s' '{"type":"compacted"' >> "$FM_TRANSIENT_ROLLOUT"
+        printf '%s\n' "$output"
+        exit 0
+      fi
+      ;;
+  esac
+fi
+exec "$FM_REAL_JQ" "$@"
+SH
+  chmod +x "$fakebin/jq"
+  cat > "$successor" <<'SH'
+#!/usr/bin/env bash
+printf '%s|%s\n' "$1" "$2" >> "$FM_SUCCESSOR_LOG"
+SH
+  chmod +x "$successor"
+  : > "$successor_log"
+
+  "$timeout_cmd" 1 env PATH="$fakebin:$PATH" FM_REAL_JQ="$real_jq" FM_TRANSIENT_ROLLOUT="$rollout" FM_TRANSIENT_JQ_COUNT="$jq_count" FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 bash -e "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "transient generation failure should keep polling"
+  [ "$(sed -n '6p' "$pending")" = wrap_requested ] || fail "transient generation failure should restore the bounded wrap phase"
+  [ "$(cat "$ack")" = "$request" ] || fail "transient generation failure should preserve the matching acknowledgement"
+  [ "$(grep -cF 'tmux|target-pane|/compact' "$log" || true)" = 0 ] || fail "transient generation failure must prevent compact delivery"
+  sleep 6
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_WATCHDOG_SUCCESSOR_CMD="$successor" FM_SUCCESSOR_LOG="$successor_log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "transient generation timeout should keep polling after successor handoff"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"type":"compact_wrap_timeout"' "restored wrap should retain bounded timeout handling"
+  [ -s "$successor_log" ] || fail "restored wrap should enter the successor path after expiry"
+  pass "transient unavailable generation restores bounded wrap recovery"
+}
+
 test_ambiguous_compact_tracks_delayed_generation() {
   local home config session_dir worktree rollout double log pending ack request status event compact_count wrap_count timeout_cmd
   if command -v timeout >/dev/null 2>&1; then
@@ -1570,6 +1660,7 @@ test_compact_delivery_does_not_retry_across_rotation
 test_wrap_rotation_wins_expired_deadline
 test_wrap_ack_revalidates_at_backend_send
 test_wrap_ack_partial_codex_tail_fails_closed
+test_transient_generation_unavailable_restores_bounded_wrap
 test_ambiguous_compact_tracks_delayed_generation
 test_ambiguous_compact_timeout_starts_successor
 test_metrics_collection_failure_is_visible_and_throttled
