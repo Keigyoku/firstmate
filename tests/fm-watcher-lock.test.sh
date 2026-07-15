@@ -10,6 +10,7 @@ set -u
 
 WATCH="$ROOT/bin/fm-watch.sh"
 WATCH_ARM="$ROOT/bin/fm-watch-arm.sh"
+WATCH_LAUNCHER_LIB="$ROOT/bin/fm-watch-launcher-lib.sh"
 DRAIN="$ROOT/bin/fm-wake-drain.sh"
 LIB="$ROOT/bin/fm-wake-lib.sh"
 
@@ -29,6 +30,17 @@ process_fd_target() {
 
 process_fd_type() {
   lsof -a -p "$1" -d "$2" -Ft 2>/dev/null | sed -n 's/^t//p' | head -1
+}
+
+process_descends_from() {
+  local pid=$1 ancestor=$2 parent
+  while [ "$pid" -gt 1 ] 2>/dev/null; do
+    [ "$pid" = "$ancestor" ] && return 0
+    parent=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ') || return 1
+    case "$parent" in ''|*[!0-9]*) return 1 ;; esac
+    pid=$parent
+  done
+  return 1
 }
 
 
@@ -678,6 +690,64 @@ SH
   pass "arm fails loudly when neither session launcher is available"
 }
 
+test_launcher_handoff_failure_reaps_spawned_process() {
+  local dir state fakebin output marker armout armerr real_setsid status launched i
+  dir=$(make_case launcher-handoff-failure)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  output="$dir/watch.out"
+  marker="$dir/launched.pid"
+  armout="$dir/arm.out"
+  armerr="$dir/arm.err"
+  real_setsid=$(command -v setsid) || fail "setsid is required for handoff failure test"
+  cat > "$fakebin/setsid" <<SH
+#!/usr/bin/env bash
+mkdir "\$5" || exit 1
+exec '$real_setsid' "\$@"
+SH
+  cat > "$dir/watcher" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "${BASHPID:-$$}" > "$WATCHER_MARKER"
+printf 'test identity\n' > "$FM_WATCH_LAUNCH_IDENTITY_FILE"
+sleep 300
+SH
+  chmod +x "$fakebin/setsid" "$dir/watcher"
+  status=0
+  PATH="$fakebin:$PATH" WATCHER_MARKER="$marker" bash -c '. "$1"; fm_watch_launch_session pid identity "$2" "$3"' _ "$WATCH_LAUNCHER_LIB" "$output" "$dir/watcher" || status=$?
+  [ "$status" -eq 2 ] || fail "failed pid handoff returned status $status instead of validation status 2"
+  i=0
+  while [ ! -s "$marker" ] && [ "$i" -lt 50 ]; do sleep 0.01; i=$((i + 1)); done
+  launched=$(cat "$marker" 2>/dev/null || true)
+  case "$launched" in ''|*[!0-9]*) fail "handoff failure test did not observe the spawned process" ;; esac
+  ! kill -0 "$launched" 2>/dev/null || fail "failed pid handoff left the spawned process alive"
+  rm -rf "$output.pid"
+  status=0
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" "$WATCH_ARM" > "$armout" 2> "$armerr" || status=$?
+  [ "$status" -ne 0 ] || fail "arm exited zero after a launcher handoff failure"
+  grep -qF 'watcher: FAILED - session launcher PID/identity handoff failed' "$armerr" \
+    || fail "arm did not distinguish launcher handoff validation failure"
+  ! grep -qF 'watcher: FAILED - no session launcher' "$armerr" \
+    || fail "arm misreported a launcher handoff failure as launcher unavailability"
+  pass "launcher handoff failure reaps the process and reports its distinct launch stage"
+}
+
+test_pid_identity_match_rejects_other_process() {
+  local one two identity
+  sleep 300 &
+  one=$!
+  sleep 301 &
+  two=$!
+  identity=$(FM_STATE_OVERRIDE="$TMP_ROOT/identity-match-state" bash -c '. "$1"; fm_pid_identity "$2"' _ "$LIB" "$one") || fail "could not capture process identity"
+  FM_STATE_OVERRIDE="$TMP_ROOT/identity-match-state" bash -c '. "$1"; fm_pid_matches_identity "$2" "$3"' _ "$LIB" "$one" "$identity" \
+    || fail "pid identity match rejected its original process"
+  if FM_STATE_OVERRIDE="$TMP_ROOT/identity-match-state" bash -c '. "$1"; fm_pid_matches_identity "$2" "$3"' _ "$LIB" "$two" "$identity"; then
+    fail "pid identity match accepted another process"
+  fi
+  kill "$one" "$two" 2>/dev/null || true
+  wait "$one" "$two" 2>/dev/null || true
+  pass "pid identity match rejects a different process"
+}
+
 test_arm_hup_preserves_fully_detached_watcher() {
   local dir state fakebin armout armerr i armpid arm_pgid lock_pid watcher_pgid status beat_before beat_after fd fd_type target
   dir=$(make_case arm-hup-cleanup)
@@ -699,8 +769,8 @@ test_arm_hup_preserves_fully_detached_watcher() {
   arm_pgid=$(ps -o pgid= -p "$armpid" 2>/dev/null | tr -d ' ')
   watcher_pgid=$(ps -o pgid= -p "$lock_pid" 2>/dev/null | tr -d ' ')
   [ "$arm_pgid" = "$armpid" ] || fail "arm did not start in an isolated process group"
-  [ "$watcher_pgid" = "$lock_pid" ] || fail "watcher did not start in an isolated process group"
   [ "$watcher_pgid" != "$arm_pgid" ] || fail "watcher remained in the arm process group"
+  ! process_descends_from "$lock_pid" "$armpid" || fail "watcher remained discoverable below the arm task"
   target=$(process_fd_target "$lock_pid" 0 || true)
   [ "$target" = /dev/null ] || fail "watcher stdin remained attached to the arm task (got '$target')"
   for fd in 1 2; do
@@ -728,7 +798,7 @@ test_arm_hup_preserves_fully_detached_watcher() {
   is_live_non_zombie "$lock_pid" || fail "watcher died while continuing after arm task pipe closure"
   kill "$lock_pid" 2>/dev/null || true
   wait "$lock_pid" 2>/dev/null || true
-  pass "arm task death leaves a fully detached watcher alive and beating"
+  pass "arm task ancestry excludes the orphaned watcher and HUP leaves it alive and beating"
 }
 
 test_arm_propagates_immediate_wake_before_confirmation() {
@@ -868,6 +938,8 @@ test_arm_starts_and_self_heals
 test_arm_prefers_native_setsid
 test_arm_uses_perl_setsid_fallback
 test_arm_fails_without_session_launcher
+test_launcher_handoff_failure_reaps_spawned_process
+test_pid_identity_match_rejects_other_process
 test_arm_hup_preserves_fully_detached_watcher
 test_arm_propagates_immediate_wake_before_confirmation
 test_arm_waits_for_peer_beacon_after_child_stands_down

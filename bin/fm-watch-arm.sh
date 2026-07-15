@@ -15,9 +15,10 @@
 # docs/arm-pretool-check.md for the blessed tree and deny reason codes. It is a
 # pre-execution seatbelt, not a substitute for the verification here.
 #
-# This script starts the watcher in a separate process session with its standard
-# file descriptors detached from the arm task, keeps waiting on that child for
-# wake delivery, and VERIFIES the outcome before it settles in.
+# This script starts the watcher orphaned in a separate process session with its
+# standard file descriptors detached from the arm task, keeps identity-matched
+# watch over that process for wake delivery, and VERIFIES the outcome before it
+# settles in.
 # It confirms a watcher process is genuinely alive AND the
 # liveness beacon (state/.last-watcher-beat) is fresh within FM_GUARD_GRACE (the
 # single source of truth, shared with fm-watch.sh and fm-guard.sh), and prints
@@ -29,15 +30,19 @@
 #   watcher: healthy pid=<N> (beacon <age>s)             - restart mode found a live+fresh
 #                                                          watcher it did not own
 #   watcher: FAILED - no live watcher with a fresh beacon  - could not confirm one
+#   watcher: FAILED - no session launcher (...)            - no supported launcher exists
+#   watcher: FAILED - session launcher PID/identity handoff failed
+#                                                          - launch handoff could not be validated
 # It NEVER reports started/attached/healthy off a stale beacon or a dead/reused pid: a
 # stale-beacon or dead-pid holder either self-heals (the fresh child steals the
 # dead lock per the singleton self-eviction/steal path and is confirmed) or this
-# returns the FAILED line. On started it waits the child and propagates the wake
-# reason; on attached it stays live until the identity-matched holder is no longer
-# healthy, then exits zero so the harness background-notify fires then (not as a
-# false empty wake). On restart-only healthy it exits zero after the duplicate
-# child stands down. On FAILED it exits non-zero so the failure is loud. A live
-# cycle already present means re-arm attaches - do not start a second watcher.
+# returns the FAILED line. On started it monitors the identity-matched process and
+# propagates the wake reason; on attached it stays live until the identity-matched
+# holder is no longer healthy, then exits zero so the harness background-notify
+# fires then (not as a false empty wake). On restart-only healthy it exits zero
+# after the duplicate child stands down. On FAILED it exits non-zero so the
+# failure is loud. A live cycle already present means re-arm attaches - do not
+# start a second watcher.
 #
 # --restart: stop ONLY this FM_HOME's watcher (the pid recorded in THIS home's
 # state/.watch.lock) and own a fresh cycle, or report restart-only healthy if a
@@ -170,13 +175,17 @@ if [ "$mode" = arm ] && healthy_watcher; then
   attach_and_wait "$HEALTHY_PID"
 fi
 
-# Start a watcher in a separate process session with detached standard file
-# descriptors and confirm it before settling in.
-# The arm still waits on the watcher so a normal wake exit propagates to the harness,
-# but a harness task-manager stop cannot take the watcher down with the arm process
-# group.
+# Start an orphaned watcher in a separate process session with detached standard
+# file descriptors and confirm it before settling in.
+# The arm still monitors the watcher so a normal wake exit propagates to the
+# harness, but a harness task-manager stop cannot find it through the arm's
+# descendant tree.
 child=
+child_identity=
 child_out=
+child_is_same_process() {
+  [ -n "$child" ] && fm_pid_matches_identity "$child" "$child_identity"
+}
 cleanup_child() {
   if [ -n "$child_out" ]; then
     rm -f "$child_out" 2>/dev/null || true
@@ -189,8 +198,14 @@ child_out=$(mktemp "$STATE/.watch-arm-output.XXXXXX") || {
   echo "watcher: FAILED - no live watcher with a fresh beacon"
   exit 1
 }
-if ! fm_watch_launch_session child "$child_out" "$WATCH"; then
-  echo "watcher: FAILED - no session launcher (requires setsid or Perl POSIX)" >&2
+launch_status=0
+fm_watch_launch_session child child_identity "$child_out" "$WATCH" || launch_status=$?
+if [ "$launch_status" -ne 0 ]; then
+  if [ "$launch_status" -eq 1 ]; then
+    echo "watcher: FAILED - no session launcher (requires setsid or Perl POSIX)" >&2
+  else
+    echo "watcher: FAILED - session launcher PID/identity handoff failed" >&2
+  fi
   cleanup_child
   exit 1
 fi
@@ -204,8 +219,9 @@ while :; do
   if healthy_watcher; then
     if [ "$HEALTHY_PID" = "$child" ]; then
       echo "watcher: started pid=$child (beacon fresh)"
-      wait "$child"
-      rc=$?
+      while child_is_same_process; do sleep "$ATTACH_POLL"; done
+      rc=0
+      watch_output_has_wake "$child_out" || rc=1
       print_watch_output "$child_out"
       rm -f "$child_out" 2>/dev/null || true
       exit "$rc"
@@ -213,7 +229,7 @@ while :; do
     # Another watcher won the singleton; our child stood down.
     if [ "$mode" = arm ]; then
       report_attached
-      wait "$child" 2>/dev/null || true
+      while child_is_same_process; do sleep "$ATTACH_POLL"; done
       rm -f "$child_out" 2>/dev/null || true
       child=
       child_out=
@@ -221,13 +237,12 @@ while :; do
       attach_and_wait "$HEALTHY_PID"
     fi
     report_healthy
-    wait "$child" 2>/dev/null || true
+    while child_is_same_process; do sleep "$ATTACH_POLL"; done
     rm -f "$child_out" 2>/dev/null || true
     exit 0
   fi
-  if [ "$child_done" -eq 0 ] && ! fm_pid_alive "$child"; then
-    wait "$child"
-    rc=$?
+  if [ "$child_done" -eq 0 ] && ! child_is_same_process; then
+    rc=0
     child_done=1
     if [ "$rc" -eq 0 ] && watch_output_has_wake "$child_out"; then
       print_watch_output "$child_out"
@@ -240,10 +255,14 @@ while :; do
 done
 
 trap - HUP TERM INT
-if [ -n "$child" ] && fm_pid_alive "$child"; then
+if child_is_same_process; then
   kill -TERM "$child" 2>/dev/null || true
+  i=0
+  while [ "$i" -lt 50 ] && child_is_same_process; do
+    sleep 0.1
+    i=$((i + 1))
+  done
 fi
-wait "$child" 2>/dev/null || true
 print_watch_output "$child_out"
 cleanup_child
 echo "watcher: FAILED - no live watcher with a fresh beacon"
