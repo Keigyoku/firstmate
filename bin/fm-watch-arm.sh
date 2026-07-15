@@ -15,9 +15,9 @@
 # docs/arm-pretool-check.md for the blessed tree and deny reason codes. It is a
 # pre-execution seatbelt, not a substitute for the verification here.
 #
-# This script starts the watcher in a separate process session with its standard
-# file descriptors detached from the arm task, keeps waiting on that child for
-# wake delivery, and VERIFIES the outcome before it settles in.
+# This script starts the watcher orphaned in a separate process session with its
+# standard file descriptors detached from the arm task, keeps waiting on that
+# process for wake delivery, and VERIFIES the outcome before it settles in.
 # It confirms a watcher process is genuinely alive AND the
 # liveness beacon (state/.last-watcher-beat) is fresh within FM_GUARD_GRACE (the
 # single source of truth, shared with fm-watch.sh and fm-guard.sh), and prints
@@ -170,11 +170,11 @@ if [ "$mode" = arm ] && healthy_watcher; then
   attach_and_wait "$HEALTHY_PID"
 fi
 
-# Start a watcher in a separate process session with detached standard file
-# descriptors and confirm it before settling in.
-# The arm still waits on the watcher so a normal wake exit propagates to the harness,
-# but a harness task-manager stop cannot take the watcher down with the arm process
-# group.
+# Start an orphaned watcher in a separate process session with detached standard
+# file descriptors and confirm it before settling in.
+# The arm still monitors the watcher so a normal wake exit propagates to the
+# harness, but a harness task-manager stop cannot find it through the arm's
+# descendant tree.
 child=
 child_out=
 cleanup_child() {
@@ -204,8 +204,9 @@ while :; do
   if healthy_watcher; then
     if [ "$HEALTHY_PID" = "$child" ]; then
       echo "watcher: started pid=$child (beacon fresh)"
-      wait "$child"
-      rc=$?
+      while fm_pid_alive "$child"; do sleep "$ATTACH_POLL"; done
+      rc=0
+      watch_output_has_wake "$child_out" || rc=1
       print_watch_output "$child_out"
       rm -f "$child_out" 2>/dev/null || true
       exit "$rc"
@@ -213,7 +214,7 @@ while :; do
     # Another watcher won the singleton; our child stood down.
     if [ "$mode" = arm ]; then
       report_attached
-      wait "$child" 2>/dev/null || true
+      while fm_pid_alive "$child"; do sleep "$ATTACH_POLL"; done
       rm -f "$child_out" 2>/dev/null || true
       child=
       child_out=
@@ -221,13 +222,12 @@ while :; do
       attach_and_wait "$HEALTHY_PID"
     fi
     report_healthy
-    wait "$child" 2>/dev/null || true
+    while fm_pid_alive "$child"; do sleep "$ATTACH_POLL"; done
     rm -f "$child_out" 2>/dev/null || true
     exit 0
   fi
   if [ "$child_done" -eq 0 ] && ! fm_pid_alive "$child"; then
-    wait "$child"
-    rc=$?
+    rc=0
     child_done=1
     if [ "$rc" -eq 0 ] && watch_output_has_wake "$child_out"; then
       print_watch_output "$child_out"

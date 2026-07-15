@@ -31,6 +31,17 @@ process_fd_type() {
   lsof -a -p "$1" -d "$2" -Ft 2>/dev/null | sed -n 's/^t//p' | head -1
 }
 
+process_descends_from() {
+  local pid=$1 ancestor=$2 parent
+  while [ "$pid" -gt 1 ] 2>/dev/null; do
+    [ "$pid" = "$ancestor" ] && return 0
+    parent=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ') || return 1
+    case "$parent" in ''|*[!0-9]*) return 1 ;; esac
+    pid=$parent
+  done
+  return 1
+}
+
 
 test_singleton_start() {
   local dir state fakebin out1 out2 pid1 pid2 live i
@@ -699,8 +710,8 @@ test_arm_hup_preserves_fully_detached_watcher() {
   arm_pgid=$(ps -o pgid= -p "$armpid" 2>/dev/null | tr -d ' ')
   watcher_pgid=$(ps -o pgid= -p "$lock_pid" 2>/dev/null | tr -d ' ')
   [ "$arm_pgid" = "$armpid" ] || fail "arm did not start in an isolated process group"
-  [ "$watcher_pgid" = "$lock_pid" ] || fail "watcher did not start in an isolated process group"
   [ "$watcher_pgid" != "$arm_pgid" ] || fail "watcher remained in the arm process group"
+  ! process_descends_from "$lock_pid" "$armpid" || fail "watcher remained discoverable below the arm task"
   target=$(process_fd_target "$lock_pid" 0 || true)
   [ "$target" = /dev/null ] || fail "watcher stdin remained attached to the arm task (got '$target')"
   for fd in 1 2; do
@@ -728,7 +739,7 @@ test_arm_hup_preserves_fully_detached_watcher() {
   is_live_non_zombie "$lock_pid" || fail "watcher died while continuing after arm task pipe closure"
   kill "$lock_pid" 2>/dev/null || true
   wait "$lock_pid" 2>/dev/null || true
-  pass "arm task death leaves a fully detached watcher alive and beating"
+  pass "arm task ancestry excludes the orphaned watcher and HUP leaves it alive and beating"
 }
 
 test_arm_propagates_immediate_wake_before_confirmation() {
