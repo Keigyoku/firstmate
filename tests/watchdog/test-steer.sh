@@ -1174,6 +1174,82 @@ SH
   pass "ambiguous compact recovery expires into successor"
 }
 
+test_ambiguous_compact_timeout_preserves_proof_when_successor_unsupported() {
+  local home config session_dir worktree rollout double log pending ack request status event compact_count wrap_count timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping unsupported successor proof coverage"
+    return
+  fi
+  home="$TMP_ROOT/compact-ambiguous-unsupported-successor-home"
+  config="$TMP_ROOT/compact-ambiguous-unsupported-successor-config"
+  session_dir="$TMP_ROOT/compact-ambiguous-unsupported-successor-sessions"
+  worktree="$TMP_ROOT/compact-ambiguous-unsupported-successor-worktree"
+  rollout="$session_dir/rollout-demo.jsonl"
+  double="$TMP_ROOT/compact-ambiguous-unsupported-successor-double"
+  log="$TMP_ROOT/compact-ambiguous-unsupported-successor.log"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  jq '.compact_wrap_ack_timeout_sec = 3' "$config/watchdog.json" > "$config/watchdog.json.tmp"
+  mv "$config/watchdog.json.tmp" "$config/watchdog.json"
+  write_codex_rollout "$rollout" "$worktree" 900 same-sid
+  make_compact_failure_double "$double" "$log"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial unsupported successor pass should arm the session"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "unsupported successor request pass should keep polling"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  request=$(sed -n '4p' "$pending")
+  ack="$home/state/watchdog/.compact-wrap-ack-demo"
+  printf '%s\n' "$request" > "$ack"
+  "$timeout_cmd" 2 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "unsupported successor compact attempt should keep polling"
+  [ "$(sed -n '6p' "$pending")" = compact_ambiguous ] || fail "unsupported successor compact should enter ambiguous recovery"
+  sed 's/^backend=.*/backend=orca/' "$home/state/demo.meta" > "$home/state/demo.meta.tmp"
+  mv "$home/state/demo.meta.tmp" "$home/state/demo.meta"
+  sleep 4
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "unsupported successor timeout should keep polling after skipped handoff"
+  [ "$(sed -n '6p' "$pending")" = compact_successor ] || fail "skipped successor handoff should retain terminal rotation proof"
+  [ ! -e "$ack" ] || fail "terminal successor proof should remove the consumed acknowledgement"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"type":"successor_threshold","sid":"demo","status":"skipped"' "Orca successor handoff should be skipped"
+  assert_contains "$(cat "$event")" 'reason=compact_ambiguous_timeout backend=orca' "skipped successor event should retain the ambiguous timeout reason"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "terminal successor proof should keep polling without another wrap"
+  [ "$(sed -n '6p' "$pending")" = compact_successor ] || fail "unsupported successor proof should remain terminal before rotation"
+  append_codex_compaction "$rollout" unsupported-successor-generation
+  sed 's/^backend=.*/backend=tmux/' "$home/state/demo.meta" > "$home/state/demo.meta.tmp"
+  mv "$home/state/demo.meta.tmp" "$home/state/demo.meta"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "late generation after skipped handoff should be marked handled"
+  [ ! -e "$pending" ] || fail "late generation should clear terminal successor proof"
+  assert_contains "$(cat "$event")" 'compact_generation=codex:1' "late generation after skipped handoff should be recorded as handled"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "handled unsupported successor generation should not reopen compact"
+  compact_count=$(grep -cF 'tmux|target-pane|/compact' "$log" || true)
+  wrap_count=$(grep -c 'WATCHDOG WRAP REQUEST' "$log" || true)
+  [ "$compact_count" = 1 ] || fail "unsupported successor recovery must not retry compact, got $compact_count"
+  [ "$wrap_count" = 1 ] || fail "unsupported successor recovery must not reopen wrap, got $wrap_count"
+  pass "unsupported successor recovery preserves delayed rotation proof"
+}
+
 test_successful_compact_tracks_delayed_generation() {
   local home config session_dir worktree rollout double log pending ack request successor successor_log status event compact_count wrap_count timeout_cmd
   if command -v timeout >/dev/null 2>&1; then
@@ -1743,6 +1819,7 @@ test_wrap_ack_partial_codex_tail_fails_closed
 test_transient_generation_unavailable_restores_bounded_wrap
 test_ambiguous_compact_tracks_delayed_generation
 test_ambiguous_compact_timeout_starts_successor
+test_ambiguous_compact_timeout_preserves_proof_when_successor_unsupported
 test_successful_compact_tracks_delayed_generation
 test_metrics_collection_failure_is_visible_and_throttled
 test_unsupported_harness_skips_watchdog_metrics

@@ -567,12 +567,16 @@ watchdog_compact_wrap_pending() {
     elif [ "$phase" = compact_sent ]; then
       event_type=compact_sent_timeout
       reason=compact_sent_timeout
-      sed '6s/.*/compact_successor/' "$pending" > "$pending.tmp" && mv -f "$pending.tmp" "$pending"
-      rm -f "$ack"
-      fm_watchdog_event "$event_type" "$task" successor "request=$request age_sec=$age timeout_sec=$ack_timeout context_pct=$context"
-      watchdog_start_successor "$task" "$context" "$reason"
-      return 0
     fi
+    case "$phase" in
+      compact_ambiguous|compact_sent)
+        sed '6s/.*/compact_successor/' "$pending" > "$pending.tmp" && mv -f "$pending.tmp" "$pending"
+        rm -f "$ack"
+        fm_watchdog_event "$event_type" "$task" successor "request=$request age_sec=$age timeout_sec=$ack_timeout context_pct=$context"
+        watchdog_start_successor "$task" "$context" "$reason"
+        return 0
+        ;;
+    esac
     rm -f "$pending" "$ack"
     fm_watchdog_event "$event_type" "$task" successor "request=$request age_sec=$age timeout_sec=$ack_timeout context_pct=$context"
     watchdog_start_successor "$task" "$context" "$reason"
