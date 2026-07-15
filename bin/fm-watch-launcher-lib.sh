@@ -17,10 +17,12 @@ fm_watch_session_launcher() {
 fm_watch_launch_session() {
   local pid_var=$1 identity_var=$2 output=$3 launcher helper pid_file identity_file launched_pid launched_identity
   shift 3
+  # Return 1 only when no supported launcher exists; return 2 when a selected
+  # launcher cannot complete and validate its pid-and-identity handoff.
   launcher=$(fm_watch_session_launcher) || return 1
   pid_file="${output}.pid"
   identity_file="${output}.identity"
-  rm -f "$pid_file" "$identity_file" 2>/dev/null || return 1
+  rm -f "$pid_file" "$identity_file" 2>/dev/null || return 2
   # A new session and detached descriptors are not enough for task managers that
   # discover and kill descendants by walking /proc.  Launch through a short-lived
   # session leader so the watcher is orphaned before this function returns.
@@ -98,20 +100,20 @@ fm_watch_launch_session() {
         ' "$pid_file" "$identity_file" "$output" "$@"
       ) </dev/null >/dev/null 2>&1 &
       ;;
-    *) return 1 ;;
+    *) return 2 ;;
   esac
   helper=$!
   if ! wait "$helper" || [ ! -s "$pid_file" ]; then
     rm -f "$pid_file" "$identity_file" 2>/dev/null || true
-    return 1
+    return 2
   fi
   launched_pid=$(cat "$pid_file" 2>/dev/null || true)
   launched_identity=$(cat "$identity_file" 2>/dev/null || true)
   rm -f "$pid_file" "$identity_file" 2>/dev/null || true
   case "$launched_pid" in
-    ''|*[!0-9]*) return 1 ;;
+    ''|*[!0-9]*) return 2 ;;
   esac
-  [ -n "$launched_identity" ] || return 1
-  printf -v "$pid_var" '%s' "$launched_pid"
-  printf -v "$identity_var" '%s' "$launched_identity"
+  [ -n "$launched_identity" ] || return 2
+  printf -v "$pid_var" '%s' "$launched_pid" || return 2
+  printf -v "$identity_var" '%s' "$launched_identity" || return 2
 }

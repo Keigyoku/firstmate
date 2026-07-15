@@ -691,11 +691,14 @@ SH
 }
 
 test_launcher_handoff_failure_reaps_spawned_process() {
-  local dir fakebin output marker real_setsid status launched i
+  local dir state fakebin output marker armout armerr real_setsid status launched i
   dir=$(make_case launcher-handoff-failure)
+  state="$dir/state"
   fakebin="$dir/fakebin"
   output="$dir/watch.out"
   marker="$dir/launched.pid"
+  armout="$dir/arm.out"
+  armerr="$dir/arm.err"
   real_setsid=$(command -v setsid) || fail "setsid is required for handoff failure test"
   cat > "$fakebin/setsid" <<SH
 #!/usr/bin/env bash
@@ -711,13 +714,21 @@ SH
   chmod +x "$fakebin/setsid" "$dir/watcher"
   status=0
   PATH="$fakebin:$PATH" WATCHER_MARKER="$marker" bash -c '. "$1"; fm_watch_launch_session pid identity "$2" "$3"' _ "$WATCH_LAUNCHER_LIB" "$output" "$dir/watcher" || status=$?
-  [ "$status" -ne 0 ] || fail "launcher accepted a failed pid handoff"
+  [ "$status" -eq 2 ] || fail "failed pid handoff returned status $status instead of validation status 2"
   i=0
   while [ ! -s "$marker" ] && [ "$i" -lt 50 ]; do sleep 0.01; i=$((i + 1)); done
   launched=$(cat "$marker" 2>/dev/null || true)
   case "$launched" in ''|*[!0-9]*) fail "handoff failure test did not observe the spawned process" ;; esac
   ! kill -0 "$launched" 2>/dev/null || fail "failed pid handoff left the spawned process alive"
-  pass "launcher reaps the exact spawned process when pid handoff fails"
+  rm -rf "$output.pid"
+  status=0
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" "$WATCH_ARM" > "$armout" 2> "$armerr" || status=$?
+  [ "$status" -ne 0 ] || fail "arm exited zero after a launcher handoff failure"
+  grep -qF 'watcher: FAILED - session launcher PID/identity handoff failed' "$armerr" \
+    || fail "arm did not distinguish launcher handoff validation failure"
+  ! grep -qF 'watcher: FAILED - no session launcher' "$armerr" \
+    || fail "arm misreported a launcher handoff failure as launcher unavailability"
+  pass "launcher handoff failure reaps the process and reports its distinct launch stage"
 }
 
 test_pid_identity_match_rejects_other_process() {

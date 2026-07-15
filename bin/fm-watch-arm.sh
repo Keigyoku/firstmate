@@ -30,6 +30,9 @@
 #   watcher: healthy pid=<N> (beacon <age>s)             - restart mode found a live+fresh
 #                                                          watcher it did not own
 #   watcher: FAILED - no live watcher with a fresh beacon  - could not confirm one
+#   watcher: FAILED - no session launcher (...)            - no supported launcher exists
+#   watcher: FAILED - session launcher PID/identity handoff failed
+#                                                          - launch handoff could not be validated
 # It NEVER reports started/attached/healthy off a stale beacon or a dead/reused pid: a
 # stale-beacon or dead-pid holder either self-heals (the fresh child steals the
 # dead lock per the singleton self-eviction/steal path and is confirmed) or this
@@ -195,8 +198,14 @@ child_out=$(mktemp "$STATE/.watch-arm-output.XXXXXX") || {
   echo "watcher: FAILED - no live watcher with a fresh beacon"
   exit 1
 }
-if ! fm_watch_launch_session child child_identity "$child_out" "$WATCH"; then
-  echo "watcher: FAILED - no session launcher (requires setsid or Perl POSIX)" >&2
+launch_status=0
+fm_watch_launch_session child child_identity "$child_out" "$WATCH" || launch_status=$?
+if [ "$launch_status" -ne 0 ]; then
+  if [ "$launch_status" -eq 1 ]; then
+    echo "watcher: FAILED - no session launcher (requires setsid or Perl POSIX)" >&2
+  else
+    echo "watcher: FAILED - session launcher PID/identity handoff failed" >&2
+  fi
   cleanup_child
   exit 1
 fi
