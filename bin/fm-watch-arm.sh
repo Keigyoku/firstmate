@@ -176,7 +176,11 @@ fi
 # harness, but a harness task-manager stop cannot find it through the arm's
 # descendant tree.
 child=
+child_identity=
 child_out=
+child_is_same_process() {
+  [ -n "$child" ] && fm_pid_matches_identity "$child" "$child_identity"
+}
 cleanup_child() {
   if [ -n "$child_out" ]; then
     rm -f "$child_out" 2>/dev/null || true
@@ -189,7 +193,7 @@ child_out=$(mktemp "$STATE/.watch-arm-output.XXXXXX") || {
   echo "watcher: FAILED - no live watcher with a fresh beacon"
   exit 1
 }
-if ! fm_watch_launch_session child "$child_out" "$WATCH"; then
+if ! fm_watch_launch_session child child_identity "$child_out" "$WATCH"; then
   echo "watcher: FAILED - no session launcher (requires setsid or Perl POSIX)" >&2
   cleanup_child
   exit 1
@@ -204,7 +208,7 @@ while :; do
   if healthy_watcher; then
     if [ "$HEALTHY_PID" = "$child" ]; then
       echo "watcher: started pid=$child (beacon fresh)"
-      while fm_pid_alive "$child"; do sleep "$ATTACH_POLL"; done
+      while child_is_same_process; do sleep "$ATTACH_POLL"; done
       rc=0
       watch_output_has_wake "$child_out" || rc=1
       print_watch_output "$child_out"
@@ -214,7 +218,7 @@ while :; do
     # Another watcher won the singleton; our child stood down.
     if [ "$mode" = arm ]; then
       report_attached
-      while fm_pid_alive "$child"; do sleep "$ATTACH_POLL"; done
+      while child_is_same_process; do sleep "$ATTACH_POLL"; done
       rm -f "$child_out" 2>/dev/null || true
       child=
       child_out=
@@ -222,11 +226,11 @@ while :; do
       attach_and_wait "$HEALTHY_PID"
     fi
     report_healthy
-    while fm_pid_alive "$child"; do sleep "$ATTACH_POLL"; done
+    while child_is_same_process; do sleep "$ATTACH_POLL"; done
     rm -f "$child_out" 2>/dev/null || true
     exit 0
   fi
-  if [ "$child_done" -eq 0 ] && ! fm_pid_alive "$child"; then
+  if [ "$child_done" -eq 0 ] && ! child_is_same_process; then
     rc=0
     child_done=1
     if [ "$rc" -eq 0 ] && watch_output_has_wake "$child_out"; then
@@ -240,10 +244,14 @@ while :; do
 done
 
 trap - HUP TERM INT
-if [ -n "$child" ] && fm_pid_alive "$child"; then
+if child_is_same_process; then
   kill -TERM "$child" 2>/dev/null || true
+  i=0
+  while [ "$i" -lt 50 ] && child_is_same_process; do
+    sleep 0.1
+    i=$((i + 1))
+  done
 fi
-wait "$child" 2>/dev/null || true
 print_watch_output "$child_out"
 cleanup_child
 echo "watcher: FAILED - no live watcher with a fresh beacon"
