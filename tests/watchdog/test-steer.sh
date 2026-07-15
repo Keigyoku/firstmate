@@ -377,7 +377,7 @@ test_unarmed_session_is_not_steered_on_first_discovery() {
 }
 
 test_rotation_rearms_new_session() {
-  local home config session_dir worktree double log pending handled new_sig status event threshold_count timeout_cmd
+  local home config session_dir worktree double log pending handled new_sig status event threshold_count timeout_cmd compact_count
   if command -v timeout >/dev/null 2>&1; then
     timeout_cmd=timeout
   elif command -v gtimeout >/dev/null 2>&1; then
@@ -427,6 +427,8 @@ test_rotation_rearms_new_session() {
     bash -c '. "$1"; file=$(fm_watchdog_session_file codex demo); fm_watchdog_file_identity "$file"' _ "$ROOT/bin/fm-watchdog-lib.sh")
   [ "$(sed -n '1p' "$handled")" != "$new_sig" ] || fail "rotation must not mark the new session as handled"
   [ ! -e "$pending" ] || fail "rotation should clear the old pending marker"
+  compact_count=$(grep -cF 'tmux|target-pane|/compact' "$log" || true)
+  [ "$compact_count" = 0 ] || fail "transcript rotation must cancel pending compact delivery"
 
   sleep 1
   write_codex_rollout "$session_dir/rollout-new-low.jsonl" "$worktree" 900 new-sid
@@ -502,6 +504,7 @@ test_same_file_claude_compact_summary_rearms_session() {
   expect_code 124 "$status" "same generation watcher pass should be stopped by test timeout"
   send_count=$(wc -l < "$log" | tr -d '[:space:]')
   [ "$send_count" = 1 ] || fail "handled same-file compact generation should not steer again, got $send_count sends"
+  [ "$(grep -cF 'tmux|target-pane|/compact' "$log" || true)" = 0 ] || fail "auto-compact generation change must cancel pending compact delivery"
 
   write_claude_checkpoint "$checkpoint_dir" claude-sid 0
   "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CLAUDE_SESSION_DIR="$session_dir" \
@@ -525,7 +528,7 @@ test_same_file_claude_compact_summary_rearms_session() {
 }
 
 test_wrap_ack_delivers_compact() {
-  local home config session_dir worktree double log pending ack request status event timeout_cmd
+  local home config session_dir worktree double log pending ack request message marker_command status event timeout_cmd
   if command -v timeout >/dev/null 2>&1; then
     timeout_cmd=timeout
   elif command -v gtimeout >/dev/null 2>&1; then
@@ -534,7 +537,7 @@ test_wrap_ack_delivers_compact() {
     pass "timeout helper unavailable; skipping wrap acknowledgement coverage"
     return
   fi
-  home="$TMP_ROOT/wrap-ack-home"
+  home="$TMP_ROOT/wrap-ack-home's"
   config="$TMP_ROOT/wrap-ack-config"
   session_dir="$TMP_ROOT/wrap-ack-sessions"
   worktree="$TMP_ROOT/wrap-ack-worktree"
@@ -562,8 +565,13 @@ test_wrap_ack_delivers_compact() {
   [ "$(sed -n '6p' "$pending")" = wrap_requested ] || fail "pending marker should wait for wrap acknowledgement"
   request=$(sed -n '4p' "$pending")
   ack="$home/state/watchdog/.compact-wrap-ack-demo"
-  printf '%s\n' "$request" > "$ack.tmp"
-  mv -f "$ack.tmp" "$ack"
+  message=$(cut -d'|' -f3- "$log")
+  assert_contains "$message" "WATCHDOG WRAP REQUEST $request" "delivered wrap should contain its pending token"
+  assert_contains "$message" "Complete and land the current unit of work." "delivered wrap should require complete-and-land"
+  assert_contains "$message" "Do not run /compact yourself." "delivered wrap should forbid crew-driven compact"
+  marker_command=${message#*atomically by running: }
+  bash -c "$marker_command" || fail "delivered wrap marker command should execute successfully"
+  [ "$(cat "$ack")" = "$request" ] || fail "delivered wrap marker command should atomically write the exact token"
 
   "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" \
     FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 \
@@ -578,7 +586,7 @@ test_wrap_ack_delivers_compact() {
 }
 
 test_wrap_ack_timeout_starts_successor() {
-  local home config session_dir worktree double log successor successor_log pending status event timeout_cmd
+  local home config session_dir worktree double log successor successor_log pending ack request status event timeout_cmd
   if command -v timeout >/dev/null 2>&1; then timeout_cmd=timeout; elif command -v gtimeout >/dev/null 2>&1; then timeout_cmd=gtimeout; else pass "timeout helper unavailable; skipping wrap timeout coverage"; return; fi
   home="$TMP_ROOT/wrap-timeout-home"
   config="$TMP_ROOT/wrap-timeout-config"
@@ -610,7 +618,11 @@ SH
   expect_code 124 "$status" "wrap-timeout request pass should keep polling"
   pending="$home/state/watchdog/.compact-pending-demo"
   assert_present "$pending" "wrap timeout test should create a pending request"
+  request=$(sed -n '4p' "$pending")
+  ack="$home/state/watchdog/.compact-wrap-ack-demo"
   sleep 2
+  printf '%s\n' "$request" > "$ack"
+  rm -f "$session_dir/rollout-demo.jsonl"
   "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_WATCHDOG_SUCCESSOR_CMD="$successor" FM_SUCCESSOR_LOG="$successor_log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
   status=$?
   expect_code 124 "$status" "wrap-timeout escalation should keep the watcher polling after successor handoff"
@@ -619,6 +631,56 @@ SH
   [ -s "$successor_log" ] || fail "expired wrap request should enter the successor path"
   [ "$(wc -l < "$log" | tr -d '[:space:]')" = 1 ] || fail "expired wrap request must not deliver compact"
   pass "wrap acknowledgement timeout enters successor without blind compact"
+}
+
+test_wrap_ack_revalidates_before_compact() {
+  local home config session_dir worktree double log pending ack request rotate status event timeout_cmd
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+  else
+    pass "timeout helper unavailable; skipping pre-delivery rotation coverage"
+    return
+  fi
+  home="$TMP_ROOT/wrap-race-home"
+  config="$TMP_ROOT/wrap-race-config"
+  session_dir="$TMP_ROOT/wrap-race-sessions"
+  worktree="$TMP_ROOT/wrap-race-worktree"
+  double="$TMP_ROOT/wrap-race-double"
+  log="$TMP_ROOT/wrap-race.log"
+  rotate="$TMP_ROOT/wrap-race-rotate"
+  mkdir -p "$home/state" "$worktree"
+  fm_write_meta "$home/state/demo.meta" "window=target-pane" "worktree=$worktree" "backend=tmux" "harness=codex"
+  write_fast_threshold_config "$config"
+  make_success_double "$double" "$log"
+  write_codex_rollout "$session_dir/rollout-demo.jsonl" "$worktree" 900 old-sid
+  cat > "$rotate" <<'SH'
+#!/usr/bin/env bash
+sleep 1
+jq -cn --arg cwd "$FM_RACE_WORKTREE" '{type:"session_meta",payload:{session_id:"new-sid",cwd:$cwd}}' > "$FM_RACE_SESSION_DIR/rollout-new.jsonl"
+jq -cn '{type:"event_msg",payload:{type:"token_count",info:{last_token_usage:{total_tokens:0},model_context_window:1000}}}' >> "$FM_RACE_SESSION_DIR/rollout-new.jsonl"
+SH
+  chmod +x "$rotate"
+
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "initial pre-delivery rotation pass should arm the session"
+  "$timeout_cmd" 1 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "pre-delivery rotation request pass should keep polling"
+  pending="$home/state/watchdog/.compact-pending-demo"
+  request=$(sed -n '4p' "$pending")
+  ack="$home/state/watchdog/.compact-wrap-ack-demo"
+  printf '%s\n' "$request" > "$ack"
+
+  "$timeout_cmd" 3 env FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" FM_WATCHDOG_CODEX_SESSION_DIR="$session_dir" FM_STEER_BACKEND_CMD="$double" FM_STEER_DOUBLE_LOG="$log" FM_WATCHDOG_BEFORE_COMPACT_DELIVERY="$rotate" FM_RACE_SESSION_DIR="$session_dir" FM_RACE_WORKTREE="$worktree" FM_POLL=30 "$ROOT/bin/fm-watch.sh" >/dev/null 2>&1
+  status=$?
+  expect_code 124 "$status" "pre-delivery rotation cancellation should keep polling"
+  event="$home/fm-state/watchdog.events"
+  assert_contains "$(cat "$event")" '"type":"compact_rotated"' "rotation immediately before delivery should cancel the pending compact"
+  [ "$(grep -cF 'tmux|target-pane|/compact' "$log" || true)" = 0 ] || fail "pre-delivery identity change must prevent compact delivery"
+  pass "watcher revalidates transcript identity immediately before compact"
 }
 
 test_metrics_collection_failure_is_visible_and_throttled() {
@@ -1101,6 +1163,7 @@ test_rotation_rearms_new_session
 test_same_file_claude_compact_summary_rearms_session
 test_wrap_ack_delivers_compact
 test_wrap_ack_timeout_starts_successor
+test_wrap_ack_revalidates_before_compact
 test_metrics_collection_failure_is_visible_and_throttled
 test_unsupported_harness_skips_watchdog_metrics
 test_stale_meta_skips_watchdog_threshold_scan
