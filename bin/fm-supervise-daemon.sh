@@ -4,11 +4,11 @@
 # Wraps bin/fm-watch.sh: runs it as a child, classifies each wake reason, and
 # either SELF-HANDLES the routine majority in bash (no firstmate turn) or
 # ESCALATES a batched, distilled digest to the supervisor pane on
-# captain-relevant events plus bounded declared-pause rechecks. This is the
+# captain-relevant events plus bounded deliberate-hold rechecks. This is the
 # token-efficient replacement for the prior always-inject daemon: routine
 # signal/stale/heartbeat wakes cost zero firstmate context; only done/
 # needs-decision/blocked/failed/persistent-wedge/check-output events and a
-# declared-pause recheck reach the LLM, and even then as one pre-read digest per
+# deliberate-hold recheck reach the LLM, and even then as one pre-read digest per
 # batch window.
 #
 # PRESENCE-GATING (the /afk contract). The daemon is the away-mode engine: it
@@ -37,10 +37,10 @@
 #     reason.
 #   - Fail-safe-to-escalate: any wake the classifier cannot confidently mark
 #     routine is escalated.
-#   - Bounded wedge latency: a stale pane without a declared external wait is
+#   - Bounded wedge latency: a stale pane without a deliberate hold is
 #     escalated only after it has been idle for STALE_ESCALATE_SECS
 #     (configurable), rechecked once. A wedged crewmate is therefore detected
-#     within STALE_ESCALATE_SECS + a tick, never lost. A declared pause instead
+#     within STALE_ESCALATE_SECS + a tick, never lost. A deliberate hold instead
 #     gets its own longer PAUSE_RESURFACE_SECS recheck, never a wedge escalation.
 #     Crewmates are autonomous, so a delayed stale response does not stall a
 #     healthy crewmate's own progress.
@@ -85,7 +85,7 @@
 #                                   kinds.
 #          FM_STALE_ESCALATE_SECS   idle seconds before a stale pane escalates
 #                                   as a possible wedge (default 240)
-#          FM_PAUSE_RESURFACE_SECS  idle seconds before a declared external wait
+#          FM_PAUSE_RESURFACE_SECS  idle seconds before a deliberate hold
 #                                   re-surfaces as a recheck (default 3600)
 #          FM_ESCALATE_BATCH_SECS   buffer window for batched escalation
 #                                   digests; 0 = flush immediately (default 90)
@@ -419,6 +419,10 @@ classify_stale() {  # <window> <state>
     printf 'pause|paused (awaiting external), rechecked on a long cadence: %s' "$last"
     return
   fi
+  if FM_STATE_OVERRIDE="$state" held_gate_is_verified "$task"; then
+    printf 'pause|held for captain at ask-user gate, rechecked on a long cadence'
+    return
+  fi
   if [ -n "$last" ] && status_is_captain_relevant "$last"; then
     # Dedupe against the signal path: if this status was already escalated
     # (seen marker matches), self-handle to avoid a duplicate in the digest.
@@ -471,7 +475,7 @@ stale_marker_remove() {  # <window> <state>
   rm -f "$state/.subsuper-stale-$key"
 }
 
-# Pause marker: state/.subsuper-paused-<key> holds the epoch a declared pause was
+# Pause marker: state/.subsuper-paused-<key> holds the epoch a deliberate hold was
 # first observed idle. Housekeeping ages it against PAUSE_RESURFACE_SECS (much
 # longer than a wedge) and re-surfaces the pause once per window. Recording is
 # create-if-absent so the timestamp is stable across a churny idle pane (many
@@ -500,12 +504,15 @@ clear_pause_tracking() {  # <window> <state>
 }
 
 reconcile_pause_tracking() {  # <window> <state> <last-status-line>
-  local win=$1 state=$2 last=$3 task key marker watcher_key
+  local win=$1 state=$2 last=$3 task key marker watcher_key held=
   task=$(window_to_task "$win" "$state")
   key=$(_stale_key "$task")
   marker="$state/.subsuper-paused-$key"
   watcher_key=$(_stale_key "$win")
-  if status_is_paused "$last"; then
+  if FM_STATE_OVERRIDE="$state" held_gate_is_verified "$task"; then
+    held=1
+  fi
+  if status_is_paused "$last" || [ -n "$held" ]; then
     stale_marker_remove "$win" "$state"
     pause_marker_record "$win" "$state"
   elif [ -e "$marker" ] || [ -e "$state/.paused-$watcher_key" ]; then
@@ -523,7 +530,8 @@ migrate_watcher_pause_markers() {  # <state>
     key=$(_stale_key "$task")
     watcher_key=$(_stale_key "$win")
     last=$(last_status_line "$state/$task.status")
-    if status_is_paused "$last" || [ -e "$state/.subsuper-paused-$key" ] || [ -e "$state/.paused-$watcher_key" ]; then
+    if status_is_paused "$last" || [ -e "$(FM_STATE_OVERRIDE="$state" held_gate_marker "$task")" ] \
+       || [ -e "$state/.subsuper-paused-$key" ] || [ -e "$state/.paused-$watcher_key" ]; then
       reconcile_pause_tracking "$win" "$state" "$last"
     fi
   done
@@ -964,8 +972,8 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
 #     Never silently defer forever.
 #  2) stale recheck: for each pending stale marker past STALE_ESCALATE_SECS,
 #     re-peek the pane; still idle -> escalate (wedge); resumed -> clear marker.
-#  2b) pause re-surface: for each declared-pause marker past PAUSE_RESURFACE_SECS,
-#     re-peek; busy/gone -> clear; still idle + still paused -> escalate a recheck
+#  2b) pause re-surface: for each deliberate-hold marker past PAUSE_RESURFACE_SECS,
+#     re-peek; busy/gone -> clear; still idle + still held -> escalate a recheck
 #     digest and reset the window (repeating bounded re-surface, never a wedge).
 #  3) heartbeat scan: every HEARTBEAT_SCAN_SECS, grep state/*.status for a
 #     captain-relevant line the per-wake classifier missed and escalate it.
@@ -1017,7 +1025,8 @@ housekeeping() {  # <state>
     fi
     task=$(window_to_task "$win" "$state")
     last=$(last_status_line "$state/$task.status")
-    if [ -n "$last" ] && status_is_paused "$last"; then
+    if { [ -n "$last" ] && status_is_paused "$last"; } \
+       || [ -e "$(FM_STATE_OVERRIDE="$state" held_gate_marker "$task")" ]; then
       reconcile_pause_tracking "$win" "$state" "$last"
       continue
     fi
@@ -1032,11 +1041,11 @@ housekeeping() {  # <state>
     esac
   done
 
-  # (2b) pause re-surface recheck. A DECLARED external-wait pause idles by design,
+  # (2b) pause re-surface recheck. A deliberate hold idles by design,
   # so it is rechecked on a much longer cadence than a wedge (PAUSE_RESURFACE_SECS)
-  # and never escalated as one - but it MUST re-surface, so a forgotten pause cannot
+  # and never escalated as one - but it MUST re-surface, so a forgotten hold cannot
   # rot invisibly. Past the window: busy (resumed) or gone -> drop; still idle and
-  # still declaring the pause -> escalate a recheck digest and reset the marker so
+  # still verified as held -> escalate a recheck digest and reset the marker so
   # the window repeats.
   pause_secs=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT}
   for marker in "$state"/.subsuper-paused-*; do
@@ -1048,7 +1057,8 @@ housekeeping() {  # <state>
     fi
     task=$(window_to_task "$win" "$state")
     last=$(last_status_line "$state/$task.status")
-    if [ -z "$last" ] || ! status_is_paused "$last"; then
+    if ! status_is_paused "$last" \
+       && ! FM_STATE_OVERRIDE="$state" held_gate_is_verified "$task"; then
       reconcile_pause_tracking "$win" "$state" "$last"
       continue
     fi
@@ -1060,8 +1070,11 @@ housekeeping() {  # <state>
       2) rm -f "$marker" ;;
       *)
         last=$(last_status_line "$state/$task.status")
-        if [ -n "$last" ] && status_is_paused "$last"; then
+        if status_is_paused "$last"; then
           escalate_add "$state" "paused ${age}s (awaiting external, recheck whether the wait still holds): $win"
+          _now > "$marker"
+        elif FM_STATE_OVERRIDE="$state" held_gate_is_verified "$task"; then
+          escalate_add "$state" "paused ${age}s (held for captain at ask-user gate, recheck whether the decision still holds): $win"
           _now > "$marker"
         else
           rm -f "$marker"

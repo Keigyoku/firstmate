@@ -130,6 +130,51 @@ test_classify_terminal_signal_escalates() {
   pass "captain-relevant status verbs escalate"
 }
 
+test_classify_stale_verified_held_gate_pauses() {
+  local dir state fakebin out win
+  dir=$(make_supercase classify-held-gate)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  make_fake_crew_state "$fakebin" >/dev/null
+  win="sess:fm-held-gate"
+  printf 'window=%s\nkind=ship\n' "$win" > "$state/held-gate.meta"
+  printf 'needs-decision: choose a review finding resolution\n' > "$state/held-gate.status"
+  : > "$state/held-gate.held-for-captain"
+  out=$(PATH="$fakebin:$PATH" FM_FAKE_CREW_STATE='state: parked · source: run-step · parked at review: 1 finding(s) (ask-user: captain decision)' \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STATE_OVERRIDE="$state" classify_stale "$win" "$state")
+  case "$out" in pause\|*held\ for\ captain*) ;; *) fail "verified held gate did not use daemon pause classification: $out" ;; esac
+  [ -e "$state/held-gate.held-for-captain" ] || fail "daemon cleared a still-verified held marker"
+  pass "away-mode stale classification reuses pause handling for a verified held gate"
+}
+
+test_housekeeping_held_gate_resurfaces_and_clears() {
+  local dir state fakebin win pane key
+  dir=$(make_supercase held-gate-resurface)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  make_fake_crew_state "$fakebin" >/dev/null
+  win="sess:fm-held-gate-housekeeping"
+  pane="$dir/pane.txt"
+  printf 'window=%s\nkind=ship\n' "$win" > "$state/held-gate-housekeeping.meta"
+  printf 'needs-decision: choose a review finding resolution\n' > "$state/held-gate-housekeeping.status"
+  printf 'idle prompt $\n' > "$pane"
+  : > "$state/held-gate-housekeeping.held-for-captain"
+  key=$(printf '%s' "held-gate-housekeeping" | tr ':/.' '___')
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_CREW_STATE='state: parked · source: run-step · parked at review: 1 finding(s) (ask-user: captain decision)' \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  grep -F "held for captain at ask-user gate" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    || fail "away-mode held gate did not re-surface on the pause cadence"
+  : > "$state/.subsuper-escalations"
+  PATH="$fakebin:$PATH" FM_FAKE_CREW_STATE='state: working · source: run-step · validating (fixing)' \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  [ ! -e "$state/held-gate-housekeeping.held-for-captain" ] || fail "away-mode reconciliation retained a resumed held marker"
+  [ ! -e "$state/.subsuper-paused-$key" ] || fail "away-mode reconciliation retained pause tracking after resume"
+  pass "away-mode held gates re-surface on pause cadence and clear on authoritative resume"
+}
+
 test_classify_check_and_unknown_escalate() {
   local out
   out=$(classify_check "check: /s/c.check.sh: merged: https://x")
@@ -1713,6 +1758,7 @@ test_afk_start_does_not_set_flag_when_startup_preflight_fails
 test_daemon_state_root_uses_fm_home
 test_classify_routine_signal_self
 test_classify_terminal_signal_escalates
+test_classify_stale_verified_held_gate_pauses
 test_classify_check_and_unknown_escalate
 test_stale_transient_self_records_marker
 test_stale_terminal_escalates
@@ -1726,6 +1772,7 @@ test_housekeeping_seeds_pause_marker_from_status
 test_housekeeping_persistent_stale_escalates
 test_housekeeping_resumed_stale_cleared
 test_housekeeping_paused_resurfaces_and_resets
+test_housekeeping_held_gate_resurfaces_and_clears
 test_housekeeping_paused_resumed_cleared
 test_housekeeping_paused_unpaused_cleared
 test_housekeeping_stale_marker_transitions_to_pause
