@@ -203,6 +203,7 @@ while :; do
       echo "watcher: started pid=$child (beacon fresh)"
       wait "$child"
       rc=$?
+      child=
       print_watch_output "$child_out"
       rm -f "$child_out" 2>/dev/null || true
       exit "$rc"
@@ -211,20 +212,22 @@ while :; do
     if [ "$mode" = arm ]; then
       report_attached
       wait "$child" 2>/dev/null || true
-      rm -f "$child_out" 2>/dev/null || true
       child=
+      rm -f "$child_out" 2>/dev/null || true
       child_out=
       trap - HUP TERM INT
       attach_and_wait "$HEALTHY_PID"
     fi
     report_healthy
     wait "$child" 2>/dev/null || true
+    child=
     rm -f "$child_out" 2>/dev/null || true
     exit 0
   fi
   if [ "$child_done" -eq 0 ] && ! fm_pid_alive "$child"; then
     wait "$child"
     rc=$?
+    child=
     child_done=1
     if [ "$rc" -eq 0 ] && watch_output_has_wake "$child_out"; then
       print_watch_output "$child_out"
@@ -239,5 +242,8 @@ done
 trap - HUP TERM INT
 echo "watcher: FAILED - no live watcher with a fresh beacon"
 cleanup_child
-wait "$child" 2>/dev/null || true
+if [ -n "$child" ]; then
+  wait "$child" 2>/dev/null || true
+  child=
+fi
 exit 1
