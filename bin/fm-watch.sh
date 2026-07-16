@@ -68,11 +68,6 @@ mkdir -p "$STATE"
 # shellcheck source=bin/fm-watchdog-lib.sh
 . "$SCRIPT_DIR/fm-watchdog-lib.sh"
 
-if [ -n "${FM_WATCH_LAUNCH_IDENTITY_FILE:-}" ]; then
-  fm_pid_identity "${BASHPID:-$$}" > "$FM_WATCH_LAUNCH_IDENTITY_FILE" || exit 1
-  unset FM_WATCH_LAUNCH_IDENTITY_FILE
-fi
-
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
 WATCHER_STALE_GRACE=${FM_WATCHER_STALE_GRACE:-${FM_GUARD_GRACE:-300}}
