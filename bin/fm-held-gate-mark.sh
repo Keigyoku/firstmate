@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Record a captain-owned ask-user gate after firstmate relays it to the captain.
+# Refuses unless the authoritative run-step still verifies that parked gate.
+# Usage: fm-held-gate-mark.sh <task-id>
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

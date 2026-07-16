@@ -51,9 +51,9 @@ FM_CLASSIFY_CAPTAIN_RE_DEFAULT='done:|needs-decision:|blocked:|failed:|PR ready|
 # drift between the two consumers. FM_CLASSIFY_PAUSED_VERB overrides it.
 FM_CLASSIFY_PAUSED_VERB_DEFAULT='paused'
 
-# Bounded re-surface cadence for a declared pause. Far longer than the wedge
-# threshold (FM_STALE_ESCALATE_SECS, default 240s) so a deliberate wait is not
-# nagged like a wedge, yet finite so a forgotten pause cannot rot invisibly - it
+# Bounded re-surface cadence for a deliberate hold. Far longer than the wedge
+# threshold (FM_STALE_ESCALATE_SECS, default 240s) so an expected wait is not
+# nagged like a wedge, yet finite so a forgotten hold cannot rot invisibly - it
 # re-surfaces once for a recheck every window. One hour by default; both consumers
 # read FM_PAUSE_RESURFACE_SECS with this default so the cadence has one owner.
 # shellcheck disable=SC2034 # Read by the watcher and daemon (fm-watch.sh, fm-supervise-daemon.sh), not this lib.
@@ -219,9 +219,10 @@ crew_is_provably_working() {  # <id>
   [ "$(crew_absorb_class "$1")" = working ]
 }
 
-# 0 if crew <id>'s authoritative current state is a declared external-wait pause.
-# The stale path absorbs such a crew (on a long re-surface cadence) instead of
-# escalating a possible wedge.
+# 0 if crew <id> is in a verified deliberate hold: either a declared external
+# wait or a firstmate-marked ask-user gate that remains authoritatively parked.
+# The stale path absorbs such a crew on a long cadence instead of escalating a
+# possible wedge.
 crew_is_paused() {  # <id>
   [ "$(crew_absorb_class "$1")" = paused ]
 }
