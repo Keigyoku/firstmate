@@ -228,10 +228,9 @@ Use `FM_WATCHDOG_CONFIG` to point at a different config file, `FM_WATCHDOG_CLAUD
 
 ## Toolchain
 
-On session start the first mate detects what its required toolchain is missing or too old (tmux, node, git, gh with GitHub auth via `gh auth login`, jq, treehouse with durable lease support, no-mistakes v1.31.2 or newer, gh-axi, chrome-devtools-axi, lavish-axi, compatible tasks-axi per "Backlog backend" above, quota-axi, and a watcher session launcher), lists it with the exact install commands, and installs only after you say go.
+On session start the first mate detects what its required toolchain is missing or too old (tmux, node, git, gh with GitHub auth via `gh auth login`, jq, treehouse with durable lease support, no-mistakes v1.31.2 or newer, gh-axi, chrome-devtools-axi, lavish-axi, compatible tasks-axi per "Backlog backend" above, and quota-axi), lists it with the exact install commands, and installs only after you say go.
 This section is the single owner of that universal toolchain list; backend guides' prerequisites point here and add only their backend-specific tools.
 In that list, treehouse pools clean task worktrees, no-mistakes runs the validation pipeline, gh-axi, chrome-devtools-axi, and lavish-axi cover GitHub, browser, and rich-review operations, and tasks-axi plus quota-axi back backlog mutations and quota-balanced dispatch.
-The watcher session launcher is native `setsid` when available, with Perl's POSIX `setsid` support as the portable fallback; when neither works, bootstrap reports `MISSING: setsid` with the platform install command.
 When bootstrap resolves `backend=orca` from `FM_BACKEND` or `config/backend`, it requires the expected Orca CLI shape (`orca --help` exposing `status`, `repo`, `worktree`, and `terminal`), keeps the universal `node` requirement, and skips `tmux` and `treehouse`.
 Bootstrap requires `jq` in every profile because dispatch-profile validation, watchdog config validation, X-mode clients, watchdog metrics parsing, and JSON-speaking backends depend on it.
 When X mode is opted in, bootstrap also requires `curl` and `jq` before arming the relay poll shim.

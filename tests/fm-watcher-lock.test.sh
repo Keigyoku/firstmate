@@ -558,118 +558,13 @@ test_arm_starts_and_self_heals() {
   pass "arm starts+confirms a fresh watcher on a clean lock and self-heals a dead-pid lock (never healthy off a dead pid)"
 }
 
-test_arm_prefers_native_setsid() {
-  local dir state fakebin armout native_marker perl_marker real_perl i armpid lock_pid
-  dir=$(make_case arm-native-setsid)
-  state="$dir/state"
-  fakebin="$dir/fakebin"
-  armout="$dir/arm.out"
-  native_marker="$dir/native.marker"
-  perl_marker="$dir/perl.marker"
-  real_perl=$(command -v perl) || fail "Perl is required for portable session-launcher tests"
-  cat > "$fakebin/setsid" <<SH
-#!/usr/bin/env bash
-: > '$native_marker'
-exec '$real_perl' -MPOSIX=setsid -e 'setsid() >= 0 or die "setsid: \$!\n"; exec @ARGV or die "exec: \$!\n"' "\$@"
-SH
-  cat > "$fakebin/perl" <<SH
-#!/usr/bin/env bash
-: > '$perl_marker'
-exit 77
-SH
-  chmod +x "$fakebin/setsid" "$fakebin/perl"
-
-  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
-  armpid=$!
-  i=0
-  while [ "$i" -lt 80 ]; do
-    grep -qF 'watcher: started pid=' "$armout" 2>/dev/null && break
-    sleep 0.1
-    i=$((i + 1))
-  done
-  grep -qF 'watcher: started pid=' "$armout" || fail "arm did not start through native setsid"
-  [ -e "$native_marker" ] || fail "arm did not select native setsid"
-  [ ! -e "$perl_marker" ] || fail "arm probed or launched Perl despite native setsid"
-  lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
-  kill "$armpid" "$lock_pid" 2>/dev/null || true
-  wait "$armpid" 2>/dev/null || true
-  pass "arm prefers native setsid without requiring Perl"
-}
-
-test_arm_uses_perl_setsid_fallback() {
-  local dir state fakebin armout bash_env perl_marker real_perl i armpid lock_pid
-  dir=$(make_case arm-perl-setsid)
-  state="$dir/state"
-  fakebin="$dir/fakebin"
-  armout="$dir/arm.out"
-  bash_env="$dir/no-setsid.bash"
-  perl_marker="$dir/perl.marker"
-  real_perl=$(command -v perl) || fail "Perl is required for launcher fallback test"
-  cat > "$fakebin/perl" <<SH
-#!/usr/bin/env bash
-: > '$perl_marker'
-exec '$real_perl' "\$@"
-SH
-  chmod +x "$fakebin/perl"
-  cat > "$bash_env" <<'SH'
-command() {
-  if [ "${1:-}" = -v ] && [ "${2:-}" = setsid ]; then
-    return 1
-  fi
-  builtin command "$@"
-}
-SH
-
-  PATH="$fakebin:$PATH" BASH_ENV="$bash_env" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
-  armpid=$!
-  i=0
-  while [ "$i" -lt 80 ]; do
-    grep -qF 'watcher: started pid=' "$armout" 2>/dev/null && break
-    sleep 0.1
-    i=$((i + 1))
-  done
-  grep -qF 'watcher: started pid=' "$armout" || fail "arm did not start through the Perl fallback"
-  [ -e "$perl_marker" ] || fail "arm did not select the Perl POSIX fallback"
-  lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
-  kill "$armpid" "$lock_pid" 2>/dev/null || true
-  wait "$armpid" 2>/dev/null || true
-  pass "arm uses Perl POSIX when native setsid is unavailable"
-}
-
-test_arm_fails_without_session_launcher() {
-  local dir state fakebin armout armerr bash_env status
-  dir=$(make_case arm-no-session-launcher)
-  state="$dir/state"
-  fakebin="$dir/fakebin"
-  armout="$dir/arm.out"
-  armerr="$dir/arm.err"
-  bash_env="$dir/no-session-launcher.bash"
-  cat > "$bash_env" <<'SH'
-command() {
-  if [ "${1:-}" = -v ]; then
-    case "${2:-}" in setsid|perl) return 1 ;; esac
-  fi
-  builtin command "$@"
-}
-SH
-
-  status=0
-  PATH="$fakebin:$PATH" BASH_ENV="$bash_env" FM_STATE_OVERRIDE="$state" "$WATCH_ARM" > "$armout" 2> "$armerr" || status=$?
-  [ "$status" -ne 0 ] || fail "arm exited zero without a watcher session launcher"
-  grep -qF 'watcher: FAILED - no session launcher (requires setsid or Perl POSIX)' "$armerr" \
-    || fail "arm did not explain the missing watcher session launcher"
-  ! ls "$state"/.watch-arm-output.* >/dev/null 2>&1 || fail "launcher failure left temporary output behind"
-  pass "arm fails loudly when neither session launcher is available"
-}
-
-test_arm_hup_preserves_watcher_and_cleans_temp_output() {
-  local dir state fakebin armout i armpid arm_pgid lock_pid watcher_pgid status
+test_arm_hup_cleans_child_and_temp_output() {
+  local dir state fakebin armout i armpid lock_pid status
   dir=$(make_case arm-hup-cleanup)
   state="$dir/state"
   fakebin="$dir/fakebin"
   armout="$dir/arm.out"
-  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
-    perl -MPOSIX=setsid -e 'setsid() >= 0 or die "setsid: $!\n"; exec @ARGV or die "exec: $!\n"' "$WATCH_ARM" > "$armout" &
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH_ARM" > "$armout" &
   armpid=$!
   i=0
   while [ "$i" -lt 80 ]; do
@@ -679,20 +574,18 @@ test_arm_hup_preserves_watcher_and_cleans_temp_output() {
   done
   grep -qF 'watcher: started pid=' "$armout" || fail "arm did not start before HUP cleanup check"
   lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
-  arm_pgid=$(ps -o pgid= -p "$armpid" 2>/dev/null | tr -d ' ')
-  watcher_pgid=$(ps -o pgid= -p "$lock_pid" 2>/dev/null | tr -d ' ')
-  [ "$arm_pgid" = "$armpid" ] || fail "arm did not start in an isolated process group"
-  [ "$watcher_pgid" = "$lock_pid" ] || fail "watcher did not start in an isolated process group"
-  [ "$watcher_pgid" != "$arm_pgid" ] || fail "watcher remained in the arm process group"
-  kill -HUP -- "-$arm_pgid" 2>/dev/null || fail "could not send HUP to arm process group"
+  kill -HUP "$armpid" 2>/dev/null || fail "could not send HUP to arm"
   wait_for_exit "$armpid" 80
   status=$?
   [ "$status" -eq 129 ] || fail "arm did not exit with HUP status (got $status)"
-  is_live_non_zombie "$lock_pid" || fail "HUP of the arm task process group also killed the watcher"
+  i=0
+  while [ "$i" -lt 80 ] && is_live_non_zombie "$lock_pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  ! is_live_non_zombie "$lock_pid" || fail "HUP cleanup left watcher child running"
   ! ls "$state"/.watch-arm-output.* >/dev/null 2>&1 || fail "HUP cleanup left temp output behind"
-  kill "$lock_pid" 2>/dev/null || true
-  wait "$lock_pid" 2>/dev/null || true
-  pass "arm process-group HUP leaves the watcher alive and cleans temporary output"
+  pass "arm cleans child watcher and temp output on HUP"
 }
 
 test_arm_propagates_immediate_wake_before_confirmation() {
@@ -828,10 +721,7 @@ test_watch_restart_reports_healthy_peer_without_attaching
 test_watcher_self_evicts_on_lock_takeover
 test_arm_attaches_and_waits_for_live_fresh_watcher
 test_arm_starts_and_self_heals
-test_arm_prefers_native_setsid
-test_arm_uses_perl_setsid_fallback
-test_arm_fails_without_session_launcher
-test_arm_hup_preserves_watcher_and_cleans_temp_output
+test_arm_hup_cleans_child_and_temp_output
 test_arm_propagates_immediate_wake_before_confirmation
 test_arm_waits_for_peer_beacon_after_child_stands_down
 test_arm_fails_loud_when_no_fresh_watcher_confirmable

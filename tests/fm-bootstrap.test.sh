@@ -355,29 +355,6 @@ SH
   pass "bootstrap requires git with an install instruction"
 }
 
-test_watcher_session_launcher_is_required() {
-  local case_dir fakebin bash_env out expected
-  case_dir="$TMP_ROOT/watcher-session-launcher"
-  mkdir -p "$case_dir/home/config"
-  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
-  fakebin=$(make_fake_toolchain "$case_dir")
-  bash_env="$case_dir/no-session-launcher.bash"
-  cat > "$bash_env" <<'SH'
-command() {
-  if [ "${1:-}" = -v ]; then
-    case "${2:-}" in setsid|perl) return 1 ;; esac
-  fi
-  builtin command "$@"
-}
-SH
-
-  out=$(PATH="$fakebin:$BASE_PATH" BASH_ENV="$bash_env" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
-    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
-  expected="MISSING: setsid (install: brew install util-linux  # or the platform's package manager)"
-  [ "$out" = "$expected" ] || fail "missing watcher session launchers should report the supported install instruction, got: $out"
-  pass "bootstrap requires setsid or the Perl POSIX fallback"
-}
-
 test_orca_backend_gates_orca_tool_only_when_selected() {
   local case_dir fakebin sysbin out missing_orca
   missing_orca="MISSING: orca (install: brew install orca  # or the platform's package manager)"
@@ -588,7 +565,6 @@ test_watchdog_config_validation() {
 test_bootstrap_reporting
 test_no_mistakes_min_version
 test_git_is_required_with_supported_install_instruction
-test_watcher_session_launcher_is_required
 test_orca_backend_gates_orca_tool_only_when_selected
 test_orca_backend_rejects_partial_orca_cli
 test_fleet_sync_timeout_scales_with_origin_backed_project_count

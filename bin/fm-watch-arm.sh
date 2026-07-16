@@ -8,16 +8,17 @@
 # call and NOTIFIES on exit, so firstmate must run this script as the harness's
 # own tracked background task (e.g. run_in_background). Run it as its own
 # standalone background task, never bundled onto the tail of another command.
-# NEVER fire it and forget with a shell `&` inside another call: that hides launch
-# failure and severs the harness notification path when the watcher exits.
+# NEVER fire it and forget with a shell `&` inside another call: that backgrounded
+# child is reaped when the call returns, leaving NO watcher running and a false
+# "already running" off the dying process. That exact mistake silently took
+# supervision down for ~30 minutes.
 # On a harness with a PreToolUse-equivalent hook, bin/fm-arm-pretool-check.sh
 # applies the command-position policy before the command runs; see
 # docs/arm-pretool-check.md for the blessed tree and deny reason codes. It is a
 # pre-execution seatbelt, not a substitute for the verification here.
 #
-# This script starts the watcher in a separate process session, keeps waiting on
-# that child for wake delivery, and VERIFIES the outcome before it settles in.
-# It confirms a watcher process is genuinely alive AND the
+# This script forks the watcher as a tracked child, then VERIFIES the outcome
+# before it settles in. It confirms a watcher process is genuinely alive AND the
 # liveness beacon (state/.last-watcher-beat) is fresh within FM_GUARD_GRACE (the
 # single source of truth, shared with fm-watch.sh and fm-guard.sh), and prints
 # exactly one unambiguous status line:
@@ -51,8 +52,6 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
-# shellcheck source=bin/fm-watch-launcher-lib.sh
-. "$SCRIPT_DIR/fm-watch-launcher-lib.sh"
 
 WATCH="$SCRIPT_DIR/fm-watch.sh"
 WATCH_LOCK="$STATE/.watch.lock"
@@ -169,13 +168,16 @@ if [ "$mode" = arm ] && healthy_watcher; then
   attach_and_wait "$HEALTHY_PID"
 fi
 
-# Start a watcher in a separate process session and confirm it before settling in.
-# The arm still waits on the watcher so a normal wake exit propagates to the harness,
-# but a harness task-manager stop cannot take the watcher down with the arm process
-# group.
+# Start a watcher as a tracked child and confirm it before settling in. The child
+# stays our child for its whole life: we wait on it, so killing this arm (the
+# harness-tracked task) tears the watcher down too, and the watcher's eventual
+# wake exit propagates out so the harness re-notifies firstmate.
 child=
 child_out=
 cleanup_child() {
+  if [ -n "$child" ] && fm_pid_alive "$child"; then
+    kill -TERM "$child" 2>/dev/null || true
+  fi
   if [ -n "$child_out" ]; then
     rm -f "$child_out" 2>/dev/null || true
   fi
@@ -187,11 +189,8 @@ child_out=$(mktemp "$STATE/.watch-arm-output.XXXXXX") || {
   echo "watcher: FAILED - no live watcher with a fresh beacon"
   exit 1
 }
-if ! fm_watch_launch_session child "$child_out" "$WATCH"; then
-  echo "watcher: FAILED - no session launcher (requires setsid or Perl POSIX)" >&2
-  cleanup_child
-  exit 1
-fi
+"$WATCH" >"$child_out" &
+child=$!
 child_done=0
 
 # Verify the outcome: poll until this child is the confirmed healthy watcher, or
@@ -239,9 +238,6 @@ done
 
 trap - HUP TERM INT
 echo "watcher: FAILED - no live watcher with a fresh beacon"
-if [ -n "$child" ] && fm_pid_alive "$child"; then
-  kill -TERM "$child" 2>/dev/null || true
-fi
 cleanup_child
 wait "$child" 2>/dev/null || true
 exit 1
