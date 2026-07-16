@@ -866,24 +866,31 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
 # re-surface epoch so, once past the window, it fires once per window rather than
 # every poll. Advances the stale suppressor to <hash> and flags the key paused.
 handle_paused_stale() {  # <window> <task> <hash>
-  local win=$1 task=$2 h=$3 key statusf mtime age rf rf_age reason
+  local win=$1 task=$2 h=$3 key statusf heldf mtime age rf rf_age reason label
   key=$(printf '%s' "$win" | tr ':/.' '___')
   printf '%s' "$h" > "$STATE/.stale-$key"
   : > "$STATE/.paused-$key"
   rm -f "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key"
   statusf="$STATE/$task.status"
-  mtime=$(stat_mtime "$statusf")
+  heldf=$(held_gate_marker "$task")
+  if [ -e "$heldf" ]; then
+    mtime=$(stat_mtime "$heldf")
+    label="held for captain at ask-user gate"
+  else
+    mtime=$(stat_mtime "$statusf")
+    label="awaiting external - declared pause"
+  fi
   case "$mtime" in ''|*[!0-9]*) mtime=$(date +%s) ;; esac
   age=$(( $(date +%s) - mtime ))
   rf="$STATE/.paused-resurfaced-$key"
   rf_age=$(age_of "$rf")   # 999999 when no prior re-surface
   if [ "$age" -ge "$PAUSE_RESURFACE_SECS" ] && [ "$rf_age" -ge "$PAUSE_RESURFACE_SECS" ]; then
-    reason="stale: $win (paused ${age}s, awaiting external - declared pause, rechecked on a long cadence not a wedge; confirm the wait still holds)"
+    reason="stale: $win (paused ${age}s, $label, rechecked on a long cadence not a wedge; confirm the wait still holds)"
     fm_wake_append stale "$win" "$reason" || exit 1
     date +%s > "$rf"
     wake "$reason"
   fi
-  triage_log "absorbed stale (paused, awaiting external, age ${age}s): $win"
+  triage_log "absorbed stale (paused, $label, age ${age}s): $win"
 }
 
 clear_pause_state() {  # <window>
@@ -904,13 +911,14 @@ clear_pause_tracking() {  # <window>
 }
 
 pause_state_class() {  # <window> <task>
-  local win=$1 task=$2 key last recheck_file class
+  local win=$1 task=$2 key last recheck_file class heldf
   key=${win//:/_}
   key=${key//\//_}
   key=${key//./_}
   last=$(last_status_line "$STATE/$task.status")
+  heldf=$(held_gate_marker "$task")
   recheck_file="$STATE/.paused-rechecked-$key"
-  if ! status_is_paused "$last"; then
+  if ! status_is_paused "$last" && [ ! -e "$heldf" ]; then
     rm -f "$recheck_file"
     crew_absorb_class "$task"
     return
@@ -999,6 +1007,9 @@ mark_surfaced() {  # <status-file>
   [ -n "$last" ] || return 0
   status_is_captain_relevant "$last" || return 0
   printf '%s' "$last" > "$(_hb_surfaced_path "$task")"
+  case "$last" in
+    needs-decision:*) mark_held_gate_if_verified "$task" || true ;;
+  esac
 }
 
 # Mark every current captain-relevant status as surfaced. Called after the
@@ -1137,7 +1148,7 @@ EOF
     key=${key//\//_}
     key=${key//./_}
     last=$(last_status_line "$STATE/$task.status")
-    if ! status_is_paused "$last" && [ -e "$STATE/.paused-$key" ]; then
+    if ! status_is_paused "$last" && [ ! -e "$(held_gate_marker "$task")" ] && [ -e "$STATE/.paused-$key" ]; then
       clear_pause_tracking "$w"
     fi
     if [ "$kind" = secondmate ] && ! status_is_paused "$last"; then
@@ -1191,17 +1202,32 @@ EOF
           # authoritative source fm-crew-state.sh itself already prioritizes
           # over the log) a chance to override before trusting the log.
           if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
-            if crew_is_provably_working "$(window_to_task "$w" "$STATE")"; then
-              printf '%s' "$h" > "$sf"
-              date +%s > "$ssf"
-              triage_log "absorbed stale (provably working, overriding a stale captain-relevant status): $w"
-            else
-              fm_wake_append stale "$w" "stale: $w" || exit 1
-              printf '%s' "$h" > "$sf"
-              rm -f "$ssf"
-              mark_surfaced "$STATE/$(window_to_task "$w" "$STATE").status"
-              wake "stale: $w"
-            fi
+            task=$(window_to_task "$w" "$STATE")
+            case "$(crew_absorb_class "$task")" in
+              working)
+                printf '%s' "$h" > "$sf"
+                date +%s > "$ssf"
+                triage_log "absorbed stale (provably working, overriding a stale captain-relevant status): $w"
+                ;;
+              paused)
+                handle_paused_stale "$w" "$task" "$h"
+                ;;
+              *)
+                fm_wake_append stale "$w" "stale: $w" || exit 1
+                printf '%s' "$h" > "$sf"
+                rm -f "$ssf"
+                mark_surfaced "$STATE/$task.status"
+                wake "stale: $w"
+                ;;
+            esac
+          elif [ -e "$pf" ]; then
+            case "$(pause_state_class "$w" "$task")" in
+              paused)  handle_paused_stale "$w" "$task" "$h" ;;
+              working) clear_pause_state "$w"
+                       printf '%s' "$h" > "$sf"
+                       wedge_timer_check "$w" "$ssf" "stale (provably working after a deliberate hold)" "$ewf" ;;
+              *)       surface_nonterminal_stale "$w" "$h" ;;
+            esac
           elif [ -e "$ssf" ]; then
             # This exact hash was already overridden as provably-working (a
             # wedge timer is running for it) - keep treating it that way
@@ -1245,7 +1271,7 @@ EOF
             esac
           else
             task=$(window_to_task "$w" "$STATE")
-            if [ -e "$pf" ] || status_is_paused "$(last_status_line "$STATE/$task.status")"; then
+            if [ -e "$pf" ] || [ -e "$(held_gate_marker "$task")" ] || status_is_paused "$(last_status_line "$STATE/$task.status")"; then
               case "$(pause_state_class "$w" "$task")" in
                 paused)  handle_paused_stale "$w" "$task" "$h" ;;
                 working) clear_pause_state "$w"
@@ -1262,7 +1288,8 @@ EOF
       else
         # Pane busy or not yet stably stale: reset pending escalation bookkeeping.
         rm -f "$ssf" "$ewf"
-        if [ -e "$pf" ] && { [ "$n" -ge 2 ] || ! status_is_paused "$(last_status_line "$STATE/$(window_to_task "$w" "$STATE").status")"; }; then
+        task=$(window_to_task "$w" "$STATE")
+        if [ -e "$pf" ] && { [ "$n" -ge 2 ] || { ! status_is_paused "$(last_status_line "$STATE/$task.status")" && [ ! -e "$(held_gate_marker "$task")" ]; }; }; then
           clear_pause_tracking "$w"
         fi
       fi
@@ -1271,7 +1298,7 @@ EOF
       echo 0 > "$cf"
       rm -f "$ssf" "$ewf"
       task=$(window_to_task "$w" "$STATE")
-      if ! afk_present && status_is_paused "$(last_status_line "$STATE/$task.status")" && ! window_is_busy "$w" "$tail40"; then
+      if ! afk_present && { status_is_paused "$(last_status_line "$STATE/$task.status")" || [ -e "$(held_gate_marker "$task")" ]; } && ! window_is_busy "$w" "$tail40"; then
         case "$(pause_state_class "$w" "$task")" in
           paused) handle_paused_stale "$w" "$task" "$h" ;;
           *)      clear_pause_tracking "$w" ;;

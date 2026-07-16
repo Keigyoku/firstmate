@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Shared wake classifier: the common source of truth for captain-relevant status
-# tests, declared-external-wait vocabulary, and the working/paused absorb
+# tests, deliberate-hold vocabulary, and the working/paused absorb
 # classification that makes no-verb signal and stale-pane wakes safe to absorb.
 # Sourced by BOTH the always-on watcher
 # (bin/fm-watch.sh) and the away-mode daemon (bin/fm-supervise-daemon.sh) so the
@@ -17,7 +17,7 @@
 # working/paused wrappers). It is NOT a pure status-file read: it reuses
 # bin/fm-crew-state.sh, which may make a bounded no-mistakes call, to decide
 # whether a crew that just stopped its turn or went stale is working, deliberately
-# paused, or neither. Callers run it ONLY on no-verb signal handling and first
+# paused/held, or neither. Callers run it ONLY on no-verb signal handling and first
 # sighting of a stale hash, never on every wake, so the per-wake triage stays
 # cheap.
 
@@ -58,6 +58,42 @@ FM_CLASSIFY_PAUSED_VERB_DEFAULT='paused'
 # read FM_PAUSE_RESURFACE_SECS with this default so the cadence has one owner.
 # shellcheck disable=SC2034 # Read by the watcher and daemon (fm-watch.sh, fm-supervise-daemon.sh), not this lib.
 FM_PAUSE_RESURFACE_SECS_DEFAULT=3600
+
+# Firstmate-owned marker for an ask-user review gate already relayed to the
+# captain. Its mtime anchors the same bounded re-surface cadence as a declared
+# pause. The marker is meaningful only while fm-crew-state.sh still verifies the
+# crew is parked at a run-step ask-user gate.
+held_gate_marker() {  # <id>
+  printf '%s/%s.held-for-captain' "${STATE:-${FM_STATE_OVERRIDE:-}}" "$1"
+}
+
+crew_line_is_ask_user_gate() {  # <fm-crew-state line>
+  case "$1" in
+    'state: parked '*'source: run-step '*'ask-user: captain decision'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+crew_current_state_line() {  # <id>
+  local line
+  line=$("$FM_CREW_STATE_BIN" "$1" 2>/dev/null) || true
+  case "$line" in state:*) printf '%s' "$line" ;; esac
+}
+
+# Gate-relay hook: after a captain-relevant status is durably surfaced, record a
+# hold only when the authoritative run-step proves it is an ask-user gate.
+mark_held_gate_if_verified() {  # <id>
+  local id=$1 line marker
+  [ -n "$id" ] || return 1
+  marker=$(held_gate_marker "$id")
+  line=$(crew_current_state_line "$id")
+  if crew_line_is_ask_user_gate "$line"; then
+    : > "$marker"
+    return 0
+  fi
+  rm -f "$marker"
+  return 1
+}
 
 # Return the last non-blank line of a status file (empty if missing/blank).
 last_status_line() {
@@ -131,7 +167,8 @@ signal_reason_is_actionable() {  # <file> ...
 #             pane; the crew is legitimately mid-work on a static-looking pane
 #             (e.g. waiting on CI);
 #   paused  - the crew's authoritative current state is a declared external-wait
-#             pause (paused:), which is EXPECTED to idle;
+#             pause (paused:), or a firstmate-marked ask-user gate still verified
+#             parked by its run-step; either hold is EXPECTED to idle;
 #   none    - neither, so the wake must surface (a stopped/finished/parked/failed/
 #             torn-down/unknown crew, or an unreadable verdict).
 # One fm-crew-state.sh read serves BOTH absorb reasons at once. Reading the state
@@ -141,10 +178,18 @@ signal_reason_is_actionable() {  # <file> ...
 # run it only on no-verb signal and first-sighting stale paths, never every wake.
 # FM_CREW_STATE_BIN lets tests stub the verdict.
 crew_absorb_class() {  # <id>
-  local id=$1 line state src
+  local id=$1 line state src marker
   [ -n "$id" ] || { printf 'none'; return; }
-  line=$("$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || true
-  case "$line" in state:*) ;; *) printf 'none'; return ;; esac
+  line=$(crew_current_state_line "$id")
+  [ -n "$line" ] || { printf 'none'; return; }
+  marker=$(held_gate_marker "$id")
+  if [ -e "$marker" ]; then
+    if crew_line_is_ask_user_gate "$line"; then
+      printf 'paused'
+      return
+    fi
+    rm -f "$marker"
+  fi
   state=${line#state: }; state=${state%% *}
   if [ "$state" = paused ]; then printf 'paused'; return; fi
   if [ "$state" = working ]; then
