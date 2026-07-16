@@ -419,6 +419,10 @@ classify_stale() {  # <window> <state>
     printf 'pause|paused (awaiting external), rechecked on a long cadence: %s' "$last"
     return
   fi
+  if FM_STATE_OVERRIDE="$state" held_gate_is_verified "$task"; then
+    printf 'pause|held for captain at ask-user gate, rechecked on a long cadence'
+    return
+  fi
   if [ -n "$last" ] && status_is_captain_relevant "$last"; then
     # Dedupe against the signal path: if this status was already escalated
     # (seen marker matches), self-handle to avoid a duplicate in the digest.
@@ -500,12 +504,15 @@ clear_pause_tracking() {  # <window> <state>
 }
 
 reconcile_pause_tracking() {  # <window> <state> <last-status-line>
-  local win=$1 state=$2 last=$3 task key marker watcher_key
+  local win=$1 state=$2 last=$3 task key marker watcher_key held=
   task=$(window_to_task "$win" "$state")
   key=$(_stale_key "$task")
   marker="$state/.subsuper-paused-$key"
   watcher_key=$(_stale_key "$win")
-  if status_is_paused "$last"; then
+  if FM_STATE_OVERRIDE="$state" held_gate_is_verified "$task"; then
+    held=1
+  fi
+  if status_is_paused "$last" || [ -n "$held" ]; then
     stale_marker_remove "$win" "$state"
     pause_marker_record "$win" "$state"
   elif [ -e "$marker" ] || [ -e "$state/.paused-$watcher_key" ]; then
@@ -523,7 +530,8 @@ migrate_watcher_pause_markers() {  # <state>
     key=$(_stale_key "$task")
     watcher_key=$(_stale_key "$win")
     last=$(last_status_line "$state/$task.status")
-    if status_is_paused "$last" || [ -e "$state/.subsuper-paused-$key" ] || [ -e "$state/.paused-$watcher_key" ]; then
+    if status_is_paused "$last" || [ -e "$(FM_STATE_OVERRIDE="$state" held_gate_marker "$task")" ] \
+       || [ -e "$state/.subsuper-paused-$key" ] || [ -e "$state/.paused-$watcher_key" ]; then
       reconcile_pause_tracking "$win" "$state" "$last"
     fi
   done
@@ -1017,7 +1025,8 @@ housekeeping() {  # <state>
     fi
     task=$(window_to_task "$win" "$state")
     last=$(last_status_line "$state/$task.status")
-    if [ -n "$last" ] && status_is_paused "$last"; then
+    if { [ -n "$last" ] && status_is_paused "$last"; } \
+       || [ -e "$(FM_STATE_OVERRIDE="$state" held_gate_marker "$task")" ]; then
       reconcile_pause_tracking "$win" "$state" "$last"
       continue
     fi
@@ -1048,7 +1057,8 @@ housekeeping() {  # <state>
     fi
     task=$(window_to_task "$win" "$state")
     last=$(last_status_line "$state/$task.status")
-    if [ -z "$last" ] || ! status_is_paused "$last"; then
+    if ! status_is_paused "$last" \
+       && ! FM_STATE_OVERRIDE="$state" held_gate_is_verified "$task"; then
       reconcile_pause_tracking "$win" "$state" "$last"
       continue
     fi
@@ -1060,8 +1070,11 @@ housekeeping() {  # <state>
       2) rm -f "$marker" ;;
       *)
         last=$(last_status_line "$state/$task.status")
-        if [ -n "$last" ] && status_is_paused "$last"; then
+        if status_is_paused "$last"; then
           escalate_add "$state" "paused ${age}s (awaiting external, recheck whether the wait still holds): $win"
+          _now > "$marker"
+        elif FM_STATE_OVERRIDE="$state" held_gate_is_verified "$task"; then
+          escalate_add "$state" "paused ${age}s (held for captain at ask-user gate, recheck whether the decision still holds): $win"
           _now > "$marker"
         else
           rm -f "$marker"

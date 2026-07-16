@@ -95,6 +95,19 @@ mark_held_gate_if_verified() {  # <id>
   return 1
 }
 
+held_gate_is_verified() {  # <id>
+  local id=$1 line marker
+  [ -n "$id" ] || return 1
+  marker=$(held_gate_marker "$id")
+  [ -e "$marker" ] || return 1
+  line=$(crew_current_state_line "$id")
+  if crew_line_is_ask_user_gate "$line"; then
+    return 0
+  fi
+  rm -f "$marker"
+  return 1
+}
+
 # Return the last non-blank line of a status file (empty if missing/blank).
 last_status_line() {
   local f=$1
@@ -178,18 +191,14 @@ signal_reason_is_actionable() {  # <file> ...
 # run it only on no-verb signal and first-sighting stale paths, never every wake.
 # FM_CREW_STATE_BIN lets tests stub the verdict.
 crew_absorb_class() {  # <id>
-  local id=$1 line state src marker
+  local id=$1 line state src
   [ -n "$id" ] || { printf 'none'; return; }
+  if held_gate_is_verified "$id"; then
+    printf 'paused'
+    return
+  fi
   line=$(crew_current_state_line "$id")
   [ -n "$line" ] || { printf 'none'; return; }
-  marker=$(held_gate_marker "$id")
-  if [ -e "$marker" ]; then
-    if crew_line_is_ask_user_gate "$line"; then
-      printf 'paused'
-      return
-    fi
-    rm -f "$marker"
-  fi
   state=${line#state: }; state=${state%% *}
   if [ "$state" = paused ]; then printf 'paused'; return; fi
   if [ "$state" = working ]; then

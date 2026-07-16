@@ -14,7 +14,10 @@ Repeated provably-working stale escalations on the same unchanged pane add an es
 Those actionable wakes are written to a durable local queue (`state/.wake-queue`) before detector state advances, so a missed process exit can be recovered by draining the queue.
 No-verb wakes, such as `working:` notes and bare turn-ended signals, are benign only when `bin/fm-crew-state.sh` reports positive evidence that the crew is still working: an actively running no-mistakes step for that crew's branch or a backend busy signature.
 A crew that declares `paused:` for a known external wait is separately absorbed while idle and re-surfaced only on the longer pause cadence, rather than being treated as a possible wedge.
-The same mechanism covers a run-step verified ask-user gate after firstmate surfaces it: the watcher writes `state/<id>.held-for-captain`, absorbs the parked pane on the pause cadence, and removes the marker as soon as the authoritative state no longer verifies that gate.
+The same mechanism covers a run-step verified ask-user gate only after firstmate relays the decision to the captain.
+Regardless of whether the decision arrived through a signal, stale, or heartbeat wake, firstmate then runs `bin/fm-held-gate-mark.sh <id>`, which re-verifies the authoritative run-step before writing `state/<id>.held-for-captain`.
+Both the normal watcher and the away-mode daemon absorb the parked pane on the pause cadence only while that marker and the authoritative ask-user gate remain present.
+Every normal watcher poll and away-mode pause reconciliation revalidates a held marker, removes it when the run resumes, advances, or becomes unverifiable, and teardown removes any remaining marker.
 Its initial normal-mode status signal still surfaces through the no-verb path, while away mode self-handles that routine signal and owns the later recheck.
 Fresh stale panes use the same current-state read before trusting the status log, so an active run or busy pane outranks an old captain-relevant status-log line left behind before validation.
 No-change heartbeats are also benign.

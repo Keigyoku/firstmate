@@ -24,6 +24,7 @@ set -u
 
 WATCH="$ROOT/bin/fm-watch.sh"
 DRAIN="$ROOT/bin/fm-wake-drain.sh"
+HELD_MARK="$ROOT/bin/fm-held-gate-mark.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-watch-triage-tests)
 
@@ -339,6 +340,7 @@ test_actionable_signal_surfaced() {
   out="$dir/watch.out"; drain_out="$dir/drain.out"
   status_file="$state/task.status"
   printf 'working: setup\nneeds-decision: pick A or B\n' > "$status_file"
+  printf 'window=test:fm-task\nkind=ship\n' > "$state/task.meta"
   export FM_FAKE_CREW_STATE='state: parked · source: run-step · parked at review: 1 finding(s) (ask-user: captain decision)'
   watch_bg "$state" "$fakebin" "$out"
   pid=$!
@@ -347,9 +349,12 @@ test_actionable_signal_surfaced() {
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the actionable signal failed"
   grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$status_file" >/dev/null || fail "actionable signal was not queued"
   [ -s "$state/.hb-surfaced-task" ] || fail "actionable signal did not record the surfaced marker"
-  [ -e "$state/task.held-for-captain" ] || fail "surfaced ask-user gate did not record its held marker"
+  [ ! -e "$state/task.held-for-captain" ] || fail "queued ask-user wake recorded a held marker before relay"
+  FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" "$HELD_MARK" task \
+    || fail "post-relay held-gate marker command failed"
+  [ -e "$state/task.held-for-captain" ] || fail "post-relay command did not record the held marker"
   unset FM_FAKE_CREW_STATE
-  pass "captain-relevant ask-user signal is surfaced and records its held marker"
+  pass "captain-relevant ask-user signal marks its hold only through the explicit post-relay command"
 }
 
 test_terminal_stale_surfaced() {
@@ -663,6 +668,31 @@ test_unmarked_parked_gate_still_surfaces() {
   [ ! -e "$state/.paused-$key" ] || fail "unmarked parked gate entered held tracking"
   unset FM_FAKE_CREW_STATE
   pass "a parked ask-user gate without the firstmate marker still surfaces normally"
+}
+
+test_held_gate_marker_clears_before_stale() {
+  local dir state fakebin out capture_file window pid sig
+  dir=$(make_case held-gate-resumed-before-stale); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-held-resumed"
+  printf 'Working...\n' > "$capture_file"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/held-resumed.meta"
+  printf 'needs-decision: choose review finding resolution\n' > "$state/held-resumed.status"
+  sig=$(seen_sig "$state/held-resumed.status")
+  printf '%s' "$sig" > "$state/.seen-held-resumed_status"
+  : > "$state/held-resumed.held-for-captain"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (fixing)'
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "watcher exited while clearing a resumed held gate: $(cat "$out")"
+  fi
+  [ ! -e "$state/held-resumed.held-for-captain" ] || {
+    reap "$pid"
+    fail "watcher retained a held marker after the authoritative run resumed"
+  }
+  reap "$pid"
+  unset FM_FAKE_CREW_STATE
+  pass "watcher clears a resumed held gate before stale classification"
 }
 
 test_secondmate_paused_resurfaces_in_normal_mode() {
@@ -1193,6 +1223,7 @@ test_nonterminal_stale_not_working_surfaced
 test_nonterminal_stale_paused_absorbed_then_resurfaced
 test_nonterminal_stale_held_gate_absorbed_then_resurfaced
 test_unmarked_parked_gate_still_surfaces
+test_held_gate_marker_clears_before_stale
 test_secondmate_paused_resurfaces_in_normal_mode
 test_secondmate_nonpaused_stale_remains_suppressed
 test_secondmate_unpause_clears_pause_tracking

@@ -1007,9 +1007,6 @@ mark_surfaced() {  # <status-file>
   [ -n "$last" ] || return 0
   status_is_captain_relevant "$last" || return 0
   printf '%s' "$last" > "$(_hb_surfaced_path "$task")"
-  case "$last" in
-    needs-decision:*) mark_held_gate_if_verified "$task" || true ;;
-  esac
 }
 
 # Mark every current captain-relevant status as surfaced. Called after the
@@ -1144,6 +1141,9 @@ EOF
   while IFS= read -r w; do
     kind=$(window_kind "$w")
     task=$(window_to_task "$w" "$STATE")
+    if [ -e "$(held_gate_marker "$task")" ]; then
+      held_gate_is_verified "$task" || true
+    fi
     key=${w//:/_}
     key=${key//\//_}
     key=${key//./_}
