@@ -35,6 +35,9 @@ Those surfaces remain subject to the same policy expectation: a crew must not si
 | Grok | An always-trusted global `PreToolUse` hook resolves an opaque per-task pointer through a mode-0700 registry entry, then invokes the copied checker. |
 | Cursor and Hermes | No verified pre-execution hook is available, so these adapters receive only the PATH defense described below. |
 
+The fleet TDD pre-execution guard (`bin/fm-crew-tdd-guard.sh`) is a second checker on these same rails for claude/codex/opencode/pi/grok; see `docs/crew-tdd-guard.md`.
+Cursor and Hermes remain outer-gate-only for TDD (brief + Review Crew + replay-red CI).
+
 Every crew and scout launch prepends `/tmp/fm-<task-id>/killguard-bin` to its shell `PATH`.
 That directory contains loud refusal shims for `pkill`, `killall`, and `fuser`.
 This is defense in depth for hook-capable adapters and the available enforcement for hookless adapters.
