@@ -145,3 +145,99 @@ See `docs/arm-pretool-check.md`'s "Harness wiring" section for the same Grok exp
 `tests/fm-turnend-guard.test.sh` covers the shared predicate, primary scoping, unset `CLAUDE_PROJECT_DIR` fallback, physical identity matching for symlinked home paths, the bounded watcher-lock publication settle window, pending-wake blocking diagnostics, local `config/turnend-guard` disable behavior, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, Pi logical-run latch behavior for no-tool and multi-tool runs, fail-open behavior without `jq`, tracked hook registration for all five harnesses, and the Grok adapter's forced-resume loop guard and permission-mode regression.
 The default behavior suite does not invoke live language-model harnesses.
 `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` opts into the isolated interactive Pi regression recorded above.
+
+## Claim-vs-evidence glass guard
+
+Captain-facing daily-driver app state (render / working / adopted) is proven only by a screenshot of the live desktop glass, never by logs, process census, ports, or API responses.
+Prose rules in `data/captain.md` and `data/learnings.md` failed three sessions running because they are advisory at message-composition time.
+This section owns the mechanical enforcement layer that closes that gap.
+
+### Components
+
+- `bin/fm-glass.sh` is the canonical capture entrypoint.
+  It runs the proven host command `spectacle -b -n -f -o <out>` with `XDG_RUNTIME_DIR` / `WAYLAND_DISPLAY` defaulting to the ambient session (or `/run/user/$(id -u)` and `wayland-0`).
+  It prints the absolute capture path and writes `fm-state/last-glass-capture` as `epoch path`.
+  Missing spectacle or a missing Wayland socket degrades with a clear stderr error and exit 1 (SSH, headless, secondmate homes without a desktop).
+- `bin/fm-claim-guard.sh` is the claim-vs-evidence check on the primary Stop-hook path.
+  It is a separate script so it does not bloat the supervision predicate; both compose on the same Claude Stop hook.
+
+### Scope and loop guard
+
+Scoping is identical to `bin/fm-turnend-guard.sh`: real primary checkout only (`.fm-secondmate-home` and linked worktrees are inert; `AGENTS.md` + `bin/` + state dir required).
+`stop_hook_active=true` always allows the stop so at most one block fires per turn (shared loop-guard contract with the supervision guard).
+`config/claim-guard` exactly `off` disables only this check; absent or any other value leaves it enabled.
+`FM_CLAIM_GLASS_MAX_AGE` (default 900 seconds) is the freshness window for `fm-state/last-glass-capture`.
+
+### Claim heuristic
+
+The guard prefers the Stop payload field `last_assistant_message` (Claude Code 2.1.x supplies it on every Stop event).
+It falls back to `transcript_path` JSONL only when that field is empty, because the transcript often still lacks the final assistant row at hook time.
+Missing, unreadable, or empty message content fails open.
+A message is an app-state claim only when BOTH of the following match case-insensitively in that text:
+
+1. An app referent: `vellum`, `daily-driver` / `daily driver`, `the app`, `dashboard`, `glass`, `resident`.
+2. A health/state assertion: `work` / `works` / `working`, `render` / `renders` / `rendering` / `rendered`, `adopted`, `booted clean`, `came up clean`, `is up`, `healthy`, `fixed`, `live`.
+
+Both classes are required so pure fleet status ("crew is working") and pure referent mentions ("open the dashboard") do not block.
+Word boundaries keep incidental substrings such as `hourglass` out.
+
+### Evidence check
+
+When a claim matches, the guard requires `fm-state/last-glass-capture` with a numeric epoch whose age is within `FM_CLAIM_GLASS_MAX_AGE`.
+Missing, malformed, or stale markers block.
+Blocking stderr names the remedy: run `bin/fm-glass.sh`, read the image, cite the path, resend the claim.
+
+### Claude Stop-hook composition
+
+`.claude/settings.json` runs the shared supervision guard first, then the claim guard when present:
+
+```sh
+payload=$(cat); root=${CLAUDE_PROJECT_DIR:-$(pwd -P)};
+if [ -f "$root/AGENTS.md" ] && [ -f "$root/bin/fm-turnend-guard.sh" ]; then
+  printf '%s' "$payload" | "$root/bin/fm-turnend-guard.sh" || exit $?;
+  if [ -f "$root/bin/fm-claim-guard.sh" ]; then
+    printf '%s' "$payload" | "$root/bin/fm-claim-guard.sh";
+  fi;
+fi
+```
+
+Either guard may exit 2; `stop_hook_active` ensures only one forced continuation per turn.
+Codex / OpenCode / Pi / Grok adapters are unchanged by this addition (Claude is the daily primary); wiring other harnesses is a follow-up.
+
+### Tests
+
+`tests/fm-claim-guard.test.sh` covers: claim + no/stale evidence blocks; claim + fresh evidence allows; no-claim allows; `stop_hook_active` allows; missing transcript fails open; non-primary scope allows; local `config/claim-guard=off`; composed Stop-hook shape; settings registration; and `fm-glass.sh` marker recording with a stub spectacle.
+
+### Empirical validation (2026-07-20)
+
+Validated on the real Claude harness in a throwaway primary-shaped home under `/tmp/fm-claim-live.*`, not the captain's live fleet state.
+
+- Claude Code: `2.1.193`
+- Model: `claude-haiku-4-5-20251001` via `claude -p ... --model haiku --dangerously-skip-permissions --output-format json`
+- Scratch layout: plain `git init` primary-shaped repo with tracked `bin/fm-claim-guard.sh`, `bin/fm-turnend-guard.sh`, and a Stop hook that logs `stop_hook_active` / `claim_exit` then runs both guards with `FM_HOME` pointed at the throwaway home.
+
+**RUN1 — stale glass marker (epoch 1577836800):**
+
+```text
+stop_active=false msg=Captain, the vellum dashboard is rendering and working.
+claim_exit=2
+stop_active=true msg=Stop hook executed successfully with no errors. Ready for your next task.
+claim_exit=0
+```
+
+Observed Claude result: `num_turns=2`, first stop blocked with the `UNVERIFIED APP-STATE CLAIM` banner naming `bin/fm-glass.sh`, second stop allowed via `stop_hook_active=true`.
+
+**RUN2 — fresh glass marker (epoch = now):**
+
+```text
+stop_active=false msg=Captain, the vellum dashboard is rendering and working.
+claim_exit=0
+```
+
+Observed Claude result: `num_turns=1`, claim allowed without a forced continuation.
+
+**Transcript race note:** on the same host, dumping the JSONL at first Stop showed `assistant_types=0` while `last_assistant_message` already held the claim text.
+That is why the guard prefers `last_assistant_message` and only falls back to transcript JSONL.
+
+`bin/fm-glass.sh` was also smoke-tested on the live desktop with spectacle 6.7.1:
+`spectacle -b -n -f -o /tmp/fm-glass-smoke-*.png` produced a 7681x2161 PNG and wrote `fm-state/last-glass-capture` as `epoch path`.

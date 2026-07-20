@@ -611,6 +611,7 @@ test_settings_hook_uses_claude_project_dir() {
   assert_contains "$command" 'pwd -P' "Stop hook must fall back to the physical hook cwd when CLAUDE_PROJECT_DIR is unset"
   assert_contains "$command" 'AGENTS.md' "Stop hook must verify the fallback root is firstmate-shaped"
   assert_contains "$command" 'fm-turnend-guard.sh' "Stop hook must still invoke fm-turnend-guard.sh"
+  assert_contains "$command" 'fm-claim-guard.sh' "Stop hook must also invoke fm-claim-guard.sh after the supervision guard"
   case "$command" in
     bin/fm-turnend-guard.sh|./bin/fm-turnend-guard.sh)
       fail "Stop hook must not use a bare relative path (cwd-dependent): $command"
