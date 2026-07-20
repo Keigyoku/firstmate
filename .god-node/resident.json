@@ -26,6 +26,7 @@
     "input.file-v1",
     "input.backend-v1",
     "transcript.claude-jsonl-v1",
-    "transcript.codex-jsonl-v1"
+    "transcript.codex-jsonl-v1",
+    "crew.bridge-v1"
   ]
 }

@@ -32,6 +32,9 @@ jq -e 'has("container_id") == false and has("created_at") == false and has("iden
   || fail "tracked contract retained local container identity"
 jq -e '.schema == "dev.vellum.resident/1" and .resident_version == "dev.vellum.firstmate-resident/1" and .contract_versions == [1] and .entrypoints.adopt == ["bin/fm-resident-adopt.sh"]' "$HOME_DIR/.god-node/resident.json" >/dev/null \
   || fail "setup did not write the versioned resident manifest"
+jq -e '.capabilities | index("crew.bridge-v1") != null and index("input.file-v1") != null and index("input.backend-v1") != null and index("transcript.claude-jsonl-v1") != null and index("transcript.codex-jsonl-v1") != null' \
+  "$HOME_DIR/.god-node/resident.json" >/dev/null \
+  || fail "setup omitted the full capability set including crew.bridge-v1"
 git -C "$ROOT" check-ignore -q inbox/requests/request.json \
   || fail "file-v1 request inbox path is not ignored operational data"
 git -C "$ROOT" check-ignore -q inbox/results/result.json \
@@ -43,6 +46,41 @@ FM_HOME="$SECOND_HOME" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-resident-setup.sh"
 [ "$(jq -r '.container_id' "$SECOND_HOME/.god-node/provision.json")" != "$FIRST_ID" ] \
   || fail "copied tracked contract reused the first home container identity"
 pass "provisioning creates local immutable identity and versioned manifest"
+
+# Prove a full publication cycle (setup rewrite + lock-path republish) never drops
+# crew.bridge-v1. Simulate a pre-fix partial descriptor, then re-setup and lock.
+PARTIAL_CAPS_HOME="$TEST_ROOT/partial-caps-home"
+mkdir -p "$PARTIAL_CAPS_HOME/state" "$PARTIAL_CAPS_HOME/data" "$PARTIAL_CAPS_HOME/config" "$PARTIAL_CAPS_HOME/projects" "$PARTIAL_CAPS_HOME/.god-node"
+cp "$HOME_DIR/.god-node/contract.json" "$PARTIAL_CAPS_HOME/.god-node/contract.json"
+FM_HOME="$PARTIAL_CAPS_HOME" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-resident-setup.sh"
+# Corrupt the descriptor to the historical 4-cap set that gated the crew bridge off.
+jq 'del(.capabilities[] | select(. == "crew.bridge-v1"))' \
+  "$PARTIAL_CAPS_HOME/.god-node/resident.json" > "$PARTIAL_CAPS_HOME/.god-node/resident.json.tmp"
+mv "$PARTIAL_CAPS_HOME/.god-node/resident.json.tmp" "$PARTIAL_CAPS_HOME/.god-node/resident.json"
+jq -e '.capabilities | index("crew.bridge-v1") == null' "$PARTIAL_CAPS_HOME/.god-node/resident.json" >/dev/null \
+  || fail "partial-caps fixture still carried crew.bridge-v1 before repair"
+FAKEBIN_CAPS=$(fm_fakebin "$TEST_ROOT/caps-fakebin")
+cat > "$FAKEBIN_CAPS/ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"comm="*) printf 'codex\n' ;;
+  *"args="*) printf 'codex test harness\n' ;;
+  *"ppid="*) printf '1\n' ;;
+esac
+SH
+chmod +x "$FAKEBIN_CAPS/ps"
+# Session lock always re-runs setup then publish; this is the production rewrite path.
+PATH="$FAKEBIN_CAPS:$PATH" FM_HOME="$PARTIAL_CAPS_HOME" FM_ROOT_OVERRIDE="$ROOT" \
+  "$ROOT/bin/fm-lock.sh" >/dev/null
+jq -e '.capabilities | index("crew.bridge-v1") != null' \
+  "$PARTIAL_CAPS_HOME/.god-node/resident.json" >/dev/null \
+  || fail "session-lock republication dropped crew.bridge-v1"
+# A second standalone setup rewrite must keep the full set (idempotent repair).
+FM_HOME="$PARTIAL_CAPS_HOME" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-resident-setup.sh"
+jq -e '.capabilities | index("crew.bridge-v1") != null and index("input.file-v1") != null and index("input.backend-v1") != null and index("transcript.claude-jsonl-v1") != null and index("transcript.codex-jsonl-v1") != null' \
+  "$PARTIAL_CAPS_HOME/.god-node/resident.json" >/dev/null \
+  || fail "standalone setup rewrite dropped the full capability set"
+pass "publication cycle keeps crew.bridge-v1"
 
 LOCK_HOME="$TEST_ROOT/lock-home"
 mkdir -p "$LOCK_HOME/state/resident-current.json"
