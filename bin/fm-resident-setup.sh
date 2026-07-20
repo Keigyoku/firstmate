@@ -53,7 +53,10 @@ case "$CONTAINER_ID" in
   *) echo "fm-resident-setup: provision.json has an invalid UUID-v4 container_id" >&2; exit 1 ;;
 esac
 
+# Full advertised capability set. Every setup/lock rewrite must keep this list
+# complete: omitting crew.bridge-v1 lawfully gates adopted-crew reconciliation
+# off in consumers that treat a readable descriptor as authoritative.
 jq -n \
   --arg version "$RESIDENT_VERSION" \
-  '{schema:"dev.vellum.resident/1",resident_type:"firstmate",resident_version:$version,contract_versions:[1],entrypoints:{setup:["bin/fm-resident-setup.sh"],adopt:["bin/fm-resident-adopt.sh"],start:["bin/fm-resident-start.sh"],restart:["bin/fm-resident-restart.sh"],doctor:["bin/fm-resident-doctor.sh"]},capabilities:["input.file-v1","input.backend-v1","transcript.claude-jsonl-v1","transcript.codex-jsonl-v1"]}' \
+  '{schema:"dev.vellum.resident/1",resident_type:"firstmate",resident_version:$version,contract_versions:[1],entrypoints:{setup:["bin/fm-resident-setup.sh"],adopt:["bin/fm-resident-adopt.sh"],start:["bin/fm-resident-start.sh"],restart:["bin/fm-resident-restart.sh"],doctor:["bin/fm-resident-doctor.sh"]},capabilities:["input.file-v1","input.backend-v1","transcript.claude-jsonl-v1","transcript.codex-jsonl-v1","crew.bridge-v1"]}' \
   | fm_resident_atomic_json "$RESIDENT"

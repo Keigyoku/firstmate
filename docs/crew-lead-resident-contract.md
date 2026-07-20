@@ -13,7 +13,9 @@ The container identifier is immutable during ordinary setup and upgrades once pr
 Copies of a tracked home template receive a new identity because `provision.json` is local state.
 
 Setup also atomically writes `.god-node/resident.json` with schema `dev.vellum.resident/1`.
-The descriptor is tracked template metadata and declares resident type `firstmate`, the stable producer descriptor version, supported contract major versions, argv-array entrypoints, and input and transcript capabilities.
+The descriptor is tracked template metadata and declares resident type `firstmate`, the stable producer descriptor version, supported contract major versions, argv-array entrypoints, and the full capability set.
+Advertised capabilities are `input.file-v1`, `input.backend-v1`, `transcript.claude-jsonl-v1`, `transcript.codex-jsonl-v1`, and `crew.bridge-v1`.
+`crew.bridge-v1` independently gates adopted-crew reconciliation in consumers that treat a readable descriptor as authoritative; setup and every session-lock republication must keep it in the list.
 Entrypoint paths are relative to the Crew Lead home.
 The adoption entrypoint provisions and validates metadata in place without moving or rewriting private operational data.
 
