@@ -187,20 +187,22 @@ REPO=${POS[1]}
 
 if [ "$HERDR_LAB" -eq 1 ]; then
 HERDR_LAB_HELPER=$(shell_quote "$FM_ROOT/bin/fm-herdr-lab.sh")
-# shellcheck disable=SC2016  # single quotes are deliberate: these lines are literal brief text whose backtick-wrapped $(...) and "$HERDR_LAB_SESSION" snippets must reach the reading agent verbatim, not expand at scaffold time; only the '"$VAR"' break-outs interpolate.
+# shellcheck disable=SC2016  # single quotes are deliberate: these lines are literal brief text; the '"$HERDR_LAB_HELPER"' and '"$ID"' break-outs interpolate the concrete helper path and task id at scaffold time, while the $(...) and $HERDR_LAB_SESSION snippets must reach the reading agent verbatim to expand at crew runtime.
 HERDR_SECTION=$(printf '%s\n' \
 '# Herdr isolation - HARD SAFETY CONTRACT' \
 'This brief was explicitly scaffolded with `--herdr-lab` because the task will drive Herdr lifecycle behavior.' \
 'On Herdr 0.7.3 the API socket is not relocatable by `HERDR_CONFIG_PATH`, `XDG_CONFIG_HOME`, or `HOME`.' \
 'A named non-`default` session plus a trailing `--session <name>` on every call is the only viable local isolation.' \
 '' \
-'1. Set `HERDR_LAB_HELPER='"$HERDR_LAB_HELPER"'` and generate the session name with `HERDR_LAB_SESSION=$("$HERDR_LAB_HELPER" name '"$ID"')`.' \
-'   Install `trap '\''"$HERDR_LAB_HELPER" teardown "$HERDR_LAB_SESSION"'\'' EXIT` before provisioning, then provision only with `"$HERDR_LAB_HELPER" provision "$HERDR_LAB_SESSION"`.' \
-'2. Run every task-specific non-lifecycle Herdr command through `"$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" <arguments...>`.' \
+'Invoke the helper by the literal path shown in every command below; never assign it to a shell variable and call `"$var"`. The crew command guard refuses any command whose command word is a variable, so a variable-invoked helper (even a `--help` probe) is denied, while the literal helper path is allowed.' \
+'' \
+'1. Generate the session name with `HERDR_LAB_SESSION=$('"$HERDR_LAB_HELPER"' name '"$ID"')`.' \
+'   Install `trap "'"$HERDR_LAB_HELPER"' teardown $HERDR_LAB_SESSION" EXIT` before provisioning, then provision only with `'"$HERDR_LAB_HELPER"' provision "$HERDR_LAB_SESSION"`.' \
+'2. Run every task-specific non-lifecycle Herdr command through `'"$HERDR_LAB_HELPER"' run "$HERDR_LAB_SESSION" <arguments...>`.' \
 '   The helper appends the required trailing `--session "$HERDR_LAB_SESSION"`; `HERDR_SESSION` alone is never accepted as isolation.' \
-'3. Teardown only through `"$HERDR_LAB_HELPER" teardown "$HERDR_LAB_SESSION"`.' \
+'3. Teardown only through `'"$HERDR_LAB_HELPER"' teardown "$HERDR_LAB_SESSION"`.' \
 '   It re-checks refuse-default immediately before stop and again immediately before delete, and fails closed on ambiguity.' \
-'4. If an experiment requires a deliberate mid-run session stop, use only `"$HERDR_LAB_HELPER" stop "$HERDR_LAB_SESSION"`; it performs the same immediate refuse-default check.' \
+'4. If an experiment requires a deliberate mid-run session stop, use only `'"$HERDR_LAB_HELPER"' stop "$HERDR_LAB_SESSION"`; it performs the same immediate refuse-default check.' \
 '5. Forbidden commands: direct `herdr server stop`, every other server-global operation such as `herdr server live-handoff` or reload/update operations, direct `herdr session stop`, direct `herdr session delete`, and any Herdr call scoped only by ambient or inline `HERDR_SESSION`.' \
 '6. The helper records the live default session before provisioning and verifies the identical fleet state after teardown.' \
 '   A missing, stopped, or changed default session is a hard tripwire failure, never a cleanup warning to ignore.' \

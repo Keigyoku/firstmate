@@ -201,6 +201,15 @@ expect_deny 'hash -p /bin/kill x; x -9 -1'
 expect_deny $'# <<EOF\npkill -f app\nEOF'
 expect_deny $'# comment <<EOF\npkill -f app\nEOF'
 
+# Sanctioned fm-herdr-lab.sh wrapper allowance must not be foolable: the helper
+# named only as a kill target or argument, chained after the helper, or wrapping a
+# denied substitution stays denied. Only the helper as its own command word is allowed.
+expect_deny 'pkill -f fm-herdr-lab.sh'
+expect_deny 'killall fm-herdr-lab.sh'
+expect_deny '/opt/fm/bin/fm-herdr-lab.sh teardown fm-lab-x7; pkill herdr'
+expect_deny 'bash -c "/opt/fm/bin/fm-herdr-lab.sh teardown fm-lab-x7; pkill herdr"'
+expect_deny 'fm-herdr-lab.sh run fm-lab-x7 $(pkill -f app)'
+
 expect_allow 'kill 123'
 expect_allow 'kill -9 123 456'
 expect_allow 'command kill -TERM -- 789'
@@ -270,6 +279,16 @@ expect_allow 'printf "%s\n" "alias x='"'"'pkill -f app'"'"'"'
 expect_allow $'# <<EOF\necho ok\nEOF'
 expect_allow '[[ -f AGENTS.md ]] && echo ok'
 expect_allow '[ -f AGENTS.md ] && echo ok'
+# Sanctioned fm-herdr-lab.sh wrapper: allowed as its own command word by basename
+# or resolved path, including with kill-bearing arguments and inside the brief's
+# quoted-literal-path and command-substitution invocation forms.
+expect_allow 'fm-herdr-lab.sh teardown fm-lab-x7'
+expect_allow '/opt/fm/bin/fm-herdr-lab.sh provision fm-lab-x7'
+expect_allow 'fm-herdr-lab.sh run fm-lab-x7 pane kill 123'
+expect_allow '/opt/fm/bin/fm-herdr-lab.sh --help'
+expect_allow "'/opt/fm/bin/fm-herdr-lab.sh' teardown fm-lab-x7"
+expect_allow 'HERDR_LAB_SESSION=$(/opt/fm/bin/fm-herdr-lab.sh name fm-x)'
+expect_allow 'sudo -H fm-herdr-lab.sh teardown fm-lab-x7'
 pass 'command policy denies sweeps and allows only explicit numeric PID kills'
 
 claude_out=$(printf '{"tool_input":{"command":"pkill -f tauri-driver"}}' | "$CHECK" --claude 2>"$TMP_ROOT/claude.err")
