@@ -1126,6 +1126,17 @@ command_words_are_denied() {
     fi
   fi
   case "$name" in
+    # Sanctioned Herdr lab wrapper. bin/fm-herdr-lab.sh is the only crew-facing
+    # path to Herdr lifecycle work (never-default session, trailing --session on
+    # every call, guarded teardown, fleet-state tripwire), so permit it explicitly
+    # by its resolved command-word basename. This matches only the command word:
+    # the helper named merely as an argument (e.g. `pkill -f fm-herdr-lab.sh`) is
+    # unaffected and stays denied, a dynamic or aliased/hashed name is resolved and
+    # denied above before reaching here, and a chained kill in the same command
+    # list is still evaluated as its own simple command. It changes no existing
+    # denial today (an unmatched name already falls through to allow); it keeps the
+    # wrapper allowed if a future protected-process rule is ever added.
+    fm-herdr-lab.sh) return 1 ;;
     pkill|killall) return 0 ;;
     fuser)
       local arg

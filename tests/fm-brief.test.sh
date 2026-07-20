@@ -110,14 +110,16 @@ test_herdr_lab_contract_is_explicit_and_complete() {
   assert_present "$brief" "Herdr lab brief was not scaffolded"
   assert_grep "# Herdr isolation - HARD SAFETY CONTRACT" "$brief" \
     "Herdr lab brief missing its hard safety contract"
-  assert_grep "HERDR_LAB_HELPER='$ROOT/bin/fm-herdr-lab.sh'" "$brief" \
-    "Herdr lab brief must bind the absolute Firstmate helper path"
-  assert_grep "HERDR_LAB_SESSION=\$(\"\$HERDR_LAB_HELPER\" name $id)" "$brief" \
-    "Herdr lab brief missing helper-owned session naming"
-  assert_grep "\"\$HERDR_LAB_HELPER\" provision \"\$HERDR_LAB_SESSION\"" "$brief" \
-    "Herdr lab brief missing helper-owned provisioning"
-  assert_grep "\"\$HERDR_LAB_HELPER\" teardown \"\$HERDR_LAB_SESSION\"" "$brief" \
-    "Herdr lab brief missing helper-owned teardown"
+  assert_grep "never assign it to a shell variable and call" "$brief" \
+    "Herdr lab brief must warn against a variable-invoked helper"
+  assert_grep "HERDR_LAB_SESSION=\$('$ROOT/bin/fm-herdr-lab.sh' name $id)" "$brief" \
+    "Herdr lab brief must name the session via the literal helper path"
+  assert_grep "'$ROOT/bin/fm-herdr-lab.sh' provision \"\$HERDR_LAB_SESSION\"" "$brief" \
+    "Herdr lab brief missing literal-path provisioning"
+  assert_grep "'$ROOT/bin/fm-herdr-lab.sh' teardown \"\$HERDR_LAB_SESSION\"" "$brief" \
+    "Herdr lab brief missing literal-path teardown"
+  assert_no_grep "\"\$HERDR_LAB_HELPER\" teardown" "$brief" \
+    "Herdr lab brief must not invoke the helper through a shell variable (crew guard denies a variable command word)"
   assert_grep "required trailing \`--session \"\$HERDR_LAB_SESSION\"\`" "$brief" \
     "Herdr lab brief missing the per-call trailing session contract"
   assert_grep "direct \`herdr server stop\`" "$brief" \
@@ -141,8 +143,8 @@ test_herdr_lab_contract_quotes_foreign_firstmate_path() {
   helper="'$helper'"
   FM_HOME="$home" FM_ROOT_OVERRIDE="$foreign_root" "$ROOT/bin/fm-brief.sh" "$id" foreign --scout --herdr-lab >/dev/null 2>&1
   brief="$home/data/$id/brief.md"
-  assert_grep "HERDR_LAB_HELPER=$helper" "$brief" \
-    "Herdr lab brief must shell-quote an absolute Firstmate helper path"
+  assert_grep "$helper teardown" "$brief" \
+    "Herdr lab brief must invoke the shell-quoted absolute Firstmate helper path"
   assert_no_grep "bin/fm-herdr-lab.sh name $id" "$brief" \
     "Herdr lab brief must not invoke a worktree-relative helper"
   pass "fm-brief.sh: --herdr-lab uses its quoted Firstmate-owned helper path"
