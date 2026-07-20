@@ -154,6 +154,7 @@ Launch mechanics, including the verified command templates, live in [`bin/fm-spa
 Primary-session turn-end guard integrations for verified harnesses are tracked as repo-level hook files and documented in [`docs/turnend-guard.md`](turnend-guard.md).
 Crew and scout process-signaling guard integrations are installed at spawn time and documented in [`docs/crew-kill-guard.md`](crew-kill-guard.md).
 The local, gitignored `config/turnend-guard` file disables that primary-session guard only when its content is exactly `off`; absent or any other value leaves the guard enabled.
+The local, gitignored `config/claim-guard` file disables the composed claim-vs-evidence glass check (see [`docs/turnend-guard.md`](turnend-guard.md)) only when its content is exactly `off`; absent or any other value leaves that check enabled.
 Primary-session watcher wake protocols are rendered at session start by [`bin/fm-supervision-instructions.sh`](../bin/fm-supervision-instructions.sh) from [`docs/supervision-protocols/`](supervision-protocols/).
 Claude and Grok use background-notify cycles, Codex uses bounded foreground checkpoints, Pi uses its two tracked primary extensions, and OpenCode uses its TUI plugin.
 `config/crew-harness` is a local, gitignored file containing one adapter name for crewmate and scout launches.

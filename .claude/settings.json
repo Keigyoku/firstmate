@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "payload=$(cat); root=${CLAUDE_PROJECT_DIR:-$(pwd -P)}; if [ -f \"$root/AGENTS.md\" ] && [ -f \"$root/bin/fm-turnend-guard.sh\" ]; then printf '%s' \"$payload\" | \"$root/bin/fm-turnend-guard.sh\"; fi"
+            "command": "payload=$(cat); root=${CLAUDE_PROJECT_DIR:-$(pwd -P)}; if [ -f \"$root/AGENTS.md\" ] && [ -f \"$root/bin/fm-turnend-guard.sh\" ]; then printf '%s' \"$payload\" | \"$root/bin/fm-turnend-guard.sh\" || exit $?; if [ -f \"$root/bin/fm-claim-guard.sh\" ]; then printf '%s' \"$payload\" | \"$root/bin/fm-claim-guard.sh\"; fi; fi"
           }
         ]
       }
