@@ -27,6 +27,8 @@ If you have changed away from the firstmate home in an interactive shell, invoke
 | `fm-guard.sh`            | Warn on primary-checkout tangles, pending queued wakes, and stale watcher liveness   |
 | `fm-turnend-guard.sh`    | Shared primary turn-end guard predicate so no turn ends blind (docs/turnend-guard.md) |
 | `fm-turnend-guard-grok.sh` | Grok Stop-hook adapter for the primary turn-end guard                              |
+| `fm-claim-guard.sh`      | Claim-vs-evidence glass guard composed on the Claude Stop hook (docs/turnend-guard.md) |
+| `fm-glass.sh`            | Capture live desktop glass and record the `fm-state/last-glass-capture` freshness marker (docs/turnend-guard.md) |
 | `fm-crew-kill-guard.sh`  | Shared crew/scout process-signaling guard predicate (docs/crew-kill-guard.md)       |
 | `fm-crew-kill-shim.sh`   | PATH refusal shim installed as `pkill`, `killall`, and `fuser` for crew/scout tasks |
 | `fm-arm-pretool-check.sh` | Stable PreToolUse transport for the watcher-arm command policy (docs/arm-pretool-check.md) |
