@@ -115,10 +115,13 @@ done
 # Cursor/hermes comments must document outer-gate-only TDD.
 assert_contains "$spawn" 'outer-gate-only' 'spawn missing outer-gate-only note for hookless adapters'
 # Codex dual-hook string includes TDD_GUARD when hatch is open.
+# shellcheck disable=SC2016  # Single quotes are deliberate: matching the literal spawn source text.
 assert_contains "$spawn" 'command=\"$TDD_GUARD\"' 'codex PreToolUse must include TDD_GUARD when enabled'
 # Scouts are outer-gate-only: TDD hook disabled for any non-ship kind.
+# shellcheck disable=SC2016  # Single quotes are deliberate: matching the literal spawn source text.
 assert_contains "$spawn" '[ "$KIND" != ship ]' 'spawn must disable TDD hook for scout (non-ship) kinds'
 # Skills are never copied/symlinked into the worktree (captain-skill-pointer).
+# shellcheck disable=SC2016  # Single quotes are deliberate: matching the literal spawn source text.
 assert_not_contains "$spawn" 'ln -sfn "${HOME}/.claude/skills/tdd"' 'spawn must not symlink the tdd skill into the worktree'
 pass 'spawn wires TDD second-guard, scout-gates it, and does not vendor skills'
 
