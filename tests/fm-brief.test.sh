@@ -260,6 +260,60 @@ test_pause_verb_override_renders_all_brief_scaffolds() {
   pass "fm-brief.sh: custom pause verb renders in every scaffold"
 }
 
+# Fleet TDD contract (vellum-tdd-adoption-scout report sec 6.1-6.2, captain locks
+# A1 + F1-F4): every ship-mode brief carries the Test-first DoD; scouts stay
+# report-only. Also absorbs fm-brief-closes-issue: ship briefs instruct Closes #N.
+test_ship_briefs_emit_tdd_contract() {
+  local home id brief
+  home="$TMP_ROOT/tdd-contract-home"
+  write_registry "$home"
+
+  for id_proj in "brief-tdd-nomistakes:no-registry-proj" "brief-tdd-direct:direct-proj" "brief-tdd-local:local-proj"; do
+    id=${id_proj%%:*}
+    proj=${id_proj##*:}
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" "$proj" >/dev/null 2>&1
+    brief="$home/data/$id/brief.md"
+    assert_grep "# Test-first (fleet standing order)" "$brief" \
+      "$id: ship brief missing Test-first DoD heading"
+    assert_grep "F1. NO BEHAVIOR CHANGE WITHOUT A FAILING TEST FIRST" "$brief" \
+      "$id: ship brief missing iron rule F1"
+    assert_grep "F2. RED IS NOT OPTIONAL THEATRE" "$brief" \
+      "$id: ship brief missing iron rule F2"
+    assert_grep "F3. VERTICAL SLICES ONLY" "$brief" \
+      "$id: ship brief missing iron rule F3"
+    assert_grep "F4. TESTS ASSERT OBSERVABLE BEHAVIOR" "$brief" \
+      "$id: ship brief missing iron rule F4"
+    assert_grep "Record RED evidence" "$brief" \
+      "$id: ship brief missing A1 RED-evidence requirement"
+    assert_grep "Typed exemptions" "$brief" \
+      "$id: ship brief missing typed-exemptions table"
+    assert_grep "docs/comment-only" "$brief" \
+      "$id: ship brief missing docs/comment-only exemption"
+    assert_grep "pure renames/moves" "$brief" \
+      "$id: ship brief missing pure-rename exemption"
+    assert_grep "Closes #N" "$brief" \
+      "$id: ship brief missing Closes #N PR-body guidance"
+  done
+  pass "fm-brief.sh: every ship mode emits the fleet TDD contract and Closes #N"
+}
+
+test_scout_brief_has_no_tdd_contract() {
+  local home id brief
+  home="$TMP_ROOT/tdd-scout-home"
+  mkdir -p "$home/data"
+  id="brief-tdd-scout"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --scout >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "scout brief was not scaffolded"
+  assert_no_grep "# Test-first (fleet standing order)" "$brief" \
+    "scout brief must not carry the ship TDD DoD"
+  assert_no_grep "F1. NO BEHAVIOR CHANGE WITHOUT A FAILING TEST FIRST" "$brief" \
+    "scout brief must not carry iron rule F1"
+  assert_no_grep "Closes #N" "$brief" \
+    "scout brief must not carry Closes #N PR guidance"
+  pass "fm-brief.sh: scout briefs stay free of the ship TDD contract"
+}
+
 test_script_parses
 test_help_includes_entire_header
 test_ship_modes_generate_clean_briefs
@@ -271,3 +325,5 @@ test_herdr_lab_omission_is_loud_for_ship_and_scout
 test_herdr_lab_contract_applies_to_scouts_but_not_secondmates
 test_secondmate_no_projects_charter
 test_pause_verb_override_renders_all_brief_scaffolds
+test_ship_briefs_emit_tdd_contract
+test_scout_brief_has_no_tdd_contract
