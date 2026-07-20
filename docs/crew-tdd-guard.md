@@ -11,7 +11,7 @@ The escape hatch stays until the denial patterns stop producing hard blocks that
 
 ## Escape hatch (uniform)
 
-Any of these disables the TDD pre-execution layer for crew/scout spawns:
+Any of these disables the TDD pre-execution layer for ship-crew spawns:
 
 - Environment: `FM_TDD_HOOK_OFF=1` at spawn (hook not installed) or at runtime inside the crew (checker allows every command).
 - Config: local gitignored `config/tdd-hook` with exactly `off` (checked at spawn; same shape as `config/turnend-guard` / `config/claim-guard`).
@@ -20,8 +20,9 @@ Kill-guard rails are independent and stay installed.
 
 ## Spawn installation
 
-`bin/fm-spawn.sh` installs a private copy next to the kill guard under `/tmp/fm-<task-id>/fm-crew-tdd-guard.sh` for every crew and scout when the hatch is not set.
-Secondmate primaries are exempt; crews they launch still get the copy via the same task-temp install.
+`bin/fm-spawn.sh` installs a private copy next to the kill guard under `/tmp/fm-<task-id>/fm-crew-tdd-guard.sh` for every **ship** crew when the hatch is not set.
+Scouts (`kind=scout`) are report-only (scratch worktree, no PR) and are **not** installed; they stay outer-gate-only like Cursor/Hermes.
+Secondmate primaries are exempt; ship crews they launch still get the copy via the same task-temp install.
 
 | Adapter | Enforcement |
 | --- | --- |
@@ -40,9 +41,11 @@ Secondmate primaries are exempt; crews they launch still get the copy via the sa
 - After a verified RED run, the crew marks RED with:
   `/tmp/fm-<id>/fm-crew-tdd-guard.sh --mark-red`
   or `touch /tmp/fm-<id>/tdd-red-seen`.
-- Claude also receives a one-shot allow-path pin pointing at the brief Test-first section and the tdd skill.
+- Claude also receives a one-shot allow-path pin pointing at the brief Test-first section and the tdd skill. The pin is `additionalContext` only (no `permissionDecision`), printed on **stdout** with exit 0 so Claude Code actually injects it and it never overrides the kill guard's deny.
 
-Cursor and Hermes never see this checker; they still must produce RED evidence for behavior PRs or take a typed exemption.
+The canonical TDD how-to is the captain's `tdd` skill, referenced from the ship brief (Claude crews invoke `/tdd`; other harnesses read `$HOME/.claude/skills/tdd/SKILL.md` and siblings in place). Skills are never copied or symlinked into the worktree.
+
+Scouts, Cursor, and Hermes never see this checker; behavior PRs still must produce RED evidence or take a typed exemption.
 
 ## Related
 

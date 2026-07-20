@@ -293,8 +293,14 @@ test_ship_briefs_emit_tdd_contract() {
       "$id: ship brief missing pure-rename exemption"
     assert_grep "Closes #N" "$brief" \
       "$id: ship brief missing Closes #N PR-body guidance"
+    assert_grep "/tdd" "$brief" \
+      "$id: ship brief missing /tdd skill pointer for claude harness"
+    assert_grep "$HOME/.claude/skills/tdd/SKILL.md" "$brief" \
+      "$id: ship brief missing absolute captain tdd skill path"
+    assert_no_grep "__HOME__" "$brief" \
+      "$id: ship brief left __HOME__ placeholder unexpanded"
   done
-  pass "fm-brief.sh: every ship mode emits the fleet TDD contract and Closes #N"
+  pass "fm-brief.sh: every ship mode emits the fleet TDD contract, skill pointer, and Closes #N"
 }
 
 test_scout_brief_has_no_tdd_contract() {
@@ -311,6 +317,8 @@ test_scout_brief_has_no_tdd_contract() {
     "scout brief must not carry iron rule F1"
   assert_no_grep "Closes #N" "$brief" \
     "scout brief must not carry Closes #N PR guidance"
+  assert_no_grep "/.claude/skills/tdd/SKILL.md" "$brief" \
+    "scout brief must not carry the captain tdd skill pointer"
   pass "fm-brief.sh: scout briefs stay free of the ship TDD contract"
 }
 

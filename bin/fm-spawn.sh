@@ -87,10 +87,11 @@
 # Per-harness turn-end hooks are installed automatically; some live outside the worktree.
 # grok uses a firstmate-owned global hook under ${GROK_HOME:-$HOME/.grok}/hooks
 # plus a gitignored .fm-grok-turnend worktree pointer and a state token.
-# Crew/scout TDD pre-execution guard (bin/fm-crew-tdd-guard.sh, docs/crew-tdd-guard.md)
+# Ship-crew TDD pre-execution guard (bin/fm-crew-tdd-guard.sh, docs/crew-tdd-guard.md)
 # rides the same rails as the kill guard for claude/codex/opencode/pi/grok.
 # Temporary-until-tuned; disable with FM_TDD_HOOK_OFF=1 or config/tdd-hook=off.
-# Cursor and Hermes stay outer-gate-only (brief + Review Crew + replay-red CI).
+# Scouts (report-only) and Cursor/Hermes stay outer-gate-only (brief + Review
+# Crew + replay-red CI).
 # On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> mode=<mode> yolo=<on|off> window=<backend-target> worktree=<path>
 # mode/yolo are resolved per-project from data/projects.md for ship/scout tasks;
 # secondmate spawns record mode=secondmate, yolo=off, home=, and projects=.
@@ -1038,7 +1039,11 @@ KILL_SHIMS="$TASK_TMP/killguard-bin"
 # Escape hatch: FM_TDD_HOOK_OFF=1 or config/tdd-hook exactly "off" (temporary until tuned).
 TDD_GUARD="$TASK_TMP/fm-crew-tdd-guard.sh"
 TDD_HOOK=1
-if [ "${FM_TDD_HOOK_OFF:-}" = "1" ]; then
+if [ "$KIND" != ship ]; then
+  # Only ship crews get the TDD pre-exec guard. Scouts are report-only (scratch
+  # worktree, no PR) and stay outer-gate-only; kill-guard still installs below.
+  TDD_HOOK=0
+elif [ "${FM_TDD_HOOK_OFF:-}" = "1" ]; then
   TDD_HOOK=0
 elif [ -f "$CONFIG/tdd-hook" ] && [ "$(cat "$CONFIG/tdd-hook" 2>/dev/null || true)" = "off" ]; then
   TDD_HOOK=0
@@ -1100,12 +1105,6 @@ if [ "$KIND" != secondmate ]; then
         cat > "$WT/.claude/settings.local.json" <<EOF
 {"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"'$KILL_GUARD' --claude"},{"type":"command","command":"'$TDD_GUARD' --claude"}]}],"Stop":[{"hooks":[{"type":"command","command":"touch '$TURNEND'"}]}]}}
 EOF
-        # Best-effort pin of the captain tdd skill into the worktree skill path.
-        if [ -d "${HOME}/.claude/skills/tdd" ]; then
-          mkdir -p "$WT/.claude/skills"
-          ln -sfn "${HOME}/.claude/skills/tdd" "$WT/.claude/skills/tdd" 2>/dev/null || true
-          exclude_path '.claude/skills'
-        fi
       else
         cat > "$WT/.claude/settings.local.json" <<EOF
 {"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"'$KILL_GUARD' --claude"}]}],"Stop":[{"hooks":[{"type":"command","command":"touch '$TURNEND'"}]}]}}

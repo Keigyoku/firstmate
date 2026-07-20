@@ -61,7 +61,21 @@ EOF'
 expect_allow 'cat > src/foo.test.ts <<EOF
 test
 EOF'
+expect_allow 'cat > src/foo_test.go <<EOF
+x
+EOF'
+expect_allow 'sed -i s/a/b/ tests/foo.rs'
 pass 'tdd guard: test-path writes allowed without RED marker'
+
+# Path-boundary is_test_path: production files whose NAMES merely contain
+# test/spec substrings are NOT exempt (latest.rs, inspector.rs, respec.rs).
+rm -f "$TASK_TMP/tdd-red-seen"
+expect_deny 'cat > src/latest.rs <<EOF
+x
+EOF'
+expect_deny 'sed -i s/a/b/ src/inspector.rs'
+expect_deny 'sed -i s/a/b/ src/respec.rs'
+pass 'tdd guard: substring test/spec names are not exempted'
 
 # Claude transport deny shape matches kill-guard (empty stdout on deny).
 rm -f "$TASK_TMP/tdd-red-seen"
@@ -71,6 +85,20 @@ expect_code 2 "$claude_status" 'Claude transport did not deny production write'
 [ -z "$claude_out" ] || fail 'Claude deny wrote stdout; Claude Code would ignore it'
 assert_grep 'permissionDecision":"deny' "$TMP_ROOT/claude.err" 'Claude deny object missing'
 pass 'tdd guard: Claude transport denies with empty stdout'
+
+# Claude allow-path pin: additionalContext on STDOUT (Claude parses hook JSON
+# only from stdout on exit 0), no permissionDecision, and one-shot.
+rm -f "$TASK_TMP/tdd-red-seen" "$TASK_TMP/tdd-pin-delivered"
+pin_out=$(printf '%s\n' '{"tool_input":{"command":"cargo test"}}' | "$GUARD" --claude 2>/dev/null)
+pin_status=$?
+expect_code 0 "$pin_status" 'Claude allow pin did not exit 0'
+printf '%s' "$pin_out" | grep -q 'additionalContext' || fail 'Claude allow pin missing additionalContext on stdout'
+if printf '%s' "$pin_out" | grep -q 'permissionDecision'; then
+  fail 'Claude allow pin must not emit permissionDecision (would override kill-guard deny)'
+fi
+pin_out2=$(printf '%s\n' '{"tool_input":{"command":"cargo test"}}' | "$GUARD" --claude 2>/dev/null)
+[ -z "$pin_out2" ] || fail 'Claude allow pin fired more than once'
+pass 'tdd guard: Claude allow pin on stdout, additionalContext only, one-shot'
 
 # Structural spawn wiring: TDD second-guard on the same rails as kill-guard.
 spawn=$(cat "$ROOT/bin/fm-spawn.sh")
@@ -88,7 +116,11 @@ done
 assert_contains "$spawn" 'outer-gate-only' 'spawn missing outer-gate-only note for hookless adapters'
 # Codex dual-hook string includes TDD_GUARD when hatch is open.
 assert_contains "$spawn" 'command=\"$TDD_GUARD\"' 'codex PreToolUse must include TDD_GUARD when enabled'
-pass 'spawn structurally wires TDD second-guard on kill-guard rails'
+# Scouts are outer-gate-only: TDD hook disabled for any non-ship kind.
+assert_contains "$spawn" '[ "$KIND" != ship ]' 'spawn must disable TDD hook for scout (non-ship) kinds'
+# Skills are never copied/symlinked into the worktree (captain-skill-pointer).
+assert_not_contains "$spawn" 'ln -sfn "${HOME}/.claude/skills/tdd"' 'spawn must not symlink the tdd skill into the worktree'
+pass 'spawn wires TDD second-guard, scout-gates it, and does not vendor skills'
 
 # Teardown cleans grok tdd pointer/token.
 teardown=$(cat "$ROOT/bin/fm-teardown.sh")

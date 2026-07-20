@@ -283,6 +283,17 @@ TDD_DOD=$(cat <<'EOF'
 This fleet develops **red then green**.
 Gates verify end state; you still own authoring order.
 
+## How-to (canonical)
+
+The iron rules below are the **contract**. The captain's `tdd` skill is the
+canonical **how-to** (red-green-refactor, test design, mocking boundaries).
+
+- On the `claude` harness: invoke `/tdd` at task start (user-level skill).
+- On any other harness: read `__HOME__/.claude/skills/tdd/SKILL.md` and its
+  siblings `__HOME__/.claude/skills/tdd/tests.md` and
+  `__HOME__/.claude/skills/tdd/mocking.md` via that absolute path.
+- Never copy or symlink skills into the worktree; read them in place.
+
 ## Iron rules (fleet)
 
 F1. NO BEHAVIOR CHANGE WITHOUT A FAILING TEST FIRST
@@ -339,6 +350,8 @@ If RED evidence is missing for a non-exempt behavior PR, Review Crew REDs the ro
 When the task is issue-driven (a linked GitHub issue or an explicit issue number in the brief), include a `Closes #N` line in the PR body so merge closes the issue.
 EOF
 )
+# Expand the absolute captain-skill path (the heredoc above is single-quoted).
+TDD_DOD=${TDD_DOD//__HOME__/$HOME}
 
 case "$MODE" in
   direct-PR)

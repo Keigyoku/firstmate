@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Crew TDD pre-execution guard installed by fm-spawn.sh for crew and scout agents.
+# Crew TDD pre-execution guard installed by fm-spawn.sh for ship crew agents.
+# Scouts are report-only (scratch worktree) and stay outer-gate-only like
+# cursor/hermes; the guard is not installed for kind=scout.
 #
 # Same delivery rails as bin/fm-crew-kill-guard.sh (docs/crew-kill-guard.md): one
 # shared checker, per-harness PreToolUse / tool_call / tool.execute.before adapters.
@@ -67,7 +69,9 @@ allow() {
     local pin escaped
     pin='[crew-tdd-guard] Fleet TDD standing order is active. Follow the Test-first section in your brief (F1-F4, vertical slices, typed exemptions, A1 RED evidence). Load the tdd skill (or superpowers test-driven-development) before implementing. After a verified RED run, mark with the task tdd guard --mark-red before production-source shell writes. Escape hatch: FM_TDD_HOOK_OFF=1 (temporary until tuned).'
     escaped=$(printf '%s' "$pin" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' ')
-    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","additionalContext":"%s"},"systemMessage":"%s"}\n' "$escaped" "$escaped" >&2
+    # additionalContext is parsed only from STDOUT on exit 0. Emit additionalContext
+    # alone (no permissionDecision) so the pin never overrides the kill-guard's deny.
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s"}}\n' "$escaped"
     : > "$PIN_MARK"
   fi
   exit 0
@@ -99,9 +103,14 @@ esac
 # Test-path writes are allowed so the RED test itself can be authored.
 is_test_path() {
   local p=$1
-  # Broad match: *test* already covers tests/, __tests__, *.test.*, Test*.
+  # Path-boundary matches only, so production files whose names merely contain
+  # "test"/"spec" (latest.rs, inspector.rs, respec.rs) are NOT exempted.
   case "$p" in
-    *test*|*Test*|*spec*|*Spec*) return 0 ;;
+    tests/*|*/tests/*) return 0 ;;
+    __tests__/*|*/__tests__/*) return 0 ;;
+    *.test.*|*.spec.*) return 0 ;;
+    *_test.*|*_spec.*) return 0 ;;
+    Test*|*/Test*) return 0 ;;
   esac
   return 1
 }
