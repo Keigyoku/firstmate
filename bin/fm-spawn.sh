@@ -87,6 +87,11 @@
 # Per-harness turn-end hooks are installed automatically; some live outside the worktree.
 # grok uses a firstmate-owned global hook under ${GROK_HOME:-$HOME/.grok}/hooks
 # plus a gitignored .fm-grok-turnend worktree pointer and a state token.
+# Ship-crew TDD pre-execution guard (bin/fm-crew-tdd-guard.sh, docs/crew-tdd-guard.md)
+# rides the same rails as the kill guard for claude/codex/opencode/pi/grok.
+# Temporary-until-tuned; disable with FM_TDD_HOOK_OFF=1 or config/tdd-hook=off.
+# Scouts (report-only) and Cursor/Hermes stay outer-gate-only (brief + Review
+# Crew + replay-red CI).
 # On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> mode=<mode> yolo=<on|off> window=<backend-target> worktree=<path>
 # mode/yolo are resolved per-project from data/projects.md for ship/scout tasks;
 # secondmate spawns record mode=secondmate, yolo=off, home=, and projects=.
@@ -1030,12 +1035,28 @@ mkdir -p "$TASK_TMP/gotmp"
 # use the same installation without depending on the primary home's path.
 KILL_GUARD="$TASK_TMP/fm-crew-kill-guard.sh"
 KILL_SHIMS="$TASK_TMP/killguard-bin"
+# TDD pre-execution guard on the same rails (docs/crew-tdd-guard.md).
+# Escape hatch: FM_TDD_HOOK_OFF=1 or config/tdd-hook exactly "off" (temporary until tuned).
+TDD_GUARD="$TASK_TMP/fm-crew-tdd-guard.sh"
+TDD_HOOK=1
+if [ "$KIND" != ship ]; then
+  # Only ship crews get the TDD pre-exec guard. Scouts are report-only (scratch
+  # worktree, no PR) and stay outer-gate-only; kill-guard still installs below.
+  TDD_HOOK=0
+elif [ "${FM_TDD_HOOK_OFF:-}" = "1" ]; then
+  TDD_HOOK=0
+elif [ -f "$CONFIG/tdd-hook" ] && [ "$(cat "$CONFIG/tdd-hook" 2>/dev/null || true)" = "off" ]; then
+  TDD_HOOK=0
+fi
 if [ "$KIND" != secondmate ]; then
   install -m 0700 "$FM_ROOT/bin/fm-crew-kill-guard.sh" "$KILL_GUARD"
   mkdir -p "$KILL_SHIMS"
   for kill_tool in pkill killall fuser; do
     install -m 0700 "$FM_ROOT/bin/fm-crew-kill-shim.sh" "$KILL_SHIMS/$kill_tool"
   done
+  if [ "$TDD_HOOK" -eq 1 ]; then
+    install -m 0700 "$FM_ROOT/bin/fm-crew-tdd-guard.sh" "$TDD_GUARD"
+  fi
 fi
 
 # Per-harness turn-end hook: a file that touches state/<id>.turn-ended when the
@@ -1079,9 +1100,16 @@ if [ "$KIND" != secondmate ]; then
     claude*)
       adopt_hook_backup '.claude/settings.local.json'
       mkdir -p "$WT/.claude"
-      cat > "$WT/.claude/settings.local.json" <<EOF
+      # Kill guard first, optional TDD guard second on the same PreToolUse Bash rail.
+      if [ "$TDD_HOOK" -eq 1 ]; then
+        cat > "$WT/.claude/settings.local.json" <<EOF
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"'$KILL_GUARD' --claude"},{"type":"command","command":"'$TDD_GUARD' --claude"}]}],"Stop":[{"hooks":[{"type":"command","command":"touch '$TURNEND'"}]}]}}
+EOF
+      else
+        cat > "$WT/.claude/settings.local.json" <<EOF
 {"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"'$KILL_GUARD' --claude"}]}],"Stop":[{"hooks":[{"type":"command","command":"touch '$TURNEND'"}]}]}}
 EOF
+      fi
       exclude_path '.claude/settings.local.json'
       ;;
     codex*)
@@ -1090,7 +1118,31 @@ EOF
     opencode*)
       adopt_hook_backup '.opencode/plugins/fm-turn-end.js'
       mkdir -p "$WT/.opencode/plugins"
-      cat > "$WT/.opencode/plugins/fm-turn-end.js" <<EOF
+      if [ "$TDD_HOOK" -eq 1 ]; then
+        cat > "$WT/.opencode/plugins/fm-turn-end.js" <<EOF
+import { spawn } from "node:child_process";
+const runCheck = (bin, command, label) => new Promise((resolve) => {
+  const child = spawn(bin, ["--command", command], { stdio: ["ignore", "ignore", "pipe"] });
+  let stderr = "";
+  child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+  child.on("error", () => resolve({ code: 2, stderr: label + " unavailable" }));
+  child.on("close", (code) => resolve({ code: code ?? 2, stderr }));
+});
+export const FmTurnEnd = async ({ \$ }) => ({
+  "tool.execute.before": async (input, output) => {
+    if (input?.tool !== "bash" || typeof output?.args?.command !== "string") return;
+    const kill = await runCheck("$KILL_GUARD", output.args.command, "crew kill guard");
+    if (kill.code !== 0) throw new Error(kill.stderr.trim() || "crew kill guard denied the command");
+    const tdd = await runCheck("$TDD_GUARD", output.args.command, "crew tdd guard");
+    if (tdd.code !== 0) throw new Error(tdd.stderr.trim() || "crew tdd guard denied the command");
+  },
+  event: async ({ event }) => {
+    if (event.type === "session.idle") await \$\`touch $TURNEND\`
+  },
+})
+EOF
+      else
+        cat > "$WT/.opencode/plugins/fm-turn-end.js" <<EOF
 import { spawn } from "node:child_process";
 const check = (command) => new Promise((resolve) => {
   const child = spawn("$KILL_GUARD", ["--command", command], { stdio: ["ignore", "ignore", "pipe"] });
@@ -1110,13 +1162,39 @@ export const FmTurnEnd = async ({ \$ }) => ({
   },
 })
 EOF
+      fi
       exclude_path '.opencode/plugins/fm-turn-end.js'
       ;;
     pi*)
       # Written OUTSIDE the worktree: pi's project-trust gate fires on any extension
       # loaded from inside the project (verified live), but an explicit -e path
       # elsewhere loads without a dialog. Lives in state/, cleaned by teardown.
-      cat > "$STATE/$ID.pi-ext.ts" <<EOF
+      if [ "$TDD_HOOK" -eq 1 ]; then
+        cat > "$STATE/$ID.pi-ext.ts" <<EOF
+// Firstmate turn-end signal + kill/TDD pre-exec guards; written by fm-spawn.
+// Use "turn_end" (fires after each turn the agent finishes), not "agent_end"
+// (fires once, only when the whole run exits): the watcher needs a signal at
+// every turn boundary so an idle crewmate is surfaced, not just at shutdown.
+import { execFile, spawnSync } from "node:child_process";
+export default function (pi: any) {
+  pi.on("tool_call", (event: any) => {
+    if (event.type !== "tool_call" || event.toolName !== "bash") return {};
+    const command = String(event.input?.command ?? "");
+    const kill = spawnSync("$KILL_GUARD", ["--command", command], { encoding: "utf8" });
+    if (kill.status !== 0) {
+      return { block: true, reason: kill.stderr.trim() || "crew kill guard denied the command" };
+    }
+    const tdd = spawnSync("$TDD_GUARD", ["--command", command], { encoding: "utf8" });
+    if (tdd.status !== 0) {
+      return { block: true, reason: tdd.stderr.trim() || "crew tdd guard denied the command" };
+    }
+    return {};
+  });
+  pi.on("turn_end", () => execFile("touch", ["$TURNEND"]));
+}
+EOF
+      else
+        cat > "$STATE/$ID.pi-ext.ts" <<EOF
 // Firstmate turn-end signal; written by fm-spawn.
 // Use "turn_end" (fires after each turn the agent finishes), not "agent_end"
 // (fires once, only when the whole run exits): the watcher needs a signal at
@@ -1133,6 +1211,7 @@ export default function (pi: any) {
   pi.on("turn_end", () => execFile("touch", ["$TURNEND"]));
 }
 EOF
+      fi
       ;;
     grok*)
       # grok fires a Stop hook at every turn boundary (verified, grok 0.2.73), the
@@ -1213,27 +1292,63 @@ exec "\$checker"
 EOF
       chmod +x "$GROK_HOOKS_DIR/fm-kill-guard.sh"
       hook_command=$(json_escape "bash $(shell_quote "$GROK_HOOKS_DIR/fm-kill-guard.sh")")
-      printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"%s"}]}]}}\n' "$hook_command" > "$GROK_HOOKS_DIR/fm-kill-guard.json"
+      # When TDD is on, register a second PreToolUse entry with the same pointer shape.
+      if [ "$TDD_HOOK" -eq 1 ]; then
+        GROK_TDD_AUTH_DIR="$GROK_HOOKS_DIR/fm-tdd-guard.d"
+        mkdir -p "$GROK_TDD_AUTH_DIR"
+        old_umask=$(umask)
+        umask 077
+        tdd_auth_file=$(mktemp "$GROK_TDD_AUTH_DIR/fm.XXXXXXXXXXXX")
+        umask "$old_umask"
+        printf '%s\n' "$TDD_GUARD" > "$tdd_auth_file"
+        printf '%s\n' "${tdd_auth_file##*/}" > "$STATE/$ID.grok-tddguard-token"
+        sq_grok_tdd_auth_dir=$(shell_quote "$GROK_TDD_AUTH_DIR")
+        cat > "$GROK_HOOKS_DIR/fm-tdd-guard.sh" <<EOF
+#!/usr/bin/env bash
+set -u
+auth_dir=$sq_grok_tdd_auth_dir
+workspace=\${GROK_WORKSPACE_ROOT:-}
+[ -n "\$workspace" ] || exit 0
+p="\$workspace/.fm-grok-tddguard"
+[ -f "\$p" ] || exit 0
+IFS= read -r token < "\$p" || exit 2
+case "\$token" in fm.????????????) : ;; *) exit 2 ;; esac
+case "\$token" in *[!A-Za-z0-9._-]*) exit 2 ;; esac
+checker=\$(cat "\$auth_dir/\$token" 2>/dev/null) || exit 2
+case "\$checker" in /tmp/fm-*/fm-crew-tdd-guard.sh) : ;; *) exit 2 ;; esac
+exec "\$checker"
+EOF
+        chmod +x "$GROK_HOOKS_DIR/fm-tdd-guard.sh"
+        tdd_hook_command=$(json_escape "bash $(shell_quote "$GROK_HOOKS_DIR/fm-tdd-guard.sh")")
+        printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"%s"},{"type":"command","command":"%s"}]}]}}\n' \
+          "$hook_command" "$tdd_hook_command" > "$GROK_HOOKS_DIR/fm-kill-guard.json"
+        adopt_hook_backup '.fm-grok-tddguard'
+        printf '%s\n' "${tdd_auth_file##*/}" > "$WT/.fm-grok-tddguard"
+        exclude_path '.fm-grok-tddguard'
+      else
+        printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"%s"}]}]}}\n' "$hook_command" > "$GROK_HOOKS_DIR/fm-kill-guard.json"
+      fi
       adopt_hook_backup '.fm-grok-killguard'
       printf '%s\n' "${kill_auth_file##*/}" > "$WT/.fm-grok-killguard"
       exclude_path '.fm-grok-killguard'
       ;;
     cursor*)
-      # cursor: no turn-end hook is wired. cursor-agent is Claude-Code-compatible but
-      # its interactive Stop/turn-end hook surface is unverified, so firstmate does
-      # not assume one. cursor draws a clear busy footer ("ctrl+c to stop"), so the
-      # watcher's provably-working check and stale-pane detection cover supervision -
-      # the same hookless path opencode uses. Verified 2026-07-05, cursor-agent 2026.07.01.
+      # cursor: no turn-end hook and no verified pre-execution hook surface.
+      # cursor-agent is Claude-Code-compatible but its interactive Stop/turn-end
+      # and PreToolUse surfaces are unverified, so firstmate does not assume them.
+      # PATH shims still apply for process signaling (docs/crew-kill-guard.md).
+      # TDD is outer-gate-only for cursor: ship brief + Review Crew + replay-red CI
+      # (docs/crew-tdd-guard.md). Verified 2026-07-05, cursor-agent 2026.07.01.
       ;;
     hermes*)
-      # hermes: no turn-end hook is wired. hermes DOES expose a per-turn `stop` shell
-      # hook (fires at the end of every conversation turn), but wiring it requires
+      # hermes: no turn-end hook and no verified pre-execution hook surface.
+      # hermes DOES expose a per-turn `stop` shell hook, but wiring it requires
       # declaring the hook in the user's global ~/.hermes/config.yaml and clearing a
       # first-use consent allowlist - a higher-blast-radius write into hermes' own
       # managed config than grok's always-trusted ~/.grok/hooks/ drop-in. That is
-      # deferred; hermes draws a clear busy footer ("Ctrl+C cancel"), so the watcher's
-      # provably-working check and stale-pane detection cover supervision, the same
-      # hookless path opencode uses. Verified 2026-07-05, Hermes Agent v0.18.0.
+      # deferred. PATH shims still apply for process signaling.
+      # TDD is outer-gate-only for hermes: ship brief + Review Crew + replay-red CI
+      # (docs/crew-tdd-guard.md). Verified 2026-07-05, Hermes Agent v0.18.0.
       ;;
   esac
 fi
@@ -1304,7 +1419,11 @@ sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
 sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts")
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
-sq_codexkillhook=$(shell_quote "hooks.PreToolUse=[{matcher=\"Bash\",hooks=[{type=\"command\",command=\"$KILL_GUARD\",timeout=10}]}]")
+if [ "$KIND" != secondmate ] && [ "$TDD_HOOK" -eq 1 ]; then
+  sq_codexkillhook=$(shell_quote "hooks.PreToolUse=[{matcher=\"Bash\",hooks=[{type=\"command\",command=\"$KILL_GUARD\",timeout=10},{type=\"command\",command=\"$TDD_GUARD\",timeout=10}]}]")
+else
+  sq_codexkillhook=$(shell_quote "hooks.PreToolUse=[{matcher=\"Bash\",hooks=[{type=\"command\",command=\"$KILL_GUARD\",timeout=10}]}]")
+fi
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL" "$EFFORT")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}

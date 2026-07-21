@@ -311,8 +311,10 @@ test_codex_preserves_project_hooks_json() {
   git_status=$(git -C "$wt" status --short -- .codex/hooks.json)
   [ -z "$git_status" ] || fail "codex spawn dirtied tracked hooks.json: $git_status"
   launch=$(cat "$launchlog")
-  assert_contains "$launch" "-c 'hooks.PreToolUse=[{matcher=\"Bash\",hooks=[{type=\"command\",command=\"/tmp/fm-$id/fm-crew-kill-guard.sh\",timeout=10}]}]'" \
+  assert_contains "$launch" "hooks.PreToolUse=[{matcher=\"Bash\",hooks=[{type=\"command\",command=\"/tmp/fm-$id/fm-crew-kill-guard.sh\",timeout=10}" \
     "codex launch did not carry per-launch kill guard hook"
+  assert_contains "$launch" "{type=\"command\",command=\"/tmp/fm-$id/fm-crew-tdd-guard.sh\",timeout=10}]}]'" \
+    "codex launch did not chain the per-launch TDD guard after the kill guard"
   pass "codex spawn preserves tracked project hooks.json"
 }
 

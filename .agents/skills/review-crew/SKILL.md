@@ -50,6 +50,22 @@ Dispatch Review Crews as ship crews when the fix half may need branch write acce
 - Append every round's evidence to the PR as a comment so the trail lives on the PR.
 - Prefer `gh-axi pr comment <n> --repo <owner>/<repo> --body-file <report>` for the verdict comment.
 
+### Red-first adjudication (fleet TDD)
+
+The ship brief is the one owner of the full fleet TDD contract (iron rules F1-F4, vertical slices, typed exemptions, evidence shape).
+This checklist adjudicates that contract; do not restate it.
+
+For PRs that change behavior (fix/feat/behavior-refactor):
+
+- [ ] **RED evidence present** (PR body, evidence dir, or round comment): command + non-zero exit + failure that matches the claimed bug/feature gap.
+- [ ] **GREEN evidence present** for the same command family.
+- [ ] Tests assert **behavior**, not mock call counts alone; no obvious tautology (`assert!(true)`, empty body, snapshot update without justification).
+- [ ] No unrelated test deletions/weakenings without explicit justification in the PR.
+- [ ] Status/history: if the ship crew claimed `checks green`, the PR URL exists and checks are actually green on the head under review.
+
+If RED evidence is absent and the change is not a typed exemption (see the ship brief Test-first exemption table: docs/comment-only, pure renames/moves, pure refactor with characterization tests, generated/vendored, thrown-away spike) → **RED the round** (request evidence or a proper failing test).
+Do not invent GREEN from end-state CI alone when authoring honesty is the question.
+
 ### Tooling
 
 - Use `gh-axi` for every GitHub read and write (PR metadata, comments, checks, reviews).

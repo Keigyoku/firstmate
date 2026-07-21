@@ -31,6 +31,7 @@ If you have changed away from the firstmate home in an interactive shell, invoke
 | `fm-glass.sh`            | Capture live desktop glass and record the `fm-state/last-glass-capture` freshness marker (docs/turnend-guard.md) |
 | `fm-crew-kill-guard.sh`  | Shared crew/scout process-signaling guard predicate (docs/crew-kill-guard.md)       |
 | `fm-crew-kill-shim.sh`   | PATH refusal shim installed as `pkill`, `killall`, and `fuser` for crew/scout tasks |
+| `fm-crew-tdd-guard.sh`   | Ship-crew TDD pre-execution guard predicate on the kill-guard rails (docs/crew-tdd-guard.md) |
 | `fm-arm-pretool-check.sh` | Stable PreToolUse transport for the watcher-arm command policy (docs/arm-pretool-check.md) |
 | `fm-arm-command-policy.mjs` | Semantic owner of the watcher-arm PreToolUse policy (docs/arm-pretool-check.md)   |
 | `fm-supervision-instructions.sh` | Render the session-start primary-harness supervision block or the one-line repair instruction |

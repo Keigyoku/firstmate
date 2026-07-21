@@ -195,6 +195,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/crew-lead-resident-contract.md](docs/crew-lead-resident-contract.md) - Crew Lead resident metadata, current-state schema, versioning, and verification evidence.
 - [docs/turnend-guard.md](docs/turnend-guard.md) - the primary session's structural "no turn ends blind" backstop: verified per-harness hook mechanisms, scoping, loop safety, and fail-open tradeoffs.
 - [docs/crew-kill-guard.md](docs/crew-kill-guard.md) - the crew/scout process-signaling guard, per-harness enforcement, PATH shims, and verified gaps.
+- [docs/crew-tdd-guard.md](docs/crew-tdd-guard.md) - the ship-crew TDD pre-execution guard riding the kill-guard rails, its escape hatch, and per-harness enforcement.
 - [docs/supervision-protocols/](docs/supervision-protocols/) - rendered primary-harness watcher protocols for Claude, Codex, OpenCode, Pi, Grok, and unknown harness fallback.
 - [docs/scripts.md](docs/scripts.md) - the `bin/` toolbelt reference.
 - [`AGENTS.md`](AGENTS.md) - firstmate's full operating manual for the orchestrator agent.

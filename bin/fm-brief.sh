@@ -44,6 +44,10 @@
 # it carries the AGENTS.md authoring bar (widely useful knowledge only, pointers
 # over copied detail) and has the crewmate add the fm-ensure-agents-md.sh
 # self-governance section when a touched project AGENTS.md lacks it.
+# Ship briefs also carry the fleet Test-first contract (iron rules F1-F4, A1 RED
+# evidence, typed exemptions, Closes #N PR-body guidance); scout briefs do not.
+# That block is the one owner of the full TDD contract text; Review Crew and
+# docs/crew-tdd-guard.md point at it rather than restating it.
 # Refuses to overwrite an existing brief.
 set -eu
 
@@ -268,6 +272,87 @@ read -r MODE _ <<EOF
 $("$FM_ROOT/bin/fm-project-mode.sh" "$REPO")
 EOF
 
+# Fleet TDD contract (one owner of the full text).
+# Source: vellum-tdd-adoption-scout report sec 6.1-6.2 + captain locks A1 (2026-07-20).
+# Scout briefs stay report-only and never receive this block.
+# Quoted heredoc keeps apostrophes safe outside the ship-mode $(cat <<EOF) bodies.
+# shellcheck disable=SC2016 # intentional: this is brief prose for the crewmate, not shell to expand here.
+TDD_DOD=$(cat <<'EOF'
+# Test-first (fleet standing order)
+
+This fleet develops **red then green**.
+Gates verify end state; you still own authoring order.
+
+## How-to (canonical)
+
+The iron rules below are the **contract**. The captain's `tdd` skill is the
+canonical **how-to** (red-green-refactor, test design, mocking boundaries).
+
+- On the `claude` harness: invoke `/tdd` at task start (user-level skill).
+- On any other harness: read `__HOME__/.claude/skills/tdd/SKILL.md` and its
+  siblings `__HOME__/.claude/skills/tdd/tests.md` and
+  `__HOME__/.claude/skills/tdd/mocking.md` via that absolute path.
+- Never copy or symlink skills into the worktree; read them in place.
+
+## Iron rules (fleet)
+
+F1. NO BEHAVIOR CHANGE WITHOUT A FAILING TEST FIRST
+    (or a typed exemption from the scope table).
+
+F2. RED IS NOT OPTIONAL THEATRE
+    You must run the test, see non-zero, and record why it failed
+    (missing behavior - not compile typo you then fixed without re-RED).
+
+F3. VERTICAL SLICES ONLY
+    One behavior -> one RED -> one GREEN. No bulk-test-then-bulk-impl.
+
+F4. TESTS ASSERT OBSERVABLE BEHAVIOR
+    Public API / CLI / HTTP / UI contract. No assert-on-mock-call-counts
+    as the sole oracle. Mock system boundaries only.
+
+## Required for behavior work (features, fixes, behavior-changing refactors)
+
+1. **RED:** Write the smallest failing test (or extend an existing suite) that would catch the bug/missed behavior.
+2. **Run it** with the project normal runner (Rust: `cargo test -p <crate> <filter>` in distrobox; JS: `node --test` / `vitest run`; bash: `tests/*.test.sh`).
+3. **Record RED evidence** (A1: squash merges make history independent; the artifact is the durable proof): exit non-zero + the assertion/message that proves the *behavior* is missing (not a typo you fixed without re-running). Put it in the PR body or `.no-mistakes/evidence/` when used.
+4. **GREEN:** Minimal production change to pass. Re-run the same test + relevant package suite.
+5. **Do not** claim complete on green-without-RED, or on local green without the delivery mode real ship signal (PR URL / ready-in-branch).
+
+## Vertical slices
+
+One behavior per RED->GREEN cycle.
+Do **not** write a bulk suite then implement everything.
+
+## Typed exemptions (must state in PR/commit body)
+
+- docs/comment-only; pure formatting with no behavior risk
+- pure renames/moves with compiler as oracle (prefer `cargo check` / typecheck evidence)
+- pure refactor with characterization tests that stay green (no intentional behavior change)
+- generated/vendored code you did not author
+- exploratory spike **thrown away** before real implementation (spike commits must not ship)
+
+## Evidence shape (PR body or `.no-mistakes/evidence/` when used)
+
+### RED
+- command:
+- exit code:
+- relevant failure excerpt (<=30 lines):
+
+### GREEN
+- command:
+- exit code:
+- notes:
+
+If RED evidence is missing for a non-exempt behavior PR, Review Crew REDs the round.
+
+## PR body
+
+When the task is issue-driven (a linked GitHub issue or an explicit issue number in the brief), include a `Closes #N` line in the PR body so merge closes the issue.
+EOF
+)
+# Expand the absolute captain-skill path (the heredoc above is single-quoted).
+TDD_DOD=${TDD_DOD//__HOME__/$HOME}
+
 case "$MODE" in
   direct-PR)
     SETUP2=""
@@ -278,6 +363,8 @@ This project ships **direct-PR**: you raise the PR yourself, without the no-mist
 The task is complete only when committed on your branch.
 When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
 Do NOT run /no-mistakes. The captain reviews and merges the PR; firstmate relays it.
+
+$TDD_DOD
 EOF
 )
     ;;
@@ -291,6 +378,8 @@ The task is complete only when committed on your branch \`fm/$ID\`. Do NOT push,
 Keep your branch a clean fast-forward onto the current default branch - if \`main\` has advanced, rebase onto it so the eventual merge stays a fast-forward.
 When it is implemented and committed, append \`done: ready in branch fm/$ID\` to the status file and stop.
 Firstmate then reviews your branch diff, the captain approves, and firstmate merges it into local \`main\`.
+
+$TDD_DOD
 EOF
 )
     ;;
@@ -314,6 +403,8 @@ Two firstmate-specific rules layer on top of that guidance:
 - Avoid \`--yes\`: the captain, not you, owns the ask-user decisions it would silently auto-resolve.
 
 After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
+
+$TDD_DOD
 EOF
 )
     ;;
