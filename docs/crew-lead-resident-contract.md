@@ -46,6 +46,7 @@ Clean shutdown publishes lifecycle `stopped`, increments the epoch, and omits pr
 The existing `state/.lock` session authority invokes setup and publication after each successful primary lock acquisition.
 This deliberately extends the session-lock machinery instead of creating a parallel primary-session tracker.
 Adapters and rotation hooks may call `bin/fm-resident-publish.sh` for lifecycle, transcript, backend, or input changes that occur without a new lock acquisition.
+App-started Crew Lead sessions on harnesses that never run firstmate's session-lock publish path (for example a Claude-family resident spawned by the Vellum app) must adapter-publish `state/resident-current.json` with process identity so boot-time hydration and Running reconcile can bind them instantly.
 
 ## Versioning rules
 
