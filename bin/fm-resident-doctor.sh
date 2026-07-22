@@ -29,18 +29,25 @@ if [ -e "$FM_HOME/state/resident-current.json" ]; then
   if jq -e '.conversation != null' "$FM_HOME/state/resident-current.json" >/dev/null 2>&1; then
     CONV_HARNESS=$(jq -r '.conversation.harness // empty' "$FM_HOME/state/resident-current.json")
     CONV_ADAPTER=$(jq -r '.conversation.transcript.adapter // empty' "$FM_HOME/state/resident-current.json")
-    CONV_ID=$(jq -r '.conversation.transcript.id // .conversation.session_id // empty' "$FM_HOME/state/resident-current.json")
+    CONV_SESSION_ID=$(jq -r '.conversation.session_id // empty' "$FM_HOME/state/resident-current.json")
+    CONV_TRANSCRIPT_ID=$(jq -r '.conversation.transcript.id // empty' "$FM_HOME/state/resident-current.json")
     CONV_PATH=$(jq -r '.conversation.transcript.path // empty' "$FM_HOME/state/resident-current.json")
     [ -n "$CONV_HARNESS" ] || { echo "fm-resident-doctor: conversation.harness missing" >&2; exit 1; }
     [ -n "$CONV_ADAPTER" ] || { echo "fm-resident-doctor: conversation.transcript.adapter missing" >&2; exit 1; }
-    [ -n "$CONV_ID" ] || { echo "fm-resident-doctor: conversation transcript id missing" >&2; exit 1; }
+    [ -n "$CONV_SESSION_ID" ] || { echo "fm-resident-doctor: conversation.session_id missing" >&2; exit 1; }
+    [ -n "$CONV_TRANSCRIPT_ID" ] || { echo "fm-resident-doctor: conversation.transcript.id missing" >&2; exit 1; }
+    [ "$CONV_SESSION_ID" = "$CONV_TRANSCRIPT_ID" ] \
+      || { echo "fm-resident-doctor: conversation session and transcript ids differ" >&2; exit 1; }
     [ -n "$CONV_PATH" ] || { echo "fm-resident-doctor: conversation.transcript.path missing" >&2; exit 1; }
     case "$CONV_PATH" in
       /*) ;;
       *) echo "fm-resident-doctor: conversation.transcript.path must be absolute" >&2; exit 1 ;;
     esac
-    EXPECTED=$(fm_resident_transcript_adapter "$CONV_HARNESS" 2>/dev/null || true)
-    if [ -n "$EXPECTED" ] && [ "$CONV_ADAPTER" != "$EXPECTED" ]; then
+    if ! EXPECTED=$(fm_resident_transcript_adapter "$CONV_HARNESS" 2>/dev/null); then
+      echo "fm-resident-doctor: unknown conversation harness $CONV_HARNESS" >&2
+      exit 1
+    fi
+    if [ "$CONV_ADAPTER" != "$EXPECTED" ]; then
       echo "fm-resident-doctor: adapter $CONV_ADAPTER does not match harness $CONV_HARNESS (expected $EXPECTED)" >&2
       exit 1
     fi

@@ -8,7 +8,8 @@
 #   fm_resident_transcript_adapter <harness>
 #   fm_resident_discover_transcript <harness> <worktree>
 #   fm_resident_session_id_from_transcript <harness> <path> [worktree]
-# Env roots: CLAUDE_HOME / VELLUM_TRANSCRIPT_ROOT, CODEX_HOME, GROK_HOME,
+# Env roots: FM_WATCHDOG_CLAUDE_SESSION_DIR / CLAUDE_HOME /
+# VELLUM_TRANSCRIPT_ROOT, FM_WATCHDOG_CODEX_SESSION_DIR / CODEX_HOME, GROK_HOME,
 # CURSOR_HOME, PI_HOME, HERMES_HOME, OPENCODE_TRANSCRIPT_ROOT / XDG_DATA_HOME.
 # FM_RESIDENT_* overrides live in fm-resident-publish.sh.
 
@@ -151,7 +152,9 @@ fm_resident_latest_file_in() {  # <dir> <find-name-pattern>
 }
 
 fm_resident_claude_projects_root() {
-  if [ -n "${VELLUM_TRANSCRIPT_ROOT:-}" ]; then
+  if [ -n "${FM_WATCHDOG_CLAUDE_SESSION_DIR:-}" ]; then
+    printf '%s\n' "$FM_WATCHDOG_CLAUDE_SESSION_DIR"
+  elif [ -n "${VELLUM_TRANSCRIPT_ROOT:-}" ]; then
     printf '%s\n' "$VELLUM_TRANSCRIPT_ROOT"
   elif [ -n "${CLAUDE_HOME:-}" ]; then
     printf '%s\n' "$CLAUDE_HOME/.claude/projects"
@@ -165,7 +168,9 @@ fm_resident_claude_project_key() {  # <worktree>
 }
 
 fm_resident_codex_sessions_root() {
-  if [ -n "${CODEX_HOME:-}" ]; then
+  if [ -n "${FM_WATCHDOG_CODEX_SESSION_DIR:-}" ]; then
+    printf '%s\n' "$FM_WATCHDOG_CODEX_SESSION_DIR"
+  elif [ -n "${CODEX_HOME:-}" ]; then
     printf '%s\n' "$CODEX_HOME/sessions"
   else
     printf '%s\n' "$HOME/.codex/sessions"
@@ -216,7 +221,7 @@ fm_resident_opencode_db() {
 
 # Grok percent-encodes cwd: unreserved [A-Za-z0-9-._~], else %XX uppercase.
 fm_resident_grok_encode_cwd() {  # <cwd>
-  local cwd=$1 out='' i c hex
+  local cwd=$1 out='' i c hex LC_ALL=C
   i=0
   while [ "$i" -lt "${#cwd}" ]; do
     c=${cwd:i:1}
@@ -227,6 +232,18 @@ fm_resident_grok_encode_cwd() {  # <cwd>
         out+=$hex
         ;;
     esac
+    i=$((i + 1))
+  done
+  printf '%s\n' "$out"
+}
+
+fm_resident_hex_key() {  # <value>
+  local value=$1 out='' i c hex LC_ALL=C
+  i=0
+  while [ "$i" -lt "${#value}" ]; do
+    c=${value:i:1}
+    printf -v hex '%02X' "'$c"
+    out+=$hex
     i=$((i + 1))
   done
   printf '%s\n' "$out"
@@ -294,21 +311,28 @@ fm_resident_discover_grok() {  # <worktree>
 }
 
 fm_resident_discover_cursor() {  # <worktree>
-  local worktree=$1 home projects chats file meta_cwd mtime best_file='' best_mtime=-1 sid
+  local worktree=$1 home projects chats file meta meta_cwd mtime best_file='' best_mtime=-1 sid key var
   home=$(fm_resident_cursor_home)
   projects="$home/projects"
   chats="$home/chats"
   [ -d "$projects" ] || return 1
+  if [ -d "$chats" ]; then
+    while IFS= read -r -d '' meta; do
+      sid=$(basename "$(dirname "$meta")")
+      [ -n "$sid" ] || continue
+      meta_cwd=$(jq -r '.cwd // empty' "$meta" 2>/dev/null || true)
+      [ -n "$meta_cwd" ] || continue
+      key=$(fm_resident_hex_key "$sid")
+      var="cursor_cwd_$key"
+      local "$var=$meta_cwd"
+    done < <(find "$chats" -type f -name meta.json -print0 2>/dev/null)
+  fi
   while IFS= read -r -d '' file; do
     sid=$(basename "$(dirname "$file")")
-    meta_cwd=''
-    if [ -d "$chats" ]; then
-      while IFS= read -r -d '' meta; do
-        meta_cwd=$(jq -r '.cwd // empty' "$meta" 2>/dev/null || true)
-        [ -n "$meta_cwd" ] && break
-      done < <(find "$chats" -type f -path "*/$sid/meta.json" -print0 2>/dev/null)
-    fi
-    # Project slug encoding is lossy; only meta-attested cwd may bind a worktree.
+    [ -n "$sid" ] || continue
+    key=$(fm_resident_hex_key "$sid")
+    var="cursor_cwd_$key"
+    eval "meta_cwd=\${$var-}"
     [ -n "$meta_cwd" ] || continue
     fm_resident_paths_match "$meta_cwd" "$worktree" || continue
     mtime=$(fm_resident_path_mtime "$file") || continue

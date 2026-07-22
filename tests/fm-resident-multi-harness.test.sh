@@ -50,6 +50,14 @@ assert_adapter hermes hermes-state-db-v1
 ! fm_resident_transcript_adapter unknown >/dev/null 2>&1 || fail "unknown harness must fail adapter lookup"
 pass "ADR 0056 adapter id map covers all seven harnesses"
 
+[ "$(FM_WATCHDOG_CLAUDE_SESSION_DIR="$TEST_ROOT/watchdog-claude" fm_resident_claude_projects_root)" = "$TEST_ROOT/watchdog-claude" ] \
+  || fail "Claude watchdog transcript root did not take precedence"
+[ "$(FM_WATCHDOG_CODEX_SESSION_DIR="$TEST_ROOT/watchdog-codex" fm_resident_codex_sessions_root)" = "$TEST_ROOT/watchdog-codex" ] \
+  || fail "Codex watchdog transcript root did not take precedence"
+[ "$(fm_resident_grok_encode_cwd '/tmp/café')" = '%2Ftmp%2Fcaf%C3%A9' ] \
+  || fail "Grok cwd encoding was not UTF-8 byte-safe"
+pass "legacy roots and UTF-8 Grok cwd encoding remain compatible"
+
 # --- fixture journals -------------------------------------------------------
 CLAUDE_KEY=$(fm_resident_claude_project_key "$WORKTREE")
 mkdir -p "$CLAUDE_HOME/.claude/projects/$CLAUDE_KEY"
@@ -142,6 +150,27 @@ check_discover opencode "$OPENCODE_TRANSCRIPT_ROOT" "$OPENCODE_SID"
 check_discover hermes "$HERMES_HOME/state.db" "$HERMES_SID"
 pass "discovery matrix resolves path+session_id for all seven harnesses"
 
+CURSOR_OTHER_SID=cccccccc-dddd-eeee-ffff-000000000000
+mkdir -p "$CURSOR_HOME/projects/proj-slug/agent-transcripts/$CURSOR_OTHER_SID"
+printf '%s\n' '{}' > "$CURSOR_HOME/projects/proj-slug/agent-transcripts/$CURSOR_OTHER_SID/$CURSOR_OTHER_SID.jsonl"
+CURSOR_FIND_BIN=$(fm_fakebin "$TEST_ROOT/cursor-find-bin")
+CURSOR_REAL_FIND=$(command -v find)
+CURSOR_FIND_LOG="$TEST_ROOT/cursor-find.log"
+cat > "$CURSOR_FIND_BIN/find" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >> "$CURSOR_FIND_LOG"
+exec "$CURSOR_REAL_FIND" "$@"
+SH
+chmod +x "$CURSOR_FIND_BIN/find"
+CURSOR_FOUND=$(PATH="$CURSOR_FIND_BIN:$PATH" CURSOR_FIND_LOG="$CURSOR_FIND_LOG" \
+  CURSOR_REAL_FIND="$CURSOR_REAL_FIND" fm_resident_discover_cursor "$WORKTREE")
+[ "$CURSOR_FOUND" = "$CURSOR_JSONL" ] || fail "indexed Cursor discovery selected the wrong transcript"
+[ "$(grep -Fxc "$CURSOR_HOME/chats" "$CURSOR_FIND_LOG")" -eq 1 ] \
+  || fail "Cursor discovery rescanned chat metadata"
+[ "$(grep -Fxc "$CURSOR_HOME/projects" "$CURSOR_FIND_LOG")" -eq 1 ] \
+  || fail "Cursor discovery rescanned agent transcripts"
+pass "cursor discovery scans metadata and transcripts once each"
+
 # Cursor without meta must not bind (lossy project slug).
 rm -f "$CURSOR_HOME/chats/bucket/$CURSOR_SID/meta.json"
 if fm_resident_discover_transcript cursor "$WORKTREE" >/dev/null 2>&1; then
@@ -222,6 +251,23 @@ expect_publish pi pi-session-jsonl-v1 "$P_PI_SID" "$P_PI"
 expect_publish opencode opencode-db-v1 ses_publishhome01 "$OPENCODE_TRANSCRIPT_ROOT"
 expect_publish hermes hermes-state-db-v1 20260722_120000_pub1 "$HERMES_HOME/state.db"
 pass "publish + doctor matrix emits ADR 0056 conversation for all seven harnesses"
+
+VALID_POINTER="$TEST_ROOT/resident-current.valid.json"
+cp "$HOME_DIR/state/resident-current.json" "$VALID_POINTER"
+expect_doctor_failure() {
+  local filter=$1 message=$2
+  jq "$filter" "$VALID_POINTER" > "$HOME_DIR/state/resident-current.json.tmp"
+  mv "$HOME_DIR/state/resident-current.json.tmp" "$HOME_DIR/state/resident-current.json"
+  if FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-resident-doctor.sh" >/dev/null 2>&1; then
+    fail "$message"
+  fi
+}
+expect_doctor_failure 'del(.conversation.session_id)' "doctor accepted a missing conversation.session_id"
+expect_doctor_failure 'del(.conversation.transcript.id)' "doctor accepted a missing conversation.transcript.id"
+expect_doctor_failure '.conversation.transcript.id = "different"' "doctor accepted mismatched conversation ids"
+expect_doctor_failure '.conversation.harness = "unknown"' "doctor accepted an unknown conversation harness"
+cp "$VALID_POINTER" "$HOME_DIR/state/resident-current.json"
+pass "doctor rejects incomplete, mismatched, and unknown conversation identities"
 
 # FM_RESIDENT_HARNESS override wins over detected harness; no hardcode to claude.
 FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
