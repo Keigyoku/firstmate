@@ -373,10 +373,9 @@ fm_resident_discover_pi() {  # <worktree>
 }
 
 fm_resident_discover_opencode() {  # <worktree> -> prints db path when a matching session exists
-  local worktree=$1 db sid spelling
+  local worktree=$1 db sid
   db=$(fm_resident_opencode_db)
   [ -f "$db" ] || return 1
-  command -v sqlite3 >/dev/null 2>&1 || return 1
   sid=$(fm_resident_opencode_session_id_for_worktree "$db" "$worktree") || return 1
   [ -n "$sid" ] || return 1
   printf '%s\n' "$db"
@@ -386,15 +385,35 @@ fm_resident_discover_hermes() {  # <worktree> -> prints state.db when a matching
   local worktree=$1 db sid
   db=$(fm_resident_hermes_state_db)
   [ -f "$db" ] || return 1
-  command -v sqlite3 >/dev/null 2>&1 || return 1
   sid=$(fm_resident_hermes_session_id_for_worktree "$db" "$worktree") || return 1
   [ -n "$sid" ] || return 1
   printf '%s\n' "$db"
 }
 
+fm_resident_sqlite_rows() {  # <db> <query>
+  local db=$1 query=$2
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 - "$db" "$query" <<'PY'
+import os
+import sqlite3
+import sys
+import urllib.parse
+
+database, query = sys.argv[1:]
+uri = "file:" + urllib.parse.quote(os.path.abspath(database), safe="/") + "?mode=ro"
+with sqlite3.connect(uri, uri=True) as connection:
+    for row in connection.execute(query):
+        for value in row:
+            sys.stdout.buffer.write(("" if value is None else str(value)).encode())
+            sys.stdout.buffer.write(b"\0")
+PY
+}
+
 fm_resident_opencode_session_id_for_worktree() {  # <db> <worktree>
   local db=$1 worktree=$2 directory sid best_sid='' best_ts=-1
-  while IFS='|' read -r sid directory ts; do
+  while IFS= read -r -d '' sid \
+    && IFS= read -r -d '' directory \
+    && IFS= read -r -d '' ts; do
     [ -n "$sid" ] || continue
     [ -n "$directory" ] || continue
     fm_resident_paths_match "$directory" "$worktree" || continue
@@ -403,7 +422,7 @@ fm_resident_opencode_session_id_for_worktree() {  # <db> <worktree>
       best_ts=$ts
       best_sid=$sid
     fi
-  done < <(sqlite3 -separator '|' "$db" \
+  done < <(fm_resident_sqlite_rows "$db" \
     "SELECT id, directory, COALESCE(time_updated, 0) FROM session WHERE time_archived IS NULL;" 2>/dev/null)
   [ -n "$best_sid" ] || return 1
   printf '%s\n' "$best_sid"
@@ -411,7 +430,9 @@ fm_resident_opencode_session_id_for_worktree() {  # <db> <worktree>
 
 fm_resident_hermes_session_id_for_worktree() {  # <db> <worktree>
   local db=$1 worktree=$2 sid cwd ts best_sid='' best_ts=-1
-  while IFS='|' read -r sid cwd ts; do
+  while IFS= read -r -d '' sid \
+    && IFS= read -r -d '' cwd \
+    && IFS= read -r -d '' ts; do
     [ -n "$sid" ] || continue
     [ -n "$cwd" ] || continue
     fm_resident_paths_match "$cwd" "$worktree" || continue
@@ -422,7 +443,7 @@ fm_resident_hermes_session_id_for_worktree() {  # <db> <worktree>
       best_ts=$ts
       best_sid=$sid
     fi
-  done < <(sqlite3 -separator '|' "$db" \
+  done < <(fm_resident_sqlite_rows "$db" \
     "SELECT id, cwd, COALESCE(started_at, 0) FROM sessions WHERE archived = 0;" 2>/dev/null)
   [ -n "$best_sid" ] || return 1
   printf '%s\n' "$best_sid"

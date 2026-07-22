@@ -90,45 +90,42 @@ PI_JSONL="$PI_HOME/agent/sessions/$PI_ENC/2026-07-22T00-00-00-000Z_${PI_SID}.jso
 printf '%s\n' "{\"type\":\"session\",\"id\":\"$PI_SID\",\"cwd\":\"$WORKTREE\",\"version\":1}" > "$PI_JSONL"
 printf '%s\n' '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"x"}]}}' >> "$PI_JSONL"
 
-sqlite3 "$OPENCODE_TRANSCRIPT_ROOT" <<'SQL'
-CREATE TABLE session (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL DEFAULT 'p',
-  slug TEXT NOT NULL DEFAULT 's',
-  directory TEXT NOT NULL,
-  title TEXT NOT NULL DEFAULT 't',
-  version TEXT NOT NULL DEFAULT '1',
-  cost REAL DEFAULT 0 NOT NULL,
-  tokens_input INTEGER DEFAULT 0 NOT NULL,
-  tokens_output INTEGER DEFAULT 0 NOT NULL,
-  tokens_reasoning INTEGER DEFAULT 0 NOT NULL,
-  tokens_cache_read INTEGER DEFAULT 0 NOT NULL,
-  tokens_cache_write INTEGER DEFAULT 0 NOT NULL,
-  time_created INTEGER NOT NULL DEFAULT 0,
-  time_updated INTEGER NOT NULL DEFAULT 0,
-  time_archived INTEGER
-);
-SQL
 OPENCODE_SID=ses_testopencode001
-sqlite3 "$OPENCODE_TRANSCRIPT_ROOT" \
-  "INSERT INTO session (id, directory, time_updated) VALUES ('$OPENCODE_SID', '$WORKTREE', 100);"
-sqlite3 "$OPENCODE_TRANSCRIPT_ROOT" \
-  "INSERT INTO session (id, directory, time_updated) VALUES ('ses_othercwd0001', '/tmp/other', 200);"
-
-sqlite3 "$HERMES_HOME/state.db" <<'SQL'
-CREATE TABLE sessions (
-  id TEXT PRIMARY KEY,
-  source TEXT NOT NULL DEFAULT 'cli',
-  started_at REAL NOT NULL DEFAULT 0,
-  cwd TEXT,
-  archived INTEGER NOT NULL DEFAULT 0
-);
-SQL
 HERMES_SID=20260722_000000_abc123
-sqlite3 "$HERMES_HOME/state.db" \
-  "INSERT INTO sessions (id, started_at, cwd, archived) VALUES ('$HERMES_SID', 1000.5, '$WORKTREE', 0);"
-sqlite3 "$HERMES_HOME/state.db" \
-  "INSERT INTO sessions (id, started_at, cwd, archived) VALUES ('20260722_000001_other', 2000.0, '/tmp/other', 0);"
+DELIMITER_WORKTREE="$TEST_ROOT/work|tree"
+mkdir -p "$DELIMITER_WORKTREE"
+python3 - "$OPENCODE_TRANSCRIPT_ROOT" "$HERMES_HOME/state.db" "$WORKTREE" "$OPENCODE_SID" "$HERMES_SID" "$DELIMITER_WORKTREE" <<'PY'
+import sqlite3
+import sys
+
+opencode_db, hermes_db, worktree, opencode_sid, hermes_sid, delimiter_worktree = sys.argv[1:]
+with sqlite3.connect(opencode_db) as connection:
+    connection.execute(
+        "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT NOT NULL, "
+        "time_updated INTEGER NOT NULL DEFAULT 0, time_archived INTEGER)"
+    )
+    connection.executemany(
+        "INSERT INTO session (id, directory, time_updated) VALUES (?, ?, ?)",
+        [
+            (opencode_sid, worktree, 100),
+            ("ses_othercwd0001", "/tmp/other", 200),
+            ("ses|delimiter", delimiter_worktree, 300),
+        ],
+    )
+with sqlite3.connect(hermes_db) as connection:
+    connection.execute(
+        "CREATE TABLE sessions (id TEXT PRIMARY KEY, started_at REAL NOT NULL DEFAULT 0, "
+        "cwd TEXT, archived INTEGER NOT NULL DEFAULT 0)"
+    )
+    connection.executemany(
+        "INSERT INTO sessions (id, started_at, cwd, archived) VALUES (?, ?, ?, 0)",
+        [
+            (hermes_sid, 1000.5, worktree),
+            ("20260722_000001_other", 2000.0, "/tmp/other"),
+            ("hermes|delimiter", 3000.0, delimiter_worktree),
+        ],
+    )
+PY
 
 # --- discovery matrix -------------------------------------------------------
 check_discover() {
@@ -149,6 +146,24 @@ check_discover pi "$PI_JSONL" "$PI_SID"
 check_discover opencode "$OPENCODE_TRANSCRIPT_ROOT" "$OPENCODE_SID"
 check_discover hermes "$HERMES_HOME/state.db" "$HERMES_SID"
 pass "discovery matrix resolves path+session_id for all seven harnesses"
+
+[ "$(fm_resident_opencode_session_id_for_worktree "$OPENCODE_TRANSCRIPT_ROOT" "$DELIMITER_WORKTREE")" = 'ses|delimiter' ] \
+  || fail "OpenCode SQLite row framing split a delimiter-bearing value"
+[ "$(fm_resident_hermes_session_id_for_worktree "$HERMES_HOME/state.db" "$DELIMITER_WORKTREE")" = 'hermes|delimiter' ] \
+  || fail "Hermes SQLite row framing split a delimiter-bearing value"
+pass "database row framing preserves delimiter-bearing values"
+
+PYTHON_ONLY_BIN="$TEST_ROOT/python-only-bin"
+mkdir -p "$PYTHON_ONLY_BIN"
+ln -s "$(command -v python3)" "$PYTHON_ONLY_BIN/python3"
+ln -s "$(command -v dirname)" "$PYTHON_ONLY_BIN/dirname"
+ln -s "$(command -v basename)" "$PYTHON_ONLY_BIN/basename"
+[ ! -e "$PYTHON_ONLY_BIN/sqlite3" ] || fail "python-only fixture unexpectedly contains sqlite3"
+[ "$(PATH="$PYTHON_ONLY_BIN" fm_resident_discover_opencode "$WORKTREE")" = "$OPENCODE_TRANSCRIPT_ROOT" ] \
+  || fail "OpenCode discovery required the sqlite3 executable"
+[ "$(PATH="$PYTHON_ONLY_BIN" fm_resident_discover_hermes "$WORKTREE")" = "$HERMES_HOME/state.db" ] \
+  || fail "Hermes discovery required the sqlite3 executable"
+pass "database discovery uses Python stdlib without sqlite3 executable"
 
 CURSOR_OTHER_SID=cccccccc-dddd-eeee-ffff-000000000000
 mkdir -p "$CURSOR_HOME/projects/proj-slug/agent-transcripts/$CURSOR_OTHER_SID"
@@ -219,10 +234,22 @@ P_PI="$PI_HOME/agent/sessions/$P_PI_ENC/2026-07-22T12-00-00-000Z_${P_PI_SID}.jso
 printf '%s\n' "{\"type\":\"session\",\"id\":\"$P_PI_SID\",\"cwd\":\"$PUBLISH_HOME\"}" > "$P_PI"
 
 # OpenCode + Hermes already have tables; insert rows for publish home
-sqlite3 "$OPENCODE_TRANSCRIPT_ROOT" \
-  "INSERT INTO session (id, directory, time_updated) VALUES ('ses_publishhome01', '$PUBLISH_HOME', 300);"
-sqlite3 "$HERMES_HOME/state.db" \
-  "INSERT INTO sessions (id, started_at, cwd, archived) VALUES ('20260722_120000_pub1', 3000.0, '$PUBLISH_HOME', 0);"
+python3 - "$OPENCODE_TRANSCRIPT_ROOT" "$HERMES_HOME/state.db" "$PUBLISH_HOME" <<'PY'
+import sqlite3
+import sys
+
+opencode_db, hermes_db, publish_home = sys.argv[1:]
+with sqlite3.connect(opencode_db) as connection:
+    connection.execute(
+        "INSERT INTO session (id, directory, time_updated) VALUES (?, ?, ?)",
+        ("ses_publishhome01", publish_home, 300),
+    )
+with sqlite3.connect(hermes_db) as connection:
+    connection.execute(
+        "INSERT INTO sessions (id, started_at, cwd, archived) VALUES (?, ?, ?, 0)",
+        ("20260722_120000_pub1", 3000.0, publish_home),
+    )
+PY
 
 expect_publish() {
   local harness=$1 expect_adapter=$2 expect_sid=$3 expect_path=$4
@@ -251,6 +278,17 @@ expect_publish pi pi-session-jsonl-v1 "$P_PI_SID" "$P_PI"
 expect_publish opencode opencode-db-v1 ses_publishhome01 "$OPENCODE_TRANSCRIPT_ROOT"
 expect_publish hermes hermes-state-db-v1 20260722_120000_pub1 "$HERMES_HOME/state.db"
 pass "publish + doctor matrix emits ADR 0056 conversation for all seven harnesses"
+
+FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
+  FM_RESIDENT_PID="$$" FM_RESIDENT_HARNESS=codex \
+  FM_RESIDENT_TRANSCRIPT="$P_CODEX" FM_RESIDENT_SESSION_ID=pub-codex-id \
+  FM_RESIDENT_TRANSCRIPT_ADAPTER=codex-jsonl-v1 \
+  FM_RESIDENT_BACKEND_KIND=herdr FM_RESIDENT_WORKSPACE_ID=ws FM_RESIDENT_PANE_ID=pane \
+  "$ROOT/bin/fm-resident-publish.sh" ready
+jq -e '.conversation.transcript.adapter == "codex-rollout-v1"' \
+  "$HOME_DIR/state/resident-current.json" >/dev/null \
+  || fail "Codex publication accepted a noncanonical adapter override"
+pass "known harness publication forces the canonical adapter map"
 
 VALID_POINTER="$TEST_ROOT/resident-current.valid.json"
 cp "$HOME_DIR/state/resident-current.json" "$VALID_POINTER"
