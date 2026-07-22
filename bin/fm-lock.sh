@@ -5,6 +5,11 @@
 # PID of any one tool call, which is dead moments after it is written.
 # Usage: fm-lock.sh           acquire; exit 1 if another live session holds it
 #        fm-lock.sh status    print holder and liveness; always exits 0
+#
+# FM_LOCK_PID=<pid>  (optional) skip ancestry walk and use this PID as the lock
+# holder. Used by fm-resident-start.sh --launch: setup+publish runs under the
+# start process, then exec replaces that image with the harness under the same
+# PID so state/.lock and resident-current stay honest without a leftover shell.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,33 +19,54 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 LOCK="$STATE/.lock"
 mkdir -p "$STATE"
 
+# shellcheck source=bin/fm-resident-lib.sh
+. "$SCRIPT_DIR/fm-resident-lib.sh"
+
 # Known harness command names; extend when a new adapter is verified.
 # cursor matches cursor-agent's basename; hermes matches its own.
 HARNESS_RE='claude|codex|opencode|grok|cursor|hermes|^pi$'
 
+process_looks_like_harness() {
+  local pid=$1 comm args
+  comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
+  if printf '%s' "$(basename "$comm")" | grep -qE "$HARNESS_RE"; then
+    return 0
+  fi
+  case "$comm" in
+    *node*|*python*)
+      args=$(ps -o args= -p "$pid" 2>/dev/null) || return 1
+      printf '%s' "$args" | grep -qE "$HARNESS_RE"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 harness_pid() {
-  local pid=$$ comm args
+  local pid=$$
   for _ in 1 2 3 4 5 6 7 8; do
-    comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
-    args=$(ps -o args= -p "$pid" 2>/dev/null)
-    if printf '%s' "$(basename "$comm")" | grep -qE "$HARNESS_RE"; then
+    if process_looks_like_harness "$pid"; then
       echo "$pid"; return 0
     fi
-    # Bare interpreter (e.g. node): match the harness name in its script path.
-    case "$comm" in
-      *node*|*python*) printf '%s' "$args" | grep -qE "$HARNESS_RE" && { echo "$pid"; return 0; } ;;
-    esac
     pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
     [ -n "$pid" ] && [ "$pid" -gt 1 ] || return 1
   done
   return 1
 }
 
+holder_matches_resident() {
+  local pid=$1 pointer="$STATE/resident-current.json" published_pid published_identity current_identity
+  [ -s "$pointer" ] || return 1
+  published_pid=$(jq -er '.process.pid | select(type == "number" and . > 0)' "$pointer" 2>/dev/null) || return 1
+  [ "$published_pid" = "$pid" ] || return 1
+  published_identity=$(jq -er '.process.creation_identity | select(type == "string" and length > 0)' "$pointer" 2>/dev/null) || return 1
+  current_identity=$(fm_resident_process_identity "$pid" 2>/dev/null) || return 1
+  [ "$published_identity" = "$current_identity" ]
+}
+
 holder_alive() {  # true if $1 is a live process that looks like a harness
-  local pid=$1 comm
+  local pid=$1
   kill -0 "$pid" 2>/dev/null || return 1
-  comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
-  printf '%s' "$(basename "$comm") $(ps -o args= -p "$pid" 2>/dev/null)" | grep -qE "$HARNESS_RE"
+  holder_matches_resident "$pid" || process_looks_like_harness "$pid"
 }
 
 if [ "${1:-}" = "status" ]; then
@@ -50,7 +76,25 @@ if [ "${1:-}" = "status" ]; then
   exit 0
 fi
 
-me=$(harness_pid) || { echo "error: cannot locate harness process in ancestry" >&2; exit 1; }
+if [ -n "${FM_LOCK_PID:-}" ]; then
+  case "$FM_LOCK_PID" in
+    ''|*[!0-9]*)
+      echo "error: FM_LOCK_PID must be a positive integer process id" >&2
+      exit 1
+      ;;
+  esac
+  if ! [ "$FM_LOCK_PID" -gt 0 ] 2>/dev/null; then
+    echo "error: FM_LOCK_PID must be a positive integer process id" >&2
+    exit 1
+  fi
+  kill -0 "$FM_LOCK_PID" 2>/dev/null || {
+    echo "error: FM_LOCK_PID $FM_LOCK_PID is not a live process" >&2
+    exit 1
+  }
+  me=$FM_LOCK_PID
+else
+  me=$(harness_pid) || { echo "error: cannot locate harness process in ancestry" >&2; exit 1; }
+fi
 lock_existed=0
 previous_lock=
 if [ -f "$LOCK" ]; then
