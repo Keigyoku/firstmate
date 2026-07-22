@@ -508,6 +508,9 @@ try:
                 except (TypeError, ValueError):
                     ts = 0.0
                 matches.append((str(sid), ts))
+        if env_sid and any(sid == env_sid for sid, _ts in matches):
+            print(env_sid)
+            sys.exit(0)
         if len(matches) == 1:
             print(matches[0][0])
             sys.exit(0)
@@ -516,9 +519,6 @@ try:
             latest = [sid for sid, ts in matches if best_ts > 0 and ts == best_ts]
             if len(latest) == 1:
                 print(latest[0])
-                sys.exit(0)
-            if env_sid and any(sid == env_sid for sid, _ts in matches):
-                print(env_sid)
                 sys.exit(0)
             sys.exit(1)
 

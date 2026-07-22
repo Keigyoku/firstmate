@@ -217,6 +217,26 @@ fi
   || fail "Hermes cwd-only discovery did not preserve single-match success"
 pass "Hermes cwd-only discovery resolves ambiguity safely"
 
+HERMES_RANKED_DB="$TEST_ROOT/hermes-ranked/state.db"
+mkdir -p "$(dirname "$HERMES_RANKED_DB")"
+python3 - "$HERMES_RANKED_DB" "$WORKTREE" <<'PY'
+import sqlite3, sys
+db, worktree = sys.argv[1:]
+with sqlite3.connect(db) as c:
+    c.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT, started_at REAL)")
+    c.executemany(
+        "INSERT INTO sessions (id, cwd, started_at) VALUES (?, ?, ?)",
+        [
+            ("20260722_ranked_older", worktree, 100),
+            ("20260722_ranked_newer", worktree, 200),
+        ],
+    )
+PY
+[ "$(HERMES_SESSION_ID=20260722_ranked_older \
+  fm_resident_hermes_session_id_for_worktree "$HERMES_RANKED_DB" "$WORKTREE")" = 20260722_ranked_older ] \
+  || fail "Hermes HERMES_SESSION_ID did not override newer same-cwd session"
+pass "Hermes live session id takes precedence over timestamp ranking"
+
 CURSOR_OTHER_SID=cccccccc-dddd-eeee-ffff-000000000000
 mkdir -p "$CURSOR_HOME/projects/proj-slug/agent-transcripts/$CURSOR_OTHER_SID"
 printf '%s\n' '{}' > "$CURSOR_HOME/projects/proj-slug/agent-transcripts/$CURSOR_OTHER_SID/$CURSOR_OTHER_SID.jsonl"
