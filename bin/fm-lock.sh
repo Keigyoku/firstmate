@@ -19,33 +19,54 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 LOCK="$STATE/.lock"
 mkdir -p "$STATE"
 
+# shellcheck source=bin/fm-resident-lib.sh
+. "$SCRIPT_DIR/fm-resident-lib.sh"
+
 # Known harness command names; extend when a new adapter is verified.
 # cursor matches cursor-agent's basename; hermes matches its own.
 HARNESS_RE='claude|codex|opencode|grok|cursor|hermes|^pi$'
 
+process_looks_like_harness() {
+  local pid=$1 comm args
+  comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
+  if printf '%s' "$(basename "$comm")" | grep -qE "$HARNESS_RE"; then
+    return 0
+  fi
+  case "$comm" in
+    *node*|*python*)
+      args=$(ps -o args= -p "$pid" 2>/dev/null) || return 1
+      printf '%s' "$args" | grep -qE "$HARNESS_RE"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 harness_pid() {
-  local pid=$$ comm args
+  local pid=$$
   for _ in 1 2 3 4 5 6 7 8; do
-    comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
-    args=$(ps -o args= -p "$pid" 2>/dev/null)
-    if printf '%s' "$(basename "$comm")" | grep -qE "$HARNESS_RE"; then
+    if process_looks_like_harness "$pid"; then
       echo "$pid"; return 0
     fi
-    # Bare interpreter (e.g. node): match the harness name in its script path.
-    case "$comm" in
-      *node*|*python*) printf '%s' "$args" | grep -qE "$HARNESS_RE" && { echo "$pid"; return 0; } ;;
-    esac
     pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
     [ -n "$pid" ] && [ "$pid" -gt 1 ] || return 1
   done
   return 1
 }
 
+holder_matches_resident() {
+  local pid=$1 pointer="$STATE/resident-current.json" published_pid published_identity current_identity
+  [ -s "$pointer" ] || return 1
+  published_pid=$(jq -er '.process.pid | select(type == "number" and . > 0)' "$pointer" 2>/dev/null) || return 1
+  [ "$published_pid" = "$pid" ] || return 1
+  published_identity=$(jq -er '.process.creation_identity | select(type == "string" and length > 0)' "$pointer" 2>/dev/null) || return 1
+  current_identity=$(fm_resident_process_identity "$pid" 2>/dev/null) || return 1
+  [ "$published_identity" = "$current_identity" ]
+}
+
 holder_alive() {  # true if $1 is a live process that looks like a harness
-  local pid=$1 comm
+  local pid=$1
   kill -0 "$pid" 2>/dev/null || return 1
-  comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
-  printf '%s' "$(basename "$comm") $(ps -o args= -p "$pid" 2>/dev/null)" | grep -qE "$HARNESS_RE"
+  holder_matches_resident "$pid" || process_looks_like_harness "$pid"
 }
 
 if [ "${1:-}" = "status" ]; then

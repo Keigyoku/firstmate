@@ -7,6 +7,15 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 TEST_ROOT=$(fm_test_tmproot fm-resident-start-launch)
+CUSTOM_HOLDER_PID=
+cleanup_launch_test() {
+  if [ -n "$CUSTOM_HOLDER_PID" ]; then
+    kill "$CUSTOM_HOLDER_PID" 2>/dev/null || true
+    wait "$CUSTOM_HOLDER_PID" 2>/dev/null || true
+  fi
+  fm_test_cleanup || true
+}
+trap cleanup_launch_test EXIT
 HOME_DIR="$TEST_ROOT/home"
 mkdir -p "$HOME_DIR/state" "$HOME_DIR/data" "$HOME_DIR/config" "$HOME_DIR/projects"
 FAKEBIN=$(fm_fakebin "$TEST_ROOT")
@@ -194,6 +203,59 @@ set -e
 jq -e '.process.pid' "$BASENAME_HOME/state/resident-current.json" >/dev/null \
   || fail "basename launch did not publish process"
 pass "start --launch without FM_RESIDENT_HARNESS still setup+publish+exec"
+
+CUSTOM_HOME="$TEST_ROOT/custom-home"
+mkdir -p "$CUSTOM_HOME/state" "$CUSTOM_HOME/data" "$CUSTOM_HOME/config" "$CUSTOM_HOME/projects"
+CUSTOM_MARKER="$TEST_ROOT/custom-marker"
+cat > "$FAKEBIN/custom-agent" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$\$" > '$CUSTOM_MARKER'
+trap 'exit 0' TERM INT
+while :; do sleep 1; done
+SH
+chmod +x "$FAKEBIN/custom-agent"
+FM_HOME="$CUSTOM_HOME" FM_ROOT_OVERRIDE="$ROOT" FM_RESIDENT_HARNESS=codex \
+  "$ROOT/bin/fm-resident-start.sh" --launch "$FAKEBIN/custom-agent" \
+  >"$TEST_ROOT/custom.out" 2>"$TEST_ROOT/custom.err" &
+CUSTOM_HOLDER_PID=$!
+for _ in $(seq 1 50); do
+  [ -s "$CUSTOM_MARKER" ] && break
+  sleep 0.05
+done
+[ -s "$CUSTOM_MARKER" ] || fail "custom-named harness did not launch: $(cat "$TEST_ROOT/custom.err" 2>/dev/null || true)"
+set +e
+OUT=$(FM_HOME="$CUSTOM_HOME" FM_ROOT_OVERRIDE="$ROOT" \
+  "$ROOT/bin/fm-resident-start.sh" --launch "$FAKEBIN/fake-harness" 2>&1)
+STATUS=$?
+set -e
+[ "$STATUS" -ne 0 ] || fail "second launch replaced a live custom-named holder"
+case "$OUT" in
+  *"another live"*) ;;
+  *) fail "custom-named holder was not reported live; got: $OUT" ;;
+esac
+kill "$CUSTOM_HOLDER_PID"
+wait "$CUSTOM_HOLDER_PID" 2>/dev/null || true
+CUSTOM_HOLDER_PID=
+pass "start --launch preserves a live custom-named holder lock"
+
+PI_HOME_CASE="$TEST_ROOT/pi-holder-home"
+mkdir -p "$PI_HOME_CASE/state"
+printf '%s\n' "$$" > "$PI_HOME_CASE/state/.lock"
+cat > "$FAKEBIN/ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"comm="*) printf 'pi\n' ;;
+  *"args="*) printf 'pi --model test\n' ;;
+esac
+SH
+chmod +x "$FAKEBIN/ps"
+OUT=$(PATH="$FAKEBIN:$PATH" FM_HOME="$PI_HOME_CASE" FM_ROOT_OVERRIDE="$ROOT" \
+  "$ROOT/bin/fm-lock.sh" status 2>&1) || fail "pi holder status failed: $OUT"
+case "$OUT" in
+  *"held by live harness"*) ;;
+  *) fail "native pi holder was not recognized; got: $OUT" ;;
+esac
+pass "fm-lock recognizes a native pi holder"
 
 # --- refuses when another live harness holds the lock ----------------------
 BUSY_HOME="$TEST_ROOT/busy-home"
