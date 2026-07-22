@@ -191,6 +191,32 @@ fi
   || fail "Hermes discover path did not use HERMES_SESSION_ID fallback"
 pass "Hermes degrades cleanly without cwd/archived and binds via HERMES_SESSION_ID"
 
+HERMES_CWD_ONLY_DB="$TEST_ROOT/hermes-cwd-only/state.db"
+mkdir -p "$(dirname "$HERMES_CWD_ONLY_DB")"
+python3 - "$HERMES_CWD_ONLY_DB" "$WORKTREE" <<'PY'
+import sqlite3, sys
+db, worktree = sys.argv[1:]
+with sqlite3.connect(db) as c:
+    c.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT)")
+    c.executemany(
+        "INSERT INTO sessions (id, cwd) VALUES (?, ?)",
+        [
+            ("20260722_cwd_sid1", worktree),
+            ("20260722_cwd_sid2", worktree),
+            ("20260722_cwd_single", "/tmp/hermes-single"),
+        ],
+    )
+PY
+if fm_resident_hermes_session_id_for_worktree "$HERMES_CWD_ONLY_DB" "$WORKTREE" >/dev/null 2>&1; then
+  fail "Hermes cwd-only discovery without HERMES_SESSION_ID should fail on ambiguous matches"
+fi
+[ "$(HERMES_SESSION_ID=20260722_cwd_sid2 \
+  fm_resident_hermes_session_id_for_worktree "$HERMES_CWD_ONLY_DB" "$WORKTREE")" = 20260722_cwd_sid2 ] \
+  || fail "Hermes HERMES_SESSION_ID did not resolve ambiguous cwd-only matches"
+[ "$(fm_resident_hermes_session_id_for_worktree "$HERMES_CWD_ONLY_DB" /tmp/hermes-single)" = 20260722_cwd_single ] \
+  || fail "Hermes cwd-only discovery did not preserve single-match success"
+pass "Hermes cwd-only discovery resolves ambiguity safely"
+
 CURSOR_OTHER_SID=cccccccc-dddd-eeee-ffff-000000000000
 mkdir -p "$CURSOR_HOME/projects/proj-slug/agent-transcripts/$CURSOR_OTHER_SID"
 printf '%s\n' '{}' > "$CURSOR_HOME/projects/proj-slug/agent-transcripts/$CURSOR_OTHER_SID/$CURSOR_OTHER_SID.jsonl"

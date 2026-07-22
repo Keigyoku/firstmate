@@ -496,8 +496,7 @@ try:
 
         rows = list(connection.execute(sql))
         targets = spellings(worktree)
-        best_sid = None
-        best_ts = -1.0
+        matches = []
         if "cwd" in cols:
             for sid, cwd, started in rows:
                 if not sid or not cwd:
@@ -508,12 +507,20 @@ try:
                     ts = float(started or 0)
                 except (TypeError, ValueError):
                     ts = 0.0
-                if ts >= best_ts:
-                    best_ts = ts
-                    best_sid = str(sid)
-        if best_sid:
-            print(best_sid)
+                matches.append((str(sid), ts))
+        if len(matches) == 1:
+            print(matches[0][0])
             sys.exit(0)
+        if len(matches) > 1:
+            best_ts = max(ts for _sid, ts in matches)
+            latest = [sid for sid, ts in matches if best_ts > 0 and ts == best_ts]
+            if len(latest) == 1:
+                print(latest[0])
+                sys.exit(0)
+            if env_sid and any(sid == env_sid for sid, _ts in matches):
+                print(env_sid)
+                sys.exit(0)
+            sys.exit(1)
 
         # Fallback: live Hermes session env (no inventing schema columns).
         if env_sid:
