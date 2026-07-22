@@ -39,6 +39,7 @@ Explicit `FM_RESIDENT_TRANSCRIPT` and `FM_RESIDENT_SESSION_ID` values override j
 `FM_RESIDENT_HARNESS` from Vellum Start is authoritative when set; publish never hardcodes Claude.
 Adapter ids follow Vellum ADR 0056: `claude-jsonl-v1`, `codex-rollout-v1`, `grok-chat-history-v1`, `cursor-agent-transcript-v1`, `opencode-db-v1`, `pi-session-jsonl-v1`, `hermes-state-db-v1`.
 Codex uses the single canonical spelling `codex-rollout-v1` (legacy producer `codex-jsonl-v1` may still be dual-accepted by consumers during migration).
+Hermes discovery uses `PRAGMA table_info(sessions)` so `cwd` / `started_at` / `archived` are used only when present (Vellum-aligned when available); when cwd matching is unavailable or empty, `HERMES_SESSION_ID` is the live-session fallback.
 The harness session identifier and absolute transcript path are mutable attributes and never replace container identity.
 `bin/fm-resident-doctor.sh` asserts conversation harness/adapter/id/path whenever conversation is present, for every verified harness.
 When a complete backend endpoint is available, input uses `backend-v1` with the same workspace and pane identifiers published in `backend`.
