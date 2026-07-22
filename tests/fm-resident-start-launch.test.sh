@@ -35,6 +35,61 @@ case "$OUT" in
 esac
 pass "start --launch without cmd fails with usage"
 
+INVALID_HOME="$TEST_ROOT/invalid-home"
+mkdir -p "$INVALID_HOME/state" "$INVALID_HOME/data" "$INVALID_HOME/config" "$INVALID_HOME/projects"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$TEST_ROOT/not-executable"
+mkdir "$TEST_ROOT/not-a-file"
+for INVALID_CMD in "$TEST_ROOT/not-executable" "$TEST_ROOT/not-a-file"; do
+  set +e
+  OUT=$(FM_HOME="$INVALID_HOME" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-resident-start.sh" --launch "$INVALID_CMD" 2>&1)
+  STATUS=$?
+  set -e
+  [ "$STATUS" -ne 0 ] || fail "--launch accepted invalid executable: $INVALID_CMD"
+  case "$OUT" in
+    *"cannot launch executable file"*) ;;
+    *) fail "invalid executable did not report preflight error; got: $OUT" ;;
+  esac
+  [ ! -e "$INVALID_HOME/state/.lock" ] || fail "invalid executable created a session lock"
+  [ ! -e "$INVALID_HOME/state/resident-current.json" ] || fail "invalid executable published resident state"
+done
+pass "start --launch rejects non-executable files and directories"
+
+ZERO_PID_HOME="$TEST_ROOT/zero-pid-home"
+set +e
+OUT=$(FM_HOME="$ZERO_PID_HOME" FM_ROOT_OVERRIDE="$ROOT" FM_LOCK_PID=0 \
+  "$ROOT/bin/fm-lock.sh" 2>&1)
+STATUS=$?
+set -e
+[ "$STATUS" -ne 0 ] || fail "fm-lock accepted FM_LOCK_PID=0"
+case "$OUT" in
+  *"positive integer process id"*) ;;
+  *) fail "FM_LOCK_PID=0 did not report positive PID requirement; got: $OUT" ;;
+esac
+[ ! -e "$ZERO_PID_HOME/state/.lock" ] || fail "FM_LOCK_PID=0 created a session lock"
+pass "fm-lock rejects FM_LOCK_PID=0"
+
+EXEC_FAIL_HOME="$TEST_ROOT/exec-fail-home"
+mkdir -p "$EXEC_FAIL_HOME/state" "$EXEC_FAIL_HOME/data" "$EXEC_FAIL_HOME/config" "$EXEC_FAIL_HOME/projects"
+EXEC_FAIL_CMD="$TEST_ROOT/exec-fail"
+printf '#!/definitely/missing/interpreter\n' > "$EXEC_FAIL_CMD"
+chmod +x "$EXEC_FAIL_CMD"
+set +e
+OUT=$(FM_HOME="$EXEC_FAIL_HOME" FM_ROOT_OVERRIDE="$ROOT" FM_RESIDENT_HARNESS=codex \
+  "$ROOT/bin/fm-resident-start.sh" --launch "$EXEC_FAIL_CMD" 2>&1)
+STATUS=$?
+set -e
+[ "$STATUS" -ne 0 ] || fail "--launch succeeded when exec failed"
+case "$OUT" in
+  *"failed to launch"*) ;;
+  *) fail "exec failure did not report launch error; got: $OUT" ;;
+esac
+[ ! -e "$EXEC_FAIL_HOME/state/.lock" ] || fail "exec failure left the session lock"
+jq -e '.lifecycle == "stopped" and (.process | not)' \
+  "$EXEC_FAIL_HOME/state/resident-current.json" >/dev/null \
+  || fail "exec failure did not replace ready state with stopped"
+pass "start --launch stops resident state and clears lock after exec failure"
+
 # --- default path still delegates to lock (no exec) ------------------------
 cat > "$FAKEBIN/ps" <<'SH'
 #!/usr/bin/env bash

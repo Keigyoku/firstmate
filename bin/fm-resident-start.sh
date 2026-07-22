@@ -31,14 +31,12 @@ if [ "${1:-}" = "--launch" ]; then
   fi
   launch_cmd=$1
   shift
-  # Resolve PATH for bare names before taking the lock so a missing binary
-  # fails closed without stranding a half-published session.
-  if [ -e "$launch_cmd" ] || [ -x "$launch_cmd" ]; then
-    :
-  elif command -v "$launch_cmd" >/dev/null 2>&1; then
-    :
-  else
-    echo "error: cannot launch: $launch_cmd not found on PATH" >&2
+  case "$launch_cmd" in
+    */*) launch_path=$launch_cmd ;;
+    *) launch_path=$(command -v -- "$launch_cmd" 2>/dev/null || true) ;;
+  esac
+  if [ -z "$launch_path" ] || [ ! -f "$launch_path" ] || [ ! -x "$launch_path" ]; then
+    echo "error: cannot launch executable file: $launch_cmd" >&2
     exit 1
   fi
   if [ -z "${FM_RESIDENT_HARNESS:-}" ]; then
@@ -48,7 +46,17 @@ if [ "${1:-}" = "--launch" ]; then
   # Pre-exec: this PID becomes the harness after exec; ancestry has no harness yet.
   export FM_LOCK_PID=$$
   "$SCRIPT_DIR/fm-lock.sh" || exit $?
-  exec "$launch_cmd" "$@"
+  launch_state=${FM_STATE_OVERRIDE:-${FM_HOME:-${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}}/state}
+  shopt -s execfail
+  exec "$launch_path" "$@" || {
+    launch_status=$?
+    FM_RESIDENT_PID=$$ "$SCRIPT_DIR/fm-resident-publish.sh" stopped >/dev/null 2>&1 || true
+    if [ "$(cat "$launch_state/.lock" 2>/dev/null || true)" = "$$" ]; then
+      rm -f "$launch_state/.lock"
+    fi
+    echo "error: failed to launch: $launch_cmd" >&2
+    exit "$launch_status"
+  }
 fi
 
 "$SCRIPT_DIR/fm-lock.sh"

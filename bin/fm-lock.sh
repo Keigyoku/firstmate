@@ -62,6 +62,10 @@ if [ -n "${FM_LOCK_PID:-}" ]; then
       exit 1
       ;;
   esac
+  if ! [ "$FM_LOCK_PID" -gt 0 ] 2>/dev/null; then
+    echo "error: FM_LOCK_PID must be a positive integer process id" >&2
+    exit 1
+  fi
   kill -0 "$FM_LOCK_PID" 2>/dev/null || {
     echo "error: FM_LOCK_PID $FM_LOCK_PID is not a live process" >&2
     exit 1
