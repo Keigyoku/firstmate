@@ -14,9 +14,9 @@ Copies of a tracked home template receive a new identity because `provision.json
 
 Setup also atomically writes `.god-node/resident.json` with schema `dev.vellum.resident/1`.
 The descriptor is tracked template metadata and declares resident type `firstmate`, the stable producer descriptor version, supported contract major versions, argv-array entrypoints, and the full capability set.
-Advertised capabilities are `input.file-v1`, `input.backend-v1`, the seven ADR 0056 transcript tokens (`transcript.claude-jsonl-v1`, `transcript.codex-rollout-v1`, `transcript.grok-chat-history-v1`, `transcript.cursor-agent-transcript-v1`, `transcript.opencode-db-v1`, `transcript.pi-session-jsonl-v1`, `transcript.hermes-state-db-v1`), and `crew.bridge-v1`.
+Advertised capabilities cover file and backend input, all seven verified ADR 0056 transcript adapters, and adopted-crew reconciliation.
 `crew.bridge-v1` independently gates adopted-crew reconciliation in consumers that treat a readable descriptor as authoritative; setup and every session-lock republication must keep it in the list.
-The full token list is owned by `fm_resident_capability_tokens` in `bin/fm-resident-lib.sh`.
+The exact capability token list is owned by `fm_resident_capability_tokens` in `bin/fm-resident-lib.sh` and materialized in the tracked descriptor.
 Entrypoint paths are relative to the Crew Lead home.
 The adoption entrypoint provisions and validates metadata in place without moving or rewriting private operational data.
 
@@ -34,7 +34,8 @@ Linux producers use `linux-proc-v1:<boot-id>:<proc-start-ticks>`.
 Other supported hosts use `ps-lstart-v1:<process-start-time>`.
 A consumer must validate both values before treating a PID as the same process.
 
-Conversation publication discovers the latest journal for the effective harness under `FM_HOME` (or explicit `FM_RESIDENT_*` overrides).
+Conversation publication discovers the latest journal associated with the `FM_HOME` worktree for the effective harness, using the harness-specific home roots documented by `bin/fm-resident-lib.sh`.
+Explicit `FM_RESIDENT_TRANSCRIPT` and `FM_RESIDENT_SESSION_ID` values override journal discovery.
 `FM_RESIDENT_HARNESS` from Vellum Start is authoritative when set; publish never hardcodes Claude.
 Adapter ids follow Vellum ADR 0056: `claude-jsonl-v1`, `codex-rollout-v1`, `grok-chat-history-v1`, `cursor-agent-transcript-v1`, `opencode-db-v1`, `pi-session-jsonl-v1`, `hermes-state-db-v1`.
 Codex uses the single canonical spelling `codex-rollout-v1` (legacy producer `codex-jsonl-v1` may still be dual-accepted by consumers during migration).

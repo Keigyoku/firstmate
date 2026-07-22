@@ -3,8 +3,9 @@
 # Usage: fm-resident-publish.sh [starting|ready|waiting|blocked|degraded|stopped|failed]
 # Test/adapter seams: FM_RESIDENT_{HARNESS,SESSION_ID,TRANSCRIPT,BACKEND_KIND,
 # WORKSPACE_ID,PANE_ID,PID} override automatic discovery.
-# Discovers journals for claude, codex, opencode, pi, grok, cursor, hermes under
-# FM_HOME (or harness-home env roots). Adapter ids follow Vellum ADR 0056
+# Discovers journals associated with FM_HOME for claude, codex, opencode, pi,
+# grok, cursor, and hermes, using harness-home environment roots.
+# Adapter ids follow Vellum ADR 0056
 # (codex-rollout-v1 is the single canonical Codex spelling).
 set -euo pipefail
 
