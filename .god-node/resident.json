@@ -26,7 +26,12 @@
     "input.file-v1",
     "input.backend-v1",
     "transcript.claude-jsonl-v1",
-    "transcript.codex-jsonl-v1",
+    "transcript.codex-rollout-v1",
+    "transcript.grok-chat-history-v1",
+    "transcript.cursor-agent-transcript-v1",
+    "transcript.opencode-db-v1",
+    "transcript.pi-session-jsonl-v1",
+    "transcript.hermes-state-db-v1",
     "crew.bridge-v1"
   ]
 }

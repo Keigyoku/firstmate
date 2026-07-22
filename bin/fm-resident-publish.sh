@@ -3,6 +3,9 @@
 # Usage: fm-resident-publish.sh [starting|ready|waiting|blocked|degraded|stopped|failed]
 # Test/adapter seams: FM_RESIDENT_{HARNESS,SESSION_ID,TRANSCRIPT,TRANSCRIPT_ADAPTER,
 # BACKEND_KIND,WORKSPACE_ID,PANE_ID,PID} override automatic discovery.
+# Discovers journals for claude, codex, opencode, pi, grok, cursor, hermes under
+# FM_HOME (or harness-home env roots). Adapter ids follow Vellum ADR 0056
+# (codex-rollout-v1 is the single canonical Codex spelling).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,8 +18,6 @@ LIFECYCLE=${1:-ready}
 
 # shellcheck source=bin/fm-resident-lib.sh
 . "$SCRIPT_DIR/fm-resident-lib.sh"
-# shellcheck source=bin/fm-watchdog-lib.sh
-. "$SCRIPT_DIR/fm-watchdog-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-backend.sh
@@ -43,6 +44,7 @@ case "$OLD_EPOCH" in ''|*[!0-9]*) OLD_EPOCH=0 ;; esac
 EPOCH=$((OLD_EPOCH + 1))
 PUBLISHED_AT=$(fm_resident_rfc3339)
 
+# Prefer FM_RESIDENT_HARNESS from Vellum Start / adapter publish; never force claude.
 HARNESS=${FM_RESIDENT_HARNESS:-$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)}
 PID=${FM_RESIDENT_PID:-$(cat "$STATE/.lock" 2>/dev/null || printf '')}
 case "$PID" in ''|*[!0-9]*) PID='' ;; esac
@@ -51,18 +53,15 @@ CREATION_IDENTITY=''
 
 TRANSCRIPT=${FM_RESIDENT_TRANSCRIPT:-}
 if [ -z "$TRANSCRIPT" ]; then
-  case "$HARNESS" in
-    claude) TRANSCRIPT=$(fm_watchdog_latest_claude_jsonl_for_worktree "$FM_HOME" 2>/dev/null || true) ;;
-    codex) TRANSCRIPT=$(fm_watchdog_latest_codex_rollout_for_worktree "$FM_HOME" '' no-write 2>/dev/null || true) ;;
-  esac
+  TRANSCRIPT=$(fm_resident_discover_transcript "$HARNESS" "$FM_HOME" 2>/dev/null || true)
 fi
 SESSION_ID=${FM_RESIDENT_SESSION_ID:-}
 if [ -z "$SESSION_ID" ] && [ -n "$TRANSCRIPT" ]; then
-  SESSION_ID=$(fm_watchdog_session_id_from_file "$HARNESS" "$TRANSCRIPT" 2>/dev/null || true)
+  SESSION_ID=$(fm_resident_session_id_from_transcript "$HARNESS" "$TRANSCRIPT" "$FM_HOME" 2>/dev/null || true)
 fi
 TRANSCRIPT_ADAPTER=${FM_RESIDENT_TRANSCRIPT_ADAPTER:-}
 if [ -z "$TRANSCRIPT_ADAPTER" ]; then
-  case "$HARNESS" in claude) TRANSCRIPT_ADAPTER=claude-jsonl-v1 ;; codex) TRANSCRIPT_ADAPTER=codex-jsonl-v1 ;; esac
+  TRANSCRIPT_ADAPTER=$(fm_resident_transcript_adapter "$HARNESS" 2>/dev/null || true)
 fi
 
 BACKEND_KIND=${FM_RESIDENT_BACKEND_KIND:-}
