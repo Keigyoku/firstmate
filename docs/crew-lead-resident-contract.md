@@ -14,8 +14,9 @@ Copies of a tracked home template receive a new identity because `provision.json
 
 Setup also atomically writes `.god-node/resident.json` with schema `dev.vellum.resident/1`.
 The descriptor is tracked template metadata and declares resident type `firstmate`, the stable producer descriptor version, supported contract major versions, argv-array entrypoints, and the full capability set.
-Advertised capabilities are `input.file-v1`, `input.backend-v1`, `transcript.claude-jsonl-v1`, `transcript.codex-jsonl-v1`, and `crew.bridge-v1`.
+Advertised capabilities cover file and backend input, all seven verified ADR 0056 transcript adapters, and adopted-crew reconciliation.
 `crew.bridge-v1` independently gates adopted-crew reconciliation in consumers that treat a readable descriptor as authoritative; setup and every session-lock republication must keep it in the list.
+The exact capability token list is owned by `fm_resident_capability_tokens` in `bin/fm-resident-lib.sh` and materialized in the tracked descriptor.
 Entrypoint paths are relative to the Crew Lead home.
 The adoption entrypoint provisions and validates metadata in place without moving or rewriting private operational data.
 
@@ -33,8 +34,14 @@ Linux producers use `linux-proc-v1:<boot-id>:<proc-start-ticks>`.
 Other supported hosts use `ps-lstart-v1:<process-start-time>`.
 A consumer must validate both values before treating a PID as the same process.
 
-Claude transcripts use adapter `claude-jsonl-v1` and Codex rollouts use adapter `codex-jsonl-v1`.
+Conversation publication discovers the latest journal associated with the `FM_HOME` worktree for the effective harness, using the harness-specific home roots documented by `bin/fm-resident-lib.sh`.
+Explicit `FM_RESIDENT_TRANSCRIPT` and `FM_RESIDENT_SESSION_ID` values override journal discovery.
+`FM_RESIDENT_HARNESS` from Vellum Start is authoritative when set; publish never hardcodes Claude.
+Adapter ids follow Vellum ADR 0056: `claude-jsonl-v1`, `codex-rollout-v1`, `grok-chat-history-v1`, `cursor-agent-transcript-v1`, `opencode-db-v1`, `pi-session-jsonl-v1`, `hermes-state-db-v1`.
+Codex uses the single canonical spelling `codex-rollout-v1` (legacy producer `codex-jsonl-v1` may still be dual-accepted by consumers during migration).
+Hermes discovery uses `PRAGMA table_info(sessions)` so `cwd` / `started_at` / `archived` are used only when present (Vellum-aligned when available); when cwd matching is unavailable or empty, `HERMES_SESSION_ID` is the live-session fallback.
 The harness session identifier and absolute transcript path are mutable attributes and never replace container identity.
+`bin/fm-resident-doctor.sh` asserts conversation harness/adapter/id/path whenever conversation is present, for every verified harness.
 When a complete backend endpoint is available, input uses `backend-v1` with the same workspace and pane identifiers published in `backend`.
 Headless operation uses `file-v1` and advertises `inbox/requests` and `inbox/results` relative to the Crew Lead home.
 

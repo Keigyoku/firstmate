@@ -32,9 +32,14 @@ jq -e 'has("container_id") == false and has("created_at") == false and has("iden
   || fail "tracked contract retained local container identity"
 jq -e '.schema == "dev.vellum.resident/1" and .resident_version == "dev.vellum.firstmate-resident/1" and .contract_versions == [1] and .entrypoints.adopt == ["bin/fm-resident-adopt.sh"]' "$HOME_DIR/.god-node/resident.json" >/dev/null \
   || fail "setup did not write the versioned resident manifest"
-jq -e '.capabilities | index("crew.bridge-v1") != null and index("input.file-v1") != null and index("input.backend-v1") != null and index("transcript.claude-jsonl-v1") != null and index("transcript.codex-jsonl-v1") != null' \
-  "$HOME_DIR/.god-node/resident.json" >/dev/null \
-  || fail "setup omitted the full capability set including crew.bridge-v1"
+for cap in input.file-v1 input.backend-v1 crew.bridge-v1 \
+  transcript.claude-jsonl-v1 transcript.codex-rollout-v1 transcript.grok-chat-history-v1 \
+  transcript.cursor-agent-transcript-v1 transcript.opencode-db-v1 transcript.pi-session-jsonl-v1 \
+  transcript.hermes-state-db-v1; do
+  jq -e --arg cap "$cap" '.capabilities | index($cap) != null' \
+    "$HOME_DIR/.god-node/resident.json" >/dev/null \
+    || fail "setup omitted capability $cap"
+done
 git -C "$ROOT" check-ignore -q inbox/requests/request.json \
   || fail "file-v1 request inbox path is not ignored operational data"
 git -C "$ROOT" check-ignore -q inbox/results/result.json \
@@ -77,9 +82,14 @@ jq -e '.capabilities | index("crew.bridge-v1") != null' \
   || fail "session-lock republication dropped crew.bridge-v1"
 # A second standalone setup rewrite must keep the full set (idempotent repair).
 FM_HOME="$PARTIAL_CAPS_HOME" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-resident-setup.sh"
-jq -e '.capabilities | index("crew.bridge-v1") != null and index("input.file-v1") != null and index("input.backend-v1") != null and index("transcript.claude-jsonl-v1") != null and index("transcript.codex-jsonl-v1") != null' \
-  "$PARTIAL_CAPS_HOME/.god-node/resident.json" >/dev/null \
-  || fail "standalone setup rewrite dropped the full capability set"
+for cap in input.file-v1 input.backend-v1 crew.bridge-v1 \
+  transcript.claude-jsonl-v1 transcript.codex-rollout-v1 transcript.grok-chat-history-v1 \
+  transcript.cursor-agent-transcript-v1 transcript.opencode-db-v1 transcript.pi-session-jsonl-v1 \
+  transcript.hermes-state-db-v1; do
+  jq -e --arg cap "$cap" '.capabilities | index($cap) != null' \
+    "$PARTIAL_CAPS_HOME/.god-node/resident.json" >/dev/null \
+    || fail "standalone setup rewrite dropped capability $cap"
+done
 pass "publication cycle keeps crew.bridge-v1"
 
 LOCK_HOME="$TEST_ROOT/lock-home"
