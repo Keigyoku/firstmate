@@ -385,6 +385,7 @@ fm_resident_discover_hermes() {  # <worktree> -> prints state.db when a matching
   local worktree=$1 db sid
   db=$(fm_resident_hermes_state_db)
   [ -f "$db" ] || return 1
+  # Worktree cwd match (when sessions.cwd exists), else HERMES_SESSION_ID fallback.
   sid=$(fm_resident_hermes_session_id_for_worktree "$db" "$worktree") || return 1
   [ -n "$sid" ] || return 1
   printf '%s\n' "$db"
@@ -428,25 +429,113 @@ fm_resident_opencode_session_id_for_worktree() {  # <db> <worktree>
   printf '%s\n' "$best_sid"
 }
 
+# Hermes session discovery aligned with Vellum hermes_transcript (id, cwd,
+# started_at; archived filter when present). Uses PRAGMA column detection so
+# older state.db builds without cwd/archived degrade cleanly; HERMES_SESSION_ID
+# is the fallback when cwd matching is unavailable or finds nothing.
 fm_resident_hermes_session_id_for_worktree() {  # <db> <worktree>
-  local db=$1 worktree=$2 sid cwd ts best_sid='' best_ts=-1
-  while IFS= read -r -d '' sid \
-    && IFS= read -r -d '' cwd \
-    && IFS= read -r -d '' ts; do
-    [ -n "$sid" ] || continue
-    [ -n "$cwd" ] || continue
-    fm_resident_paths_match "$cwd" "$worktree" || continue
-    # started_at is REAL seconds; compare as integer epoch for ordering.
-    ts=${ts%%.*}
-    case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
-    if [ "$ts" -gt "$best_ts" ]; then
-      best_ts=$ts
-      best_sid=$sid
-    fi
-  done < <(fm_resident_sqlite_rows "$db" \
-    "SELECT id, cwd, COALESCE(started_at, 0) FROM sessions WHERE archived = 0;" 2>/dev/null)
-  [ -n "$best_sid" ] || return 1
-  printf '%s\n' "$best_sid"
+  local db=$1 worktree=$2 sid
+  command -v python3 >/dev/null 2>&1 || return 1
+  [ -f "$db" ] || return 1
+  sid=$(
+    HERMES_SESSION_ID="${HERMES_SESSION_ID:-}" python3 - "$db" "$worktree" <<'PY'
+import os
+import sqlite3
+import sys
+import urllib.parse
+
+database, worktree = sys.argv[1], sys.argv[2]
+env_sid = os.environ.get("HERMES_SESSION_ID", "").strip()
+uri = "file:" + urllib.parse.quote(os.path.abspath(database), safe="/") + "?mode=ro"
+
+def physical(path: str) -> str:
+    try:
+        return os.path.realpath(path)
+    except OSError:
+        return path
+
+def same_path(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    return physical(left) == physical(right)
+
+def spellings(path: str):
+    out = [path]
+    real = physical(path)
+    if real not in out:
+        out.append(real)
+    for src, dst in (("/home/", "/var/home/"), ("/var/home/", "/home/")):
+        if path.startswith(src):
+            alt = dst + path[len(src) :]
+            if os.path.exists(path) and os.path.exists(alt) and same_path(path, alt) and alt not in out:
+                out.append(alt)
+    return out
+
+try:
+    with sqlite3.connect(uri, uri=True) as connection:
+        cols = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(sessions)")
+        }
+        if "id" not in cols:
+            sys.exit(1)
+
+        select = ["id"]
+        select.append("cwd" if "cwd" in cols else "NULL AS cwd")
+        select.append(
+            "COALESCE(started_at, 0)" if "started_at" in cols else "0 AS started_at"
+        )
+        where = []
+        if "archived" in cols:
+            where.append("COALESCE(archived, 0) = 0")
+        sql = "SELECT " + ", ".join(select) + " FROM sessions"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+
+        rows = list(connection.execute(sql))
+        targets = spellings(worktree)
+        best_sid = None
+        best_ts = -1.0
+        if "cwd" in cols:
+            for sid, cwd, started in rows:
+                if not sid or not cwd:
+                    continue
+                if not any(same_path(str(cwd), t) for t in targets):
+                    continue
+                try:
+                    ts = float(started or 0)
+                except (TypeError, ValueError):
+                    ts = 0.0
+                if ts >= best_ts:
+                    best_ts = ts
+                    best_sid = str(sid)
+        if best_sid:
+            print(best_sid)
+            sys.exit(0)
+
+        # Fallback: live Hermes session env (no inventing schema columns).
+        if env_sid:
+            for sid, *_rest in rows:
+                if str(sid) == env_sid:
+                    print(env_sid)
+                    sys.exit(0)
+            # Row may be filtered by archived; still accept explicit live id
+            # when the id exists at all.
+            exists = connection.execute(
+                "SELECT 1 FROM sessions WHERE id = ? LIMIT 1", (env_sid,)
+            ).fetchone()
+            if exists:
+                print(env_sid)
+                sys.exit(0)
+        sys.exit(1)
+except sqlite3.Error:
+    sys.exit(1)
+PY
+  ) || return 1
+  [ -n "$sid" ] || return 1
+  printf '%s\n' "$sid"
 }
 
 # Discover the latest transcript artifact path for harness@worktree.

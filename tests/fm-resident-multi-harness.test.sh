@@ -165,6 +165,32 @@ ln -s "$(command -v basename)" "$PYTHON_ONLY_BIN/basename"
   || fail "Hermes discovery required the sqlite3 executable"
 pass "database discovery uses Python stdlib without sqlite3 executable"
 
+# Hermes older schema: no cwd/archived columns. Worktree match is impossible;
+# HERMES_SESSION_ID fallback must bind when the id row exists.
+OLD_HERMES_DB="$TEST_ROOT/hermes-old/state.db"
+mkdir -p "$(dirname "$OLD_HERMES_DB")"
+python3 - "$OLD_HERMES_DB" <<'PY'
+import sqlite3, sys
+db = sys.argv[1]
+with sqlite3.connect(db) as c:
+    c.execute(
+        "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL DEFAULT 'cli', "
+        "started_at REAL NOT NULL DEFAULT 0)"
+    )
+    c.execute("INSERT INTO sessions (id, started_at) VALUES ('20260722_legacy_sid1', 50)")
+    c.execute("INSERT INTO sessions (id, started_at) VALUES ('20260722_legacy_sid2', 100)")
+PY
+if HERMES_HOME="$TEST_ROOT/hermes-old" fm_resident_discover_hermes "$WORKTREE" >/dev/null 2>&1; then
+  fail "Hermes discovery without cwd columns and without HERMES_SESSION_ID should fail closed"
+fi
+[ "$(HERMES_HOME="$TEST_ROOT/hermes-old" HERMES_SESSION_ID=20260722_legacy_sid2 \
+  fm_resident_hermes_session_id_for_worktree "$OLD_HERMES_DB" "$WORKTREE")" = 20260722_legacy_sid2 ] \
+  || fail "Hermes HERMES_SESSION_ID fallback failed on schema without cwd/archived"
+[ "$(HERMES_HOME="$TEST_ROOT/hermes-old" HERMES_SESSION_ID=20260722_legacy_sid2 \
+  fm_resident_discover_hermes "$WORKTREE")" = "$OLD_HERMES_DB" ] \
+  || fail "Hermes discover path did not use HERMES_SESSION_ID fallback"
+pass "Hermes degrades cleanly without cwd/archived and binds via HERMES_SESSION_ID"
+
 CURSOR_OTHER_SID=cccccccc-dddd-eeee-ffff-000000000000
 mkdir -p "$CURSOR_HOME/projects/proj-slug/agent-transcripts/$CURSOR_OTHER_SID"
 printf '%s\n' '{}' > "$CURSOR_HOME/projects/proj-slug/agent-transcripts/$CURSOR_OTHER_SID/$CURSOR_OTHER_SID.jsonl"
