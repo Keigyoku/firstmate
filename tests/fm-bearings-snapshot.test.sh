@@ -2,7 +2,7 @@
 # Behavior tests for the bearings projection wrapper over fm-fleet-snapshot.sh.
 # Covers the output/token bound, TOON/JSON parity, the local-only default (zero
 # GitHub/network calls), the --include-prs opt-in path, graceful degradation on a
-# partial PR-fetch failure, fork-native pending_decision surfaces (decision-hold #593 stubbed),
+# partial PR-fetch failure, fork-native pending_decision surfaces + decision-hold captain holds,
 # gates blocked_by string fallback, the four-section chat contract, and report pointers.
 set -u
 
@@ -194,8 +194,8 @@ test_open_decision_surfaces_end_to_end() {
 }
 
 test_decision_hold_captain_hold_is_stubbed() {
-  # #593 decision-hold is not ported: a free-form backlog hold must NOT invent
-  # a captain-hold decisions_open row (that path requires decision-hold machinery).
+  # Free-form (non-kind=captain) backlog holds must NOT invent captain-hold rows;
+  # only structured decision-hold inventory items do.
   local home fakebin json
   home=$(make_home hold-stub); write_fixture "$home"
   fakebin=$(make_fakebin "$home")
@@ -210,8 +210,8 @@ EOF
   json=$(run "$home" "$fakebin" --json)
   printf '%s' "$json" | jq -e '
     (.decisions_open | any(.[]; .verb == "captain-hold") | not)
-  ' >/dev/null || fail "without #593, decisions_open must not invent captain-hold rows: $json"
-  pass "decision-hold captain-hold path is stubbed without #593"
+  ' >/dev/null || fail "free-form holds must not invent captain-hold rows: $json"
+  pass "free-form backlog holds do not invent captain-hold decisions_open rows"
 }
 
 test_secondmate_status_decisions_preserve_captain_decision() {
@@ -256,8 +256,8 @@ EOF
         | select(.owner == "mate-status" and (.verb == "needs-decision" or .verb == "blocked"))]
         | length) == 2
       and (.decisions_open | any(.[]; .owner == "mate-status" and .verb == "captain-hold") | not)
-  ' >/dev/null || fail "supported secondmate status decisions must preserve captain_decision without #593: $json"
-  pass "secondmate status decisions preserve captain_decision without decision-hold machinery"
+  ' >/dev/null || fail "secondmate status decisions must preserve captain_decision: $json"
+  pass "secondmate status decisions preserve captain_decision alongside decision-hold"
 }
 
 test_gates_use_string_blocked_by() {

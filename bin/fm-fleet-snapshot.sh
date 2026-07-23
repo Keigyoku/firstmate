@@ -508,13 +508,19 @@ secondmate_home_summary_json() {  # <backlog-json> <tasks-json>
          | select(.id == $work.id and .current_state.state == "working" and $work.current_role != "program")
          | {id,kind,state:.current_state.state,source:.current_state.source,
             doing:((.current_state.detail // "") | trunc(120))} ]) as $active
+    | ([ $queued[]
+         | select(.kind == "captain" and .hold_kind == "captain" and .hold_reason != null)
+         | {id,key:.id,verb:"captain-hold",summary:(.title | trunc(160)),
+            reason:(.hold_reason | trunc(160)),source:"backlog"} ]) as $captain_holds
     | ([ $tasks[]
          | if .hints.pending_decision == true then
              {id,key:.id,verb:"needs-decision",summary:((.hints.last_event_text // "needs decision") | trunc(160)),reason:null,source:"status"}
            elif .hints.blocked_event == true then
              {id,key:.id,verb:"blocked",summary:((.hints.last_event_text // "blocked") | trunc(160)),reason:null,source:"status"}
-           else empty end ]) as $decisions
+           else empty end ]) as $status_decisions
+    | ($captain_holds + $status_decisions) as $decisions
     | ([ $queued[]
+         | select((.kind == "captain" and .hold_kind == "captain" and .hold_reason != null) | not)
          | select((.unresolved_blocker_ids | length) > 0 or .hold_reason != null)
          | {id,title:(.title | trunc(90)),blocked_by:(.unresolved_blocker_ids | join(",")),
             blocked_by_ids:.blocked_by_ids,unresolved_blocker_ids:.unresolved_blocker_ids,
