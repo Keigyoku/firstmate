@@ -211,7 +211,9 @@ test_stdin_transports_and_output_shapes() {
     | FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" \
       "$CHECK" --claude > "$OUT" 2> "$ERR" || rc=$?
   [ "$rc" -eq 0 ] || fail "Bash through stdin must allow, got exit $rc"
-  [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || fail "stdin allow wrote output"
+  if [ -s "$OUT" ] || [ -s "$ERR" ]; then
+    fail "stdin allow wrote output"
+  fi
   pass "both stdin transports classify correctly and Claude's deny keeps stdout empty"
 }
 

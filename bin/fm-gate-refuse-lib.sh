@@ -75,7 +75,9 @@ fm_refuse_if_gate_agent() {
     exit "$FM_GATE_REFUSE_EXIT"
   fi
   local common
-  common=$(cd "$(git rev-parse --git-common-dir 2>/dev/null || echo /nonexistent)" 2>/dev/null && pwd -P || true)
+  if ! common=$(cd "$(git rev-parse --git-common-dir 2>/dev/null || echo /nonexistent)" 2>/dev/null && pwd -P); then
+    common=
+  fi
   case "$common" in
     */.no-mistakes/repos/*.git)
       echo "error: refusing fleet lifecycle from inside a no-mistakes gate worktree ($common)" >&2
