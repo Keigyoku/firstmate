@@ -225,6 +225,60 @@ test_gates_use_string_blocked_by() {
   pass "gates fall back to string blocked_by on the fork schema"
 }
 
+test_gates_distinguish_empty_normalized_blockers_from_absent() {
+  local home mate fakebin json legacy_json shim
+  home=$(make_home resolved-blockers)
+  mate="$TMP_ROOT/resolved-blockers-mate"
+  mkdir -p "$mate/state" "$mate/data" "$mate/config" "$mate/projects" "$mate/bin"
+  printf 'mate-resolved\n' > "$mate/.fm-secondmate-home"
+  printf '# Firstmate\n' > "$mate/AGENTS.md"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] main-gate - Main gate blocked-by: main-done (repo: firstmate) (kind: ship)
+
+## Done
+- [x] main-done - Main dependency (repo: firstmate) (kind: ship)
+EOF
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] mate-gate - Mate gate blocked-by: mate-done (repo: firstmate) (kind: ship)
+
+## Done
+- [x] mate-done - Mate dependency (repo: firstmate) (kind: ship)
+EOF
+  printf '%s\n' "- mate-resolved - delivery (home: $mate; scope: firstmate; projects: firstmate; added 2026-07-01)" \
+    > "$home/data/secondmates.md"
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json --all-queued)
+  printf '%s' "$json" | jq -e '
+    ([.gates[] | select(.id == "main-gate" and .owner == "(main)" and .blocked_by == "-")] | length) == 1
+      and ([.gates[] | select(.id == "mate-gate" and .owner == "mate-resolved" and .blocked_by == "-")] | length) == 1
+  ' >/dev/null || fail "present-empty normalized blockers must not fall back to resolved raw dependencies: $json"
+
+  shim="$home/bearings-shim"
+  mkdir -p "$shim"
+  cp "$BEARINGS" "$shim/fm-bearings-snapshot.sh"
+  cat > "$shim/fm-fleet-snapshot.sh" <<EOF
+#!/usr/bin/env bash
+"$ROOT/bin/fm-fleet-snapshot.sh" "\$@" | jq '
+  (.backlog.records[] | select(.id == "main-gate")) |= del(.unresolved_blocker_ids)
+  | (.secondmate_current.records[].queued[] | select(.id == "mate-gate")) |= del(.unresolved_blocker_ids)
+'
+EOF
+  chmod +x "$shim/fm-fleet-snapshot.sh"
+  legacy_json=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_BEARINGS_NOW=2026-07-11T18:00:00Z \
+    NET_LOG="$home/net.log" "$shim/fm-bearings-snapshot.sh" --json --all-queued)
+  printf '%s' "$legacy_json" | jq -e '
+    ([.gates[] | select(.id == "main-gate" and .owner == "(main)" and .blocked_by == "main-done")] | length) == 1
+      and ([.gates[] | select(.id == "mate-gate" and .owner == "mate-resolved" and .blocked_by == "mate-done")] | length) == 1
+  ' >/dev/null || fail "absent normalized blockers must retain the raw blocked_by compatibility fallback: $legacy_json"
+  pass "gates use normalized empty blockers and retain the absent-field fallback in both homes"
+}
+
 test_chat_contract_four_sections() {
   local skill body headings report_headings expected
   skill="$ROOT/.agents/skills/bearings/SKILL.md"
@@ -589,6 +643,7 @@ test_completed_scout_report_not_pending
 test_open_decision_surfaces_end_to_end
 test_decision_hold_captain_hold_is_stubbed
 test_gates_use_string_blocked_by
+test_gates_distinguish_empty_normalized_blockers_from_absent
 test_report_pointers_surface
 test_underway_only_includes_working_in_flight_tasks
 test_superseded_queued_item_dropped_by_default

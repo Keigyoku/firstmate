@@ -962,14 +962,13 @@ test_kill_recovers_stale_target_by_label() {
   local dir fb title
   dir="$TMP_ROOT/kill-stale-target"; mkdir -p "$dir/responses"
   title=$(cmux_expected_scoped_title fm-label)
-  # target_ready label recovery: 1 workspace list (title lookup, misses stale id),
-  # 2 workspace list (id-for-label -> refreshed id), 3 list-panes (surface id).
-  cmux_workspace_list_response "$dir" 1 "cccccccc-2222-2222-2222-222222222222" "$title"
+  cmux_windows_response "$dir" 1 "eeeeeeee-0000-0000-0000-000000000000" 2
   cmux_workspace_list_response "$dir" 2 "cccccccc-2222-2222-2222-222222222222" "$title"
-  cmux_panes_response "$dir" 3 "dddddddd-3333-3333-3333-333333333333"
-  # window_of_workspace on the REFRESHED id: 4 list-windows (not last), 5 workspace list --window.
-  cmux_windows_response "$dir" 4 "eeeeeeee-0000-0000-0000-000000000000" 2
-  cmux_workspace_list_response "$dir" 5 "cccccccc-2222-2222-2222-222222222222" "$title" "ffffffff-0000-0000-0000-000000000000" "other"
+  cmux_windows_response "$dir" 3 "eeeeeeee-0000-0000-0000-000000000000" 2
+  cmux_workspace_list_response "$dir" 4 "cccccccc-2222-2222-2222-222222222222" "$title"
+  cmux_panes_response "$dir" 5 "dddddddd-3333-3333-3333-333333333333"
+  cmux_windows_response "$dir" 6 "eeeeeeee-0000-0000-0000-000000000000" 2
+  cmux_workspace_list_response "$dir" 7 "cccccccc-2222-2222-2222-222222222222" "$title" "ffffffff-0000-0000-0000-000000000000" "other"
   fb=$(make_cmux_fakebin "$dir")
   PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "" fm-label' "$ROOT"
@@ -981,6 +980,31 @@ test_kill_recovers_stale_target_by_label() {
   assert_not_contains "$(cat "$dir/log")" $'\x1f''close-surface' \
     "kill should not call close-surface"
   pass "fm_backend_cmux_kill: recovers stale workspace/surface ids by expected label"
+}
+
+test_kill_validates_expected_label_in_another_window() {
+  local dir fb title
+  dir="$TMP_ROOT/kill-another-window"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-label)
+  cmux_windows_response "$dir" 1 \
+    "e1111111-0000-0000-0000-000000000000" 1 \
+    "e2222222-0000-0000-0000-000000000000" 2
+  cmux_workspace_list_response "$dir" 2 "ffffffff-0000-0000-0000-000000000000" "other-window"
+  cmux_workspace_list_response "$dir" 3 "aaaaaaaa-0000-0000-0000-000000000000" "$title" "cccccccc-2222-2222-2222-222222222222" "sibling"
+  cmux_panes_response "$dir" 4 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_windows_response "$dir" 5 \
+    "e1111111-0000-0000-0000-000000000000" 1 \
+    "e2222222-0000-0000-0000-000000000000" 2
+  cmux_workspace_list_response "$dir" 6 "ffffffff-0000-0000-0000-000000000000" "other-window"
+  cmux_workspace_list_response "$dir" 7 "aaaaaaaa-0000-0000-0000-000000000000" "$title" "cccccccc-2222-2222-2222-222222222222" "sibling"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "" fm-label' "$ROOT"
+  assert_contains "$(cat "$dir/log")" $'\x1f''close-workspace'$'\x1f''--workspace'$'\x1f''aaaaaaaa-0000-0000-0000-000000000000' \
+    "kill did not close the expected-label workspace in another cmux window"
+  assert_contains "$(cat "$dir/log")" $'\x1f''workspace'$'\x1f''list'$'\x1f''--json'$'\x1f''--id-format'$'\x1f''uuids'$'\x1f''--window'$'\x1f''e2222222-0000-0000-0000-000000000000' \
+    "kill did not validate expected-label membership in the target's cmux window"
+  pass "fm_backend_cmux_kill: validates and closes an expected-label workspace in another window"
 }
 
 # --- list_live: label-based orphan discovery ---------------------------------
@@ -1077,5 +1101,6 @@ test_kill_closes_workspace_directly_when_not_last
 test_kill_adds_sibling_when_last_in_window
 test_kill_is_best_effort_when_close_workspace_fails
 test_kill_recovers_stale_target_by_label
+test_kill_validates_expected_label_in_another_window
 test_list_live_filters_by_title_prefix
 test_secondmate_spawn_refuses_cmux_backend

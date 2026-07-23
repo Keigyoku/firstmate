@@ -446,8 +446,10 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                   or (((.body_excerpt // "") | test("SUPERSEDED|NOT REQUIRED|NOT-REQUIRED|DEFERRED"; "i")) | not))
          | {id, title:(.title | trunc(60)),
             blocked_by:(
-              if ((.unresolved_blocker_ids // []) | length) > 0 then
-                (.unresolved_blocker_ids | join(",") | trunc(120))
+              if has("unresolved_blocker_ids") then
+                if (.unresolved_blocker_ids | length) > 0 then
+                  (.unresolved_blocker_ids | join(",") | trunc(120))
+                else "-" end
               elif (.blocked_by // null) != null and (.blocked_by | tostring | length) > 0 then
                 (.blocked_by | tostring | trunc(120))
               else "-" end),
@@ -458,8 +460,10 @@ MODEL=$(printf '%s' "$SNAP" | jq \
          | select(.captain_actionable != true)
          | {id,title:(.title | trunc(60)),
             blocked_by:(
-              if ((.unresolved_blocker_ids // []) | length) > 0 then
-                (.unresolved_blocker_ids | join(",") | trunc(120))
+              if has("unresolved_blocker_ids") then
+                if (.unresolved_blocker_ids | length) > 0 then
+                  (.unresolved_blocker_ids | join(",") | trunc(120))
+                else "-" end
               elif (.blocked_by // null) != null and (.blocked_by | tostring | length) > 0 then
                 (.blocked_by | tostring | trunc(120))
               else "-" end),

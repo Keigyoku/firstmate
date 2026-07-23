@@ -627,6 +627,44 @@ fm_backend_cmux_window_of_workspace() {  # <workspace_id> -> "<window_id> <count
   done < <(printf '%s' "$wins" | jq -r '.[]? | .id' 2>/dev/null)
 }
 
+fm_backend_cmux_workspace_lookup_all_windows() {  # <field> <value> <result-field>
+  local field=$1 value=$2 result_field=$3 wins wid wss result
+  case "$field:$result_field" in
+    id:title|title:id) ;;
+    *) return 1 ;;
+  esac
+  wins=$(fm_backend_cmux_cli list-windows --json --id-format uuids 2>/dev/null) || return 0
+  while IFS= read -r wid; do
+    [ -n "$wid" ] || continue
+    wss=$(fm_backend_cmux_cli workspace list --json --id-format uuids --window "$wid" 2>/dev/null) || continue
+    result=$(printf '%s' "$wss" | jq -r --arg field "$field" --arg value "$value" --arg result "$result_field" \
+      '.workspaces[]? | select(.[$field] == $value) | .[$result]' 2>/dev/null | head -1)
+    if [ -n "$result" ]; then
+      printf '%s' "$result"
+      return 0
+    fi
+  done < <(printf '%s' "$wins" | jq -r '.[]? | .id' 2>/dev/null)
+}
+
+fm_backend_cmux_teardown_target_ready() {  # <target> <expected-label>
+  local expected_title title wsid sfid
+  fm_backend_cmux_parse_target "$1" || return 1
+  expected_title=$(fm_backend_cmux_scoped_title "$2")
+  title=$(fm_backend_cmux_workspace_lookup_all_windows id "$FM_BACKEND_CMUX_WORKSPACE" title)
+  if [ "$title" = "$expected_title" ]; then
+    wsid=$FM_BACKEND_CMUX_WORKSPACE
+  elif [ -n "$title" ]; then
+    return 1
+  else
+    wsid=$(fm_backend_cmux_workspace_lookup_all_windows title "$expected_title" id)
+    [ -n "$wsid" ] || return 1
+  fi
+  sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid")
+  [ -n "$sfid" ] || return 1
+  FM_BACKEND_CMUX_WORKSPACE=$wsid
+  FM_BACKEND_CMUX_SURFACE=$sfid
+}
+
 # fm_backend_cmux_kill: remove the task's whole workspace, best-effort (mirrors
 # every other backend's `kill` `|| true` contract). A cmux task owns one
 # workspace, so teardown reclaims that workspace and all of its surfaces.
@@ -646,7 +684,7 @@ fm_backend_cmux_window_of_workspace() {  # <workspace_id> -> "<window_id> <count
 fm_backend_cmux_kill() {  # <target> [unused] [expected-label]
   local expected_label=${3:-} wsid wininfo win count
   if [ -n "$expected_label" ]; then
-    fm_backend_cmux_target_ready "$1" "$expected_label" || return 0
+    fm_backend_cmux_teardown_target_ready "$1" "$expected_label" || return 0
   else
     fm_backend_cmux_parse_target "$1" || return 0
   fi
