@@ -254,7 +254,7 @@ test_agents_parent_escape_fails_without_outside_modification() {
   status=0
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --role review-crew) || status=$?
   expect_code 1 "$status" "escaping .agents parent should fail"
-  assert_contains "$out" "role skill parent escapes worktree: $WT_DIR/.agents" \
+  assert_contains "$out" "role skill parent must not be a symlink: $WT_DIR/.agents" \
     "escaping .agents error should identify the unsafe parent"
   after=$(git hash-object "$outside/sentinel")
   [ "$after" = "$before" ] || fail "escaping .agents target sentinel was modified"
@@ -277,7 +277,7 @@ test_agents_skills_parent_escape_fails_without_outside_modification() {
   status=0
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --role review-crew) || status=$?
   expect_code 1 "$status" "escaping .agents/skills parent should fail"
-  assert_contains "$out" "role skill parent escapes worktree: $WT_DIR/.agents/skills" \
+  assert_contains "$out" "role skill parent must not be a symlink: $WT_DIR/.agents/skills" \
     "escaping .agents/skills error should identify the unsafe parent"
   after=$(git hash-object "$outside/sentinel")
   [ "$after" = "$before" ] || fail "escaping .agents/skills target sentinel was modified"
@@ -300,7 +300,7 @@ test_claude_parent_escape_fails_without_outside_modification() {
   status=0
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --role review-crew) || status=$?
   expect_code 1 "$status" "escaping .claude parent should fail"
-  assert_contains "$out" "role skill parent escapes worktree: $WT_DIR/.claude" \
+  assert_contains "$out" "role skill parent must not be a symlink: $WT_DIR/.claude" \
     "escaping .claude error should identify the unsafe parent"
   after=$(git hash-object "$outside/sentinel")
   [ "$after" = "$before" ] || fail "escaping .claude target sentinel was modified"
@@ -308,6 +308,64 @@ test_claude_parent_escape_fails_without_outside_modification() {
   assert_absent "$WT_DIR/.agents" "escaping .claude should fail before role directory creation"
   assert_absent "$HOME_DIR/state/$id.meta" "escaping .claude spawn should not write meta"
   pass "escaping .claude parent fails without outside modification"
+}
+
+test_agents_parent_internal_alias_fails_without_target_modification() {
+  local rec id out status alias
+  id=role-agents-alias-z11
+  rec=$(make_spawn_case role-agents-alias claude "$id")
+  read_case_record "$rec"
+  alias="$WT_DIR/agents-alias-target"
+  mkdir -p "$alias"
+  ln -s "$alias" "$WT_DIR/.agents"
+
+  status=0
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --role review-crew) || status=$?
+  expect_code 1 "$status" "internal .agents alias should fail"
+  assert_contains "$out" "role skill parent must not be a symlink: $WT_DIR/.agents" \
+    "internal .agents alias error should identify the unsafe parent"
+  assert_absent "$alias/skills" "internal .agents alias target gained an injected skills directory"
+  assert_absent "$HOME_DIR/state/$id.meta" "internal .agents alias spawn should not write meta"
+  pass "internal .agents alias fails without target modification"
+}
+
+test_agents_skills_parent_internal_alias_fails_without_target_modification() {
+  local rec id out status alias
+  id=role-agents-skills-alias-z12
+  rec=$(make_spawn_case role-agents-skills-alias claude "$id")
+  read_case_record "$rec"
+  alias="$WT_DIR/agents-skills-alias-target"
+  mkdir -p "$alias" "$WT_DIR/.agents"
+  ln -s "$alias" "$WT_DIR/.agents/skills"
+
+  status=0
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --role review-crew) || status=$?
+  expect_code 1 "$status" "internal .agents/skills alias should fail"
+  assert_contains "$out" "role skill parent must not be a symlink: $WT_DIR/.agents/skills" \
+    "internal .agents/skills alias error should identify the unsafe parent"
+  assert_absent "$alias/review-crew" "internal .agents/skills alias target gained an injected role"
+  assert_absent "$HOME_DIR/state/$id.meta" "internal .agents/skills alias spawn should not write meta"
+  pass "internal .agents/skills alias fails without target modification"
+}
+
+test_claude_parent_internal_alias_fails_without_target_modification() {
+  local rec id out status alias
+  id=role-claude-alias-z13
+  rec=$(make_spawn_case role-claude-alias claude "$id")
+  read_case_record "$rec"
+  alias="$WT_DIR/claude-alias-target"
+  mkdir -p "$alias"
+  ln -s "$alias" "$WT_DIR/.claude"
+
+  status=0
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --role review-crew) || status=$?
+  expect_code 1 "$status" "internal .claude alias should fail"
+  assert_contains "$out" "role skill parent must not be a symlink: $WT_DIR/.claude" \
+    "internal .claude alias error should identify the unsafe parent"
+  assert_absent "$alias/skills" "internal .claude alias target gained a skills path"
+  assert_absent "$WT_DIR/.agents" "internal .claude alias should fail before role directory creation"
+  assert_absent "$HOME_DIR/state/$id.meta" "internal .claude alias spawn should not write meta"
+  pass "internal .claude alias fails without target modification"
 }
 
 test_role_tagged_spawn_injects_excluded_skill
@@ -320,5 +378,8 @@ test_existing_dangling_claude_mirror_is_accepted
 test_agents_parent_escape_fails_without_outside_modification
 test_agents_skills_parent_escape_fails_without_outside_modification
 test_claude_parent_escape_fails_without_outside_modification
+test_agents_parent_internal_alias_fails_without_target_modification
+test_agents_skills_parent_internal_alias_fails_without_target_modification
+test_claude_parent_internal_alias_fails_without_target_modification
 
 echo "# all fm-spawn-role-skill tests passed"

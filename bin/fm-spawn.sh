@@ -1108,7 +1108,7 @@ exclude_path() {
 # it outside the firstmate repo. Paths are git-excluded so they never enter a
 # product PR. Symlinks die with the worktree; no teardown change required.
 inject_role_skill() {
-  local role=$1 src dest claude_skills claude_dest claude_layout wt_real parent parent_real
+  local role=$1 src dest claude_skills claude_dest claude_layout parent
   [ -n "$role" ] || return 0
   [ "$KIND" != secondmate ] || return 0
   src="$FM_ROOT/.agents/skills/$role"
@@ -1118,27 +1118,15 @@ inject_role_skill() {
   claude_dest="$claude_skills/$role"
   claude_layout=mirror
 
-  wt_real=$(cd "$WT" 2>/dev/null && pwd -P) \
-    || { echo "error: could not resolve role skill worktree: $WT" >&2; return 1; }
   for parent in "$WT/.agents" "$WT/.agents/skills" "$WT/.claude"; do
-    if [ -e "$parent" ] || [ -L "$parent" ]; then
-      parent_real=$(cd "$parent" 2>/dev/null && pwd -P) \
-        || { echo "error: could not resolve role skill parent: $parent" >&2; return 1; }
-      case "$parent_real" in
-        "$wt_real"|"$wt_real"/*) ;;
-        *) echo "error: role skill parent escapes worktree: $parent -> $parent_real" >&2; return 1 ;;
-      esac
-    fi
+    [ ! -L "$parent" ] \
+      || { echo "error: role skill parent must not be a symlink: $parent" >&2; return 1; }
   done
   mkdir -p "$WT/.agents/skills" \
     || { echo "error: could not create role skill directory in $WT" >&2; return 1; }
   for parent in "$WT/.agents" "$WT/.agents/skills"; do
-    parent_real=$(cd "$parent" 2>/dev/null && pwd -P) \
-      || { echo "error: could not resolve role skill parent: $parent" >&2; return 1; }
-    case "$parent_real" in
-      "$wt_real"|"$wt_real"/*) ;;
-      *) echo "error: role skill parent escapes worktree: $parent -> $parent_real" >&2; return 1 ;;
-    esac
+    [ ! -L "$parent" ] \
+      || { echo "error: role skill parent must not be a symlink: $parent" >&2; return 1; }
   done
 
   if [ -e "$dest" ] || [ -L "$dest" ]; then
@@ -1172,6 +1160,8 @@ inject_role_skill() {
     mirror)
       mkdir -p "$WT/.claude" \
         || { echo "error: could not create Claude skill directory in $WT" >&2; return 1; }
+      [ ! -L "$WT/.claude" ] \
+        || { echo "error: role skill parent must not be a symlink: $WT/.claude" >&2; return 1; }
       exclude_path ".claude/skills" || return 1
       ln -s "../.agents/skills" "$claude_skills" \
         || { echo "error: could not create Claude skills mirror at $claude_skills" >&2; return 1; }
