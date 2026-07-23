@@ -217,11 +217,108 @@ test_role_exclusion_failure_stops_before_linking() {
   pass "role exclusion failure stops before linking"
 }
 
+test_existing_dangling_claude_mirror_is_accepted() {
+  local rec id out status claude_skills
+  id=role-dangling-mirror-z7
+  rec=$(make_spawn_case role-dangling-mirror claude "$id")
+  read_case_record "$rec"
+  mkdir -p "$WT_DIR/.claude"
+  claude_skills="$WT_DIR/.claude/skills"
+  ln -s "../.agents/skills" "$claude_skills"
+  [ ! -e "$claude_skills" ] || fail "Claude skills fixture should start dangling"
+
+  status=0
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --role review-crew) || status=$?
+  expect_code 0 "$status" "correct dangling .claude/skills mirror should succeed"
+  assert_contains "$out" "spawned $id" "dangling mirror spawn did not report success"
+  [ "$(readlink "$claude_skills")" = "../.agents/skills" ] \
+    || fail "correct existing Claude skills mirror was replaced"
+  assert_present "$claude_skills/review-crew/SKILL.md" \
+    "correct existing Claude skills mirror does not resolve the injected role"
+  assert_grep "role=review-crew" "$HOME_DIR/state/$id.meta" \
+    "successful dangling mirror spawn did not record role="
+  pass "correct dangling Claude skills mirror is accepted"
+}
+
+test_agents_parent_escape_fails_without_outside_modification() {
+  local rec id out status outside before after
+  id=role-agents-escape-z8
+  rec=$(make_spawn_case role-agents-escape claude "$id")
+  read_case_record "$rec"
+  outside="$TMP_ROOT/role-agents-escape-outside"
+  mkdir -p "$outside"
+  printf 'outside sentinel\n' > "$outside/sentinel"
+  before=$(git hash-object "$outside/sentinel")
+  ln -s "$outside" "$WT_DIR/.agents"
+
+  status=0
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --role review-crew) || status=$?
+  expect_code 1 "$status" "escaping .agents parent should fail"
+  assert_contains "$out" "role skill parent escapes worktree: $WT_DIR/.agents" \
+    "escaping .agents error should identify the unsafe parent"
+  after=$(git hash-object "$outside/sentinel")
+  [ "$after" = "$before" ] || fail "escaping .agents target sentinel was modified"
+  assert_absent "$outside/skills" "escaping .agents target gained an injected skills directory"
+  assert_absent "$HOME_DIR/state/$id.meta" "escaping .agents spawn should not write meta"
+  pass "escaping .agents parent fails without outside modification"
+}
+
+test_agents_skills_parent_escape_fails_without_outside_modification() {
+  local rec id out status outside before after
+  id=role-agents-skills-escape-z9
+  rec=$(make_spawn_case role-agents-skills-escape claude "$id")
+  read_case_record "$rec"
+  outside="$TMP_ROOT/role-agents-skills-escape-outside"
+  mkdir -p "$outside" "$WT_DIR/.agents"
+  printf 'outside sentinel\n' > "$outside/sentinel"
+  before=$(git hash-object "$outside/sentinel")
+  ln -s "$outside" "$WT_DIR/.agents/skills"
+
+  status=0
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --role review-crew) || status=$?
+  expect_code 1 "$status" "escaping .agents/skills parent should fail"
+  assert_contains "$out" "role skill parent escapes worktree: $WT_DIR/.agents/skills" \
+    "escaping .agents/skills error should identify the unsafe parent"
+  after=$(git hash-object "$outside/sentinel")
+  [ "$after" = "$before" ] || fail "escaping .agents/skills target sentinel was modified"
+  assert_absent "$outside/review-crew" "escaping .agents/skills target gained an injected role"
+  assert_absent "$HOME_DIR/state/$id.meta" "escaping .agents/skills spawn should not write meta"
+  pass "escaping .agents/skills parent fails without outside modification"
+}
+
+test_claude_parent_escape_fails_without_outside_modification() {
+  local rec id out status outside before after
+  id=role-claude-escape-z10
+  rec=$(make_spawn_case role-claude-escape claude "$id")
+  read_case_record "$rec"
+  outside="$TMP_ROOT/role-claude-escape-outside"
+  mkdir -p "$outside"
+  printf 'outside sentinel\n' > "$outside/sentinel"
+  before=$(git hash-object "$outside/sentinel")
+  ln -s "$outside" "$WT_DIR/.claude"
+
+  status=0
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --role review-crew) || status=$?
+  expect_code 1 "$status" "escaping .claude parent should fail"
+  assert_contains "$out" "role skill parent escapes worktree: $WT_DIR/.claude" \
+    "escaping .claude error should identify the unsafe parent"
+  after=$(git hash-object "$outside/sentinel")
+  [ "$after" = "$before" ] || fail "escaping .claude target sentinel was modified"
+  assert_absent "$outside/skills" "escaping .claude target gained a skills path"
+  assert_absent "$WT_DIR/.agents" "escaping .claude should fail before role directory creation"
+  assert_absent "$HOME_DIR/state/$id.meta" "escaping .claude spawn should not write meta"
+  pass "escaping .claude parent fails without outside modification"
+}
+
 test_role_tagged_spawn_injects_excluded_skill
 test_role_tag_rejects_unknown_role
 test_role_not_inferred_from_task_id
 test_role_skill_directory_collision_fails_closed
 test_unrelated_claude_skills_symlink_fails_closed
 test_role_exclusion_failure_stops_before_linking
+test_existing_dangling_claude_mirror_is_accepted
+test_agents_parent_escape_fails_without_outside_modification
+test_agents_skills_parent_escape_fails_without_outside_modification
+test_claude_parent_escape_fails_without_outside_modification
 
 echo "# all fm-spawn-role-skill tests passed"
