@@ -129,11 +129,21 @@ test_classifier_primitives() {
   [ "$(last_status_line "$state/x.status")" = "done: b" ] || fail "last_status_line did not return the last non-blank line"
   status_is_captain_relevant "done: b" || fail "done: not recognized as captain-relevant"
   status_is_captain_relevant "working: b" && fail "working: wrongly recognized as captain-relevant"
+  # Free-text tokens in a nonterminal working: line must not promote it to captain-relevant
+  # (AFK idle stall: "working: rebased onto merged #76" used to match the free-text "merged" token).
+  status_is_captain_relevant "working: rebased onto merged #76" && \
+    fail "working: line with free-text 'merged' wrongly recognized as captain-relevant"
+  status_is_captain_relevant "paused: waiting on the merged PR" && \
+    fail "paused: line with free-text 'merged' wrongly recognized as captain-relevant"
+  status_is_captain_relevant "merged" || fail "bare legacy 'merged' free-text token not recognized"
+  status_is_captain_relevant "PR ready" || fail "bare legacy 'PR ready' free-text token not recognized"
   [ "$(window_to_task "sess:fm-fix-login-k3")" = "fix-login-k3" ] || fail "window_to_task did not strip session+fm- prefix"
   fm_write_meta "$state/herdr-task.meta" "window=default:w1:p2" "backend=herdr"
   [ "$(window_to_task "default:w1:p2" "$state")" = "herdr-task" ] || fail "window_to_task did not resolve opaque backend target through metadata"
   FM_CAPTAIN_RE='custom-verb:' status_is_captain_relevant "custom-verb: x" || fail "FM_CAPTAIN_RE override not honored"
   FM_CAPTAIN_RE='custom-verb:' status_is_captain_relevant "done: x" && fail "FM_CAPTAIN_RE override did not replace the default verb set"
+  FM_CAPTAIN_RE='working:' status_is_captain_relevant "working: x" || fail "FM_CAPTAIN_RE override did not permit an explicitly configured working verb"
+  FM_CAPTAIN_RE='paused:' status_is_captain_relevant "paused: x" || fail "FM_CAPTAIN_RE override did not permit an explicitly configured paused verb"
   pass "classifier primitives: last line, captain-relevance, window->task, FM_CAPTAIN_RE override"
 }
 
