@@ -34,7 +34,7 @@ Hard rules, in priority order:
    `bin/fm-teardown.sh` enforces this; never bypass it with `--force` unless the captain explicitly said to discard the work.
    Three ways work counts as "landed": `HEAD` reachable from any remote-tracking branch (a fork counts, so an upstream-contribution PR pushed to a fork satisfies this in any mode); for a normal ship task, its PR merged with a head that contains the local work, or its content already present in the up-to-date default branch; for `local-only` ship tasks with no remote, merged into the local default branch.
    Uncommitted changes are never landed.
-   The scout carve-out: a scout task's worktree is declared scratch from the start - its deliverable is the report, and teardown lets the worktree go once that report exists (section 7).
+   The scout carve-out: a scout task's worktree is declared scratch from the start - its deliverables are the report and a completed unresolved-decision inventory, after which teardown lets the worktree go (section 7).
    The full PR-containment mechanics and the `pr=` discovery fallback are section 7's ship-teardown detail, not restated here.
 4. **Crewmates never address the captain.**
    All crewmate communication flows through you.
@@ -687,8 +687,10 @@ With `--force`, teardown is the explicit discard path for child windows, child w
 A scout task follows Intake, Spawn, and Supervise exactly as above - scaffold the brief with `bin/fm-brief.sh <id> <repo> --scout`, spawn with `--scout` - then diverges after the work:
 
 - There is no Validate or PR-ready stage. When the crewmate's status says `done`, read `data/<id>/report.md`.
+- Load `decision-hold-lifecycle`, inventory the complete report and any visual review, and run `bin/fm-decision-hold.sh complete` with every unresolved decision key or with `--none`.
 - Relay the findings to the captain: plain chat for a focused answer, lavish-axi when the report has structure worth a visual (multiple findings, options, a plan).
-- Tear down immediately - no merge gate. `bin/fm-teardown.sh` allows a scout worktree's scratch commits and dirty files once the report exists; if the report is missing, it refuses, because the findings are the work product.
+- Tear down immediately after the decision-completion gate - no merge gate.
+  `bin/fm-teardown.sh` allows a scout worktree's scratch commits and dirty files once the report and decision inventory are verified; if either is missing, it refuses.
 - Record it in Done with the report path instead of a PR link using `tasks-axi done` when the default tasks-axi backend is active and compatible, otherwise hand-edit `data/backlog.md` and keep Done to the 10 most recent, then re-evaluate the queue and dispatch only queued work whose blockers are gone and whose time/date gate, if any, has arrived.
 
 **Promotion.** When a scout's findings reveal shippable work (a reproduced bug with a clear fix) and the captain wants it shipped, promote the task in place instead of respawning: run `bin/fm-promote.sh <id>` (flips `kind=` to ship in meta, restoring teardown's full protection), then from an active firstmate session send the crewmate its ship instructions with `FM_HOME=<this-firstmate-home> bin/fm-send.sh` unless `FM_HOME` is already set to the active firstmate home - inventory scratch state, reset to a clean default-branch base, carry over only intended fix changes, create branch `fm/<id>`, implement, and report `done` according to the project's delivery mode.
@@ -747,7 +749,7 @@ bin/fm-watch-arm.sh                 # verified arm wrapper used by harness proto
 bin/fm-watch-arm.sh --restart       # home-scoped forced restart; never a broad pkill
 bin/fm-watch-checkpoint.sh          # bounded foreground watcher checkpoint for Codex-style protocols
 bin/fm-watch.sh                     # the watcher itself; exits with: signal|stale|check|heartbeat
-bin/fm-wake-drain.sh                # drain queued wake records at turn start; asserts guard after draining
+bin/fm-wake-drain.sh                # drain queued wake records, print bounded wake-event annotations, then assert the guard
 bin/fm-crew-state.sh <id>           # one-line current-state read; reconciles matching run-step, pane, and status log
 bin/fm-fleet-view.sh                # read-only Markdown whole-fleet view rendered from the structured snapshot
 ```
@@ -755,8 +757,9 @@ bin/fm-fleet-view.sh                # read-only Markdown whole-fleet view render
 On wake, in order of cheapness:
 
 1. Read the reason line and drain queued wake records with `bin/fm-wake-drain.sh`.
-2. `signal:` read the listed status files first; a wake lists every signal that landed within the coalescing grace window (e.g. a status write plus the same turn's turn-end marker), and each is ~30 tokens and usually sufficient.
-   A status line is the wake *event*, not the crewmate's current state; when you need the live state - especially to confirm a `needs-decision`/`blocked`/`paused` status is still real and not already resolved-and-resumed - read it with `bin/fm-crew-state.sh <id>`, which reconciles the authoritative run-step over the possibly-stale log line, and never `tail` the status log as the current-state source.
+2. `signal:` consume the drain's matching `wake annotation:` lines first; they are bounded best-effort status context printed after raw queue consumption, and a turn-ended annotation is explicitly historical rather than necessarily the triggering event.
+   Read a listed status file only when its annotation is absent or omitted, or when older wake-event history is needed.
+   A status line and annotation are wake *events*, not the crewmate's current state; when you need the live state - especially to confirm a `needs-decision`/`blocked`/`paused` status is still real and not already resolved-and-resumed - read it with `bin/fm-crew-state.sh <id>`, which reconciles the authoritative run-step over the possibly-stale log line, and never `tail` the status log as the current-state source.
 3. `stale:` the crewmate stopped without reporting; peek the pane (`bin/fm-peek.sh <window>`) to diagnose.
    If the stale reason includes `demand-deep-inspection`, inspect the pane, `bin/fm-crew-state.sh <id>`, and the validation logs before resuming supervision.
    If the pane is waiting, looping, confused, or unresponsive, load `stuck-crewmate-recovery`.

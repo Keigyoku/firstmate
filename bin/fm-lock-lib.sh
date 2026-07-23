@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Shared "is this git lock file provably abandoned?" decision procedure.
 #
-# ONE owner for the staleness proof that fm-teardown.sh (a worktree index.lock)
-# and fm-fleet-sync.sh (a clone's .git/packed-refs.lock) both rely on: a lock is
-# provably stale iff ALL of the following hold -
+# ONE owner for the staleness proof that fm-teardown.sh relies on for a worktree
+# index.lock: a lock is provably stale iff ALL of the following hold -
 #   1. the lock file still exists;
 #   2. no live process holds the lock file open, and none holds a companion
 #      directory (the worktree, or the repo's .git dir) open as cwd or an fd -

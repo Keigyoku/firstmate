@@ -23,6 +23,7 @@ Fresh stale panes use the same current-state read before trusting the status log
 No-change heartbeats are also benign.
 Absorbed wakes advance their suppression markers, log to `state/.watch-triage.log`, and keep the watcher blocking without a queue record or LLM turn.
 After each drain, `fm-wake-drain.sh` runs the same liveness guard as the supervision scripts, so a lapsed watcher chain surfaces even on a turn that only drains and handles queued wakes.
+After raw queue consumption commits, the drain also prints bounded best-effort annotations from structurally validated signal status keys; each annotation is labeled as wake-event context rather than current state, and annotation failure cannot restore, hide, or fail consumed queue rows.
 Routine watcher polling, supervision no-ops, elapsed waiting time, and absorbed benign wakes stay silent.
 Each deliberate hold trades that silence for one bounded recheck per pause window, so a forgotten wait or decision cannot remain invisible indefinitely.
 Crew status files are append-only wake-event logs, not current-state fields.
@@ -189,7 +190,7 @@ The firstmate repo itself is the exception: its `.no-mistakes/` directory is loc
 PR-based task merges go through `bin/fm-pr-merge.sh`, which records `pr=` and any available `pr_head=` through `bin/fm-pr-check.sh` before calling `gh-axi pr merge`.
 The helper requires a full `https://github.com/<owner>/<repo>/pull/<n>` URL, invokes `gh-axi pr merge <n> --repo <owner>/<repo>`, defaults to `--squash`, preserves explicit merge-method flags, and rejects malformed URLs or repo override flags before recording merge state.
 Teardown is fail-closed for ship worktrees: dirty worktrees refuse, and committed work must be landed before the worktree is returned.
-If a git `index.lock` blocks safety inspection or `treehouse return`, teardown waits, retries, and only removes the lock when `bin/fm-teardown.sh` can prove it stale; otherwise it leaves the lock and state intact and fails closed.
+If a git `index.lock` blocks safety inspection or `treehouse return`, teardown waits, retries, and only removes the lock when `bin/fm-lock-lib.sh` can prove it stale; otherwise it leaves the lock and state intact and fails closed.
 When treehouse returns Git's "Another git process seems to be running" lock message, teardown makes one bounded retry without deleting the lock before falling back to the same provably-stale cleanup rules.
 Landed work is accepted when `HEAD` is reachable from any remote-tracking branch, when a merged PR's GitHub head contains the current local work, or when the worktree content is already present in the freshly fetched default branch.
 PR-head containment covers an exact PR head match, a local `HEAD` that is an ancestor of the PR head, or unpushed local patches whose patch IDs appear in the PR head after no-mistakes replayed the branch.

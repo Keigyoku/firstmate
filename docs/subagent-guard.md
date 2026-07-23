@@ -350,7 +350,7 @@ Run:
 
 ```sh
 bash -n bin/fm-subagent-pretool-check.sh
-bin/fm-lint.sh
+shellcheck bin/*.sh bin/backends/*.sh tests/*.sh
 tests/fm-subagent-pretool-check.test.sh
 ```
 
