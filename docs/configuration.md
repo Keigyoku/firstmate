@@ -181,7 +181,39 @@ The shell scripts do not match those rules; firstmate chooses the best matching 
 When the file exists, `fm-spawn.sh` enforces that contract by refusing crewmate and scout spawns that lack an explicit harness (`--harness`, a positional adapter, or a raw launch command).
 Batch spawns satisfy the same requirement with a shared `--harness`.
 Secondmate spawns are exempt and still resolve through `config/secondmate-harness` and its optional model and effort tokens.
-The canonical schema, array `use` form, `select` strategies, and quota-balanced fallback contract live in `AGENTS.md` section 4.
+
+The canonical schema is:
+
+```json
+{
+  "rules": [
+    {
+      "when": "<natural-language condition describing a kind of task>",
+      "use": [
+        {
+          "harness": "<adapter>",
+          "model": "<optional model>",
+          "effort": "<optional effort>"
+        }
+      ],
+      "select": "<optional strategy>",
+      "why": "<optional rationale that helps firstmate choose>"
+    }
+  ],
+  "default": {
+    "harness": "<adapter>",
+    "model": "<optional model>",
+    "effort": "<optional effort>"
+  }
+}
+```
+
+Per rule, `when` and `use` are required.
+`use` may be one profile object or a non-empty ordered array of profile objects, and every profile requires `harness`.
+`model`, `effort`, `why`, `select`, and `default` are optional.
+An omitted model or effort uses the selected harness's default for that axis.
+`select` currently accepts only `quota-balanced`; when it is absent, the first array element or sole object is selected.
+`bin/fm-dispatch-select.sh` owns the deterministic quota-balanced selection and fallback mechanics.
 See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a starting point to copy into local `config/crew-dispatch.json`.
 When the file exists, bootstrap validates it with `jq`.
 Valid files produce a `CREW_DISPATCH: active config/crew-dispatch.json` block that lists each rule and prints `default:` when present.
