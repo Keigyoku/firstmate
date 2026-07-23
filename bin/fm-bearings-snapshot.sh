@@ -173,15 +173,21 @@ if [ -x "$SCRIPT_DIR/fm-afk-return.sh" ]; then
 fi
 
 NOW=${FM_BEARINGS_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
-if [ "$ALL_LANDED" = 1 ] || [ "$ALL_SECONDMATES" = 1 ]; then
-  if [ "$ALL_LANDED" = 1 ]; then
-    SNAP=$(FM_SNAPSHOT_NOW="$NOW" FM_SNAPSHOT_SECONDMATES=0 FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME=0 "$FLEET" --json) || exit $?
-  else
-    SNAP=$(FM_SNAPSHOT_NOW="$NOW" FM_SNAPSHOT_SECONDMATES=0 "$FLEET" --json) || exit $?
+SNAP=$(
+  export FM_SNAPSHOT_NOW="$NOW"
+  if [ "$ALL_SECONDMATES" = 1 ] || [ "$ALL_LANDED" = 1 ] || \
+    [ "$ALL_IN_FLIGHT" = 1 ] || [ "$ALL_DECISIONS" = 1 ] || \
+    [ "$ALL_QUEUED" = 1 ] || [ "$ALL_UNHEALTHY" = 1 ]; then
+    export FM_SNAPSHOT_SECONDMATES=0
   fi
-else
-  SNAP=$(FM_SNAPSHOT_NOW="$NOW" "$FLEET" --json) || exit $?
-fi
+  [ "$ALL_LANDED" = 1 ] && export FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME=0
+  if [ "$ALL_IN_FLIGHT" = 1 ] || [ "$ALL_UNHEALTHY" = 1 ]; then
+    export FM_SNAPSHOT_SECONDMATE_CHILDREN=0
+  fi
+  [ "$ALL_QUEUED" = 1 ] && export FM_SNAPSHOT_SECONDMATE_QUEUED=0
+  [ "$ALL_DECISIONS" = 1 ] && export FM_SNAPSHOT_SECONDMATE_DECISIONS=0
+  "$FLEET" --json
+) || exit $?
 HOME_LABEL=$(printf '%s' "$SNAP" | jq -er '.fm_home | strings | split("/") | (.[-2:] | join("/"))') \
   || { echo "fm-bearings-snapshot: invalid canonical snapshot" >&2; exit 1; }
 
@@ -382,8 +388,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
           reason:(.current.reason // "-")} ]) as $secondmates_all
   | ([ .tasks[]
        | select(.kind != "secondmate")
-       | select(.backlog.current_role != "program")
-       | select(.backlog.current_role != "held" or .current_state.state == "working")
+       | select(.current_state.state == "working")
+       | select(.backlog == null or .backlog.state == "in_flight")
        | {id, kind,
         state: .current_state.state,
         doing: ((.current_state.detail // "") as $d
@@ -509,6 +515,9 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         (if $snap.secondmate_current.registry.available == false then {surface:("secondmate registry unavailable: " + ($snap.secondmate_current.registry.reason // "read failed")), reveal:"inspect data/secondmates.md"} else empty end),
         (([($snap.secondmate_current.records // [])[] | select(.parent_event.activity_scan.input_truncated == true or .parent_event.activity_scan.retained_truncated == true)] | length) as $n | if $n > 0 then {surface:("secondmate parent activity evidence truncated for \($n) record(s)"), reveal:"raise FM_SNAPSHOT_PARENT_ACTIVITY_LINES, FM_SNAPSHOT_PARENT_ACTIVITY_BYTES, or FM_SNAPSHOT_PARENT_ACTIVITIES"} else empty end),
         (([($snap.secondmate_current.records // [])[] | select(.parent_event.activity_scan.available == false)] | length) as $n | if $n > 0 then {surface:("secondmate parent activity evidence unavailable for \($n) record(s)"), reveal:"inspect the parent status logs"} else empty end),
+        (($snap.secondmate_current.records // [])[] as $mate
+         | $mate.omitted[]?
+         | {surface:("secondmate \($mate.id) " + .surface),reveal:.reveal}),
         (if $all_decisions == 0 and ($decisions_all | length) > $decisions_n then {surface:("decisions_open showing \($decisions_n) of \($decisions_all | length)"), reveal:"--all-decisions"} else empty end),
         (if $all_queued == 0 and ($gates_all | length) > $gates_n then {surface:("gates showing \($gates_n) of \($gates_all | length)"), reveal:"--all-queued"} else empty end),
         (if $all_reports == 0 and ($reports_all | length) > $reports_n then {surface:("reports showing \($reports_n) of \($reports_all | length)"), reveal:"--all-reports"} else empty end),

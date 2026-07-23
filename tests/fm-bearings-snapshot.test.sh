@@ -261,6 +261,39 @@ test_report_pointers_surface() {
   pass "current report pointers surface"
 }
 
+test_underway_only_includes_working_in_flight_tasks() {
+  local home fakebin json state
+  home=$(make_home underway-state); write_fixture "$home"
+  fakebin=$(make_fakebin "$home")
+  for state in failed parked queued; do
+    mkdir -p "$home/projects/$state-wt"
+    fm_write_meta "$home/state/$state-task.meta" \
+      "window=firstmate:fm-$state-task" \
+      "worktree=$home/projects/$state-wt" \
+      "project=firstmate" \
+      "harness=codex" \
+      "kind=ship" \
+      "mode=no-mistakes"
+  done
+  printf 'failed: validation failed\n' > "$home/state/failed-task.status"
+  printf 'needs-decision: choose a rollout\n' > "$home/state/parked-task.status"
+  printf 'working: queued item should stay queued\n' > "$home/state/queued-task.status"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] ship-task - Ship the thing (repo: firstmate) (kind: ship)
+
+## Queued
+- [ ] queued-task - Queued task with retained metadata (repo: firstmate) (kind: ship)
+
+## Done
+EOF
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    ([.in_flight[].id] == ["ship-task"])
+  ' >/dev/null || fail "Underway must contain only working tasks in the fork in-flight backlog role: $json"
+  pass "Underway excludes terminal, parked, and queued retained metadata"
+}
+
 test_superseded_queued_item_dropped_by_default() {
   local home fakebin json
   home=$(make_home superseded); write_fixture "$home"
@@ -334,7 +367,7 @@ write_large_fixture() {  # <home> <count>
   i=1
   while [ "$i" -le "$count" ]; do
     id="dead-$i"
-    mkdir -p "$home/projects/$id" "$home/data/$id"
+    mkdir -p "$home/projects/$id" "$home/projects/work-$i" "$home/projects/decision-$i" "$home/data/$id"
     printf '# Report\n' > "$home/data/$id/report.md"
     printf -- '- [ ] gate-%s - Gate %s blocked-by: task-%s (repo: repo-%s) (kind: ship)\n' "$i" "$i" "$i" "$i" >> "$home/data/backlog.md"
     fm_write_meta "$home/state/$id.meta" \
@@ -345,7 +378,23 @@ write_large_fixture() {  # <home> <count>
       "kind=scout" \
       "mode=scout" \
       "pr=https://github.com/acme/repo-$i/pull/$i"
-    printf 'needs-decision [key=q%s]: choose %s\n' "$i" "$i" > "$home/state/$id.status"
+    printf 'failed: endpoint unavailable\n' > "$home/state/$id.status"
+    fm_write_meta "$home/state/work-$i.meta" \
+      "window=firstmate:fm-work-$i" \
+      "worktree=$home/projects/work-$i" \
+      "project=repo-$i" \
+      "harness=codex" \
+      "kind=ship" \
+      "mode=no-mistakes"
+    printf 'working: progressing item %s\n' "$i" > "$home/state/work-$i.status"
+    fm_write_meta "$home/state/decision-$i.meta" \
+      "window=firstmate:fm-decision-$i" \
+      "worktree=$home/projects/decision-$i" \
+      "project=repo-$i" \
+      "harness=codex" \
+      "kind=ship" \
+      "mode=no-mistakes"
+    printf 'needs-decision [key=q%s]: choose %s\n' "$i" "$i" > "$home/state/decision-$i.status"
     i=$((i + 1))
   done
 }
@@ -376,6 +425,70 @@ test_section_caps_and_expansion_flags() {
     and (.reports|length) == 5 and (.recorded_prs|length) == 5 and (.unhealthy_endpoints|length) == 5
   ' >/dev/null || fail "section expansion flags did not reveal full sets: $expanded"
   pass "all fleet-sized sections are capped with counted opt-in expansion"
+}
+
+test_secondmate_caps_reach_omitted_and_all_flags_expand() {
+  local home mate fakebin json expanded id
+  home=$(make_home secondmate-caps)
+  mate="$TMP_ROOT/secondmate-caps-home"
+  mkdir -p "$mate/state" "$mate/data" "$mate/config" "$mate/projects" "$mate/bin"
+  printf 'mate-caps\n' > "$mate/.fm-secondmate-home"
+  printf '# Firstmate\n' > "$mate/AGENTS.md"
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+- [ ] active-one - Active one (repo: alpha) (kind: ship)
+- [ ] active-two - Active two (repo: alpha) (kind: ship)
+
+## Queued
+- [ ] gate-one - Gate one blocked-by: active-one - waiting (repo: alpha) (kind: ship)
+- [ ] gate-two - Gate two blocked-by: active-two - waiting (repo: alpha) (kind: ship)
+
+## Done
+EOF
+  for id in active-one active-two; do
+    mkdir -p "$mate/projects/$id"
+    fm_write_meta "$mate/state/$id.meta" \
+      "window=firstmate:fm-$id" "worktree=$mate/projects/$id" \
+      "project=alpha" "harness=codex" "kind=ship" "mode=ship"
+    printf 'working: progressing %s\n' "$id" > "$mate/state/$id.status"
+  done
+  for id in decision-one decision-two; do
+    mkdir -p "$mate/projects/$id"
+    fm_write_meta "$mate/state/$id.meta" \
+      "window=firstmate:fm-$id" "worktree=$mate/projects/$id" \
+      "project=alpha" "harness=codex" "kind=ship" "mode=ship"
+    printf 'needs-decision: choose for %s\n' "$id" > "$mate/state/$id.status"
+  done
+  for id in dead-one dead-two; do
+    mkdir -p "$mate/projects/$id"
+    fm_write_meta "$mate/state/$id.meta" \
+      "window=firstmate:fm-$id" "worktree=$mate/projects/$id" \
+      "project=alpha" "harness=codex" "kind=ship" "mode=ship"
+    printf 'failed: endpoint unavailable\n' > "$mate/state/$id.status"
+  done
+  printf '%s\n' "- mate-caps - delivery (home: $mate; scope: alpha; projects: alpha; added 2026-07-01)" \
+    > "$home/data/secondmates.md"
+  fakebin=$(make_fakebin "$home")
+  json=$(FM_SNAPSHOT_SECONDMATE_CHILDREN=1 FM_SNAPSHOT_SECONDMATE_QUEUED=1 \
+    FM_SNAPSHOT_SECONDMATE_DECISIONS=1 run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    ([.omitted[] | select(.surface == "secondmate mate-caps active_children showing 1 of 2" and .reveal == "--all-in-flight")] | length) == 1
+      and ([.omitted[] | select(.surface == "secondmate mate-caps decisions_open showing 1 of 2" and .reveal == "--all-decisions")] | length) == 1
+      and ([.omitted[] | select(.surface == "secondmate mate-caps holds showing 1 of 2" and .reveal == "--all-queued")] | length) == 1
+      and ([.omitted[] | select(.surface == "secondmate mate-caps queued showing 1 of 2" and .reveal == "--all-queued")] | length) == 1
+      and ([.omitted[] | select(.surface == "secondmate mate-caps endpoints showing 1 of 6" and .reveal == "--all-unhealthy")] | length) == 1
+  ' >/dev/null || fail "Bearings did not surface per-home snapshot truncation: $json"
+  expanded=$(FM_SNAPSHOT_SECONDMATE_CHILDREN=1 FM_SNAPSHOT_SECONDMATE_QUEUED=1 \
+    FM_SNAPSHOT_SECONDMATE_DECISIONS=1 run "$home" "$fakebin" --json \
+      --all-in-flight --all-decisions --all-queued --all-unhealthy)
+  printf '%s' "$expanded" | jq -e '
+    (.in_flight[] | select(.id == "mate-caps") | .doing | contains("active-one") and contains("active-two"))
+      and ([.decisions_open[] | select(.owner == "mate-caps")] | length) == 2
+      and ([.gates[] | select(.owner == "mate-caps")] | length) == 2
+      and ([.unhealthy_endpoints[] | select(.id == "mate-caps/dead-one" or .id == "mate-caps/dead-two")] | length) == 2
+      and ([.omitted[] | select(.surface | startswith("secondmate mate-caps "))] | length) == 0
+  ' >/dev/null || fail "Bearings all flags did not lift their secondmate snapshot caps: $expanded"
+  pass "Bearings surfaces per-home truncation and expands secondmate data with all flags"
 }
 
 test_pr_repository_cap_and_expansion() {
@@ -477,11 +590,13 @@ test_open_decision_surfaces_end_to_end
 test_decision_hold_captain_hold_is_stubbed
 test_gates_use_string_blocked_by
 test_report_pointers_surface
+test_underway_only_includes_working_in_flight_tasks
 test_superseded_queued_item_dropped_by_default
 test_include_prs_is_the_only_fetch_path
 test_partial_github_failure_degrades
 test_perl_fallback_bounds_github_call
 test_section_caps_and_expansion_flags
+test_secondmate_caps_reach_omitted_and_all_flags_expand
 test_pr_repository_cap_and_expansion
 test_per_repository_pr_cap_is_disclosed
 test_projection_and_toon_fail_closed

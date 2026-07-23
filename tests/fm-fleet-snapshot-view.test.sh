@@ -362,6 +362,156 @@ EOF
   pass "snapshot parses tasks-axi rows and respects operational overrides"
 }
 
+test_bearings_schema_surfaces_are_emitted_from_real_fleet_data() {
+  local home mate fakebin out
+  home=$(make_home bearings-schema)
+  mate="$TMP_ROOT/bearings-schema-mate"
+  mkdir -p "$mate/state" "$mate/data" "$mate/config" "$mate/projects/child-worktree" "$mate/bin"
+  printf 'mate-one\n' > "$mate/.fm-secondmate-home"
+  printf '# Firstmate\n' > "$mate/AGENTS.md"
+  cat > "$home/data/backlog.md" <<EOF
+## In flight
+- [ ] main-worker - Main worker (repo: alpha) (kind: ship)
+- [ ] main-program - Main program (repo: alpha) (kind: program)
+- [ ] main-held - Main held (repo: alpha) (kind: captain) (hold: waiting on operator) (hold-kind: captain)
+
+## Queued
+- [ ] main-gate - Main gate blocked-by: done-dependency blocked-by: missing-dependency - waiting (repo: alpha) (kind: ship)
+
+## Done
+- [x] done-dependency - Dependency complete (repo: alpha) (kind: ship) (done 2026-07-20)
+EOF
+  fm_write_meta "$home/state/main-worker.meta" \
+    "window=firstmate:fm-main-worker" "worktree=$home/projects/main-worker" \
+    "project=alpha" "harness=codex" "kind=ship" "mode=ship"
+  mkdir -p "$home/projects/main-worker"
+  cat > "$mate/data/backlog.md" <<EOF
+## In flight
+- [ ] child-worker - Child worker (repo: alpha) (kind: ship)
+
+## Queued
+- [ ] child-gate - Child gate blocked-by: child-worker - waiting (repo: alpha) (kind: ship)
+
+## Done
+- [x] child-landed - Child landed local main (repo: alpha) (kind: ship) (done 2026-07-21)
+EOF
+  fm_write_meta "$mate/state/child-worker.meta" \
+    "window=firstmate:fm-child-worker-ship-task" "worktree=$mate/projects/child-worktree" \
+    "project=alpha" "harness=codex" "kind=ship" "mode=ship"
+  printf '%s\n' "- mate-one - delivery (home: $mate; scope: alpha; projects: alpha; added 2026-07-01)" > "$home/data/secondmates.md"
+  fakebin=$(make_fakebin "$home")
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e '
+    .main_inventory == {valid:true,reason:null,orphan_in_flight:[],unstructured_current_count:0}
+      and (.backlog.records[] | select(.id == "main-worker")
+           | .current_role == "worker" and .requires_child_metadata == true)
+      and (.backlog.records[] | select(.id == "main-program")
+           | .current_role == "program" and .requires_child_metadata == false)
+      and (.backlog.records[] | select(.id == "main-held")
+           | .current_role == "held" and .hold_reason == "waiting on operator"
+             and .hold_kind == "captain" and .captain_actionable == false)
+      and (.backlog.records[] | select(.id == "main-gate")
+           | .blocked_by_ids == ["done-dependency","missing-dependency"]
+             and .unresolved_blocker_ids == ["missing-dependency"]
+             and .captain_actionable == false)
+      and .secondmate_current.total == 1
+      and .secondmate_current.records[0].id == "mate-one"
+      and .secondmate_current.records[0].provenance.selected == "structured-home"
+      and .secondmate_current.records[0].current.state == "active_child_work"
+      and .secondmate_current.records[0].queued[0].unresolved_blocker_ids == ["child-worker"]
+      and .secondmate_landed.records[0].id == "child-landed"
+      and .secondmate_landed.records[0].home_id == "mate-one"
+  ' >/dev/null || fail "bearings companion schema surfaces must contain normalized main and secondmate data"
+  pass "fleet snapshot emits real normalized bearings companion schema surfaces"
+}
+
+test_secondmate_summary_caps_disclose_and_expand() {
+  local home fakebin out expanded id bound rc err
+  home=$(make_home secondmate-summary-caps)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] active-one - Active one (repo: alpha) (kind: ship)
+- [ ] active-two - Active two (repo: alpha) (kind: ship)
+
+## Queued
+- [ ] gate-one - Gate one blocked-by: active-one - waiting (repo: alpha) (kind: ship)
+- [ ] gate-two - Gate two blocked-by: active-two - waiting (repo: alpha) (kind: ship)
+
+## Done
+EOF
+  for id in active-one active-two; do
+    mkdir -p "$home/projects/$id"
+    fm_write_meta "$home/state/$id.meta" \
+      "window=firstmate:fm-$id-ship-task" "worktree=$home/projects/$id" \
+      "project=alpha" "harness=codex" "kind=ship" "mode=ship"
+    printf 'working: progressing %s\n' "$id" > "$home/state/$id.status"
+  done
+  for id in decision-one decision-two; do
+    mkdir -p "$home/projects/$id"
+    fm_write_meta "$home/state/$id.meta" \
+      "window=firstmate:fm-$id" "worktree=$home/projects/$id" \
+      "project=alpha" "harness=codex" "kind=ship" "mode=ship"
+    printf 'needs-decision: choose for %s\n' "$id" > "$home/state/$id.status"
+  done
+  fakebin=$(make_fakebin "$home")
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" \
+    FM_SNAPSHOT_SECONDMATE_CHILDREN=1 FM_SNAPSHOT_SECONDMATE_QUEUED=1 \
+    FM_SNAPSHOT_SECONDMATE_DECISIONS=1 "$SNAPSHOT" --secondmate-home-summary)
+  printf '%s' "$out" | jq -e '
+    (.active_children | length) == 1 and .counts.active_children == 2
+      and (.decisions_open | length) == 1 and .counts.decisions_open == 2
+      and (.holds | length) == 1 and .counts.holds == 2
+      and (.queued | length) == 1 and .counts.queued == 2
+      and (.endpoints | length) == 1 and .counts.endpoints == 4
+      and ([.omitted[] | select(.surface == "active_children showing 1 of 2" and .reveal == "--all-in-flight")] | length) == 1
+      and ([.omitted[] | select(.surface == "decisions_open showing 1 of 2" and .reveal == "--all-decisions")] | length) == 1
+      and ([.omitted[] | select(.surface == "holds showing 1 of 2" and .reveal == "--all-queued")] | length) == 1
+      and ([.omitted[] | select(.surface == "queued showing 1 of 2" and .reveal == "--all-queued")] | length) == 1
+      and ([.omitted[] | select(.surface == "endpoints showing 1 of 4" and .reveal == "--all-unhealthy")] | length) == 1
+  ' >/dev/null || fail "secondmate summary caps did not disclose every truncated surface: $out"
+  expanded=$(PATH="$fakebin:$PATH" FM_HOME="$home" \
+    FM_SNAPSHOT_SECONDMATE_CHILDREN=0 FM_SNAPSHOT_SECONDMATE_QUEUED=0 \
+    FM_SNAPSHOT_SECONDMATE_DECISIONS=0 "$SNAPSHOT" --secondmate-home-summary)
+  printf '%s' "$expanded" | jq -e '
+    (.active_children | length) == 2 and (.decisions_open | length) == 2
+      and (.holds | length) == 2 and (.queued | length) == 2
+      and (.endpoints | length) == 4 and (.omitted | length) == 0
+  ' >/dev/null || fail "zero bounds did not reveal complete secondmate summary surfaces: $expanded"
+  for bound in FM_SNAPSHOT_SECONDMATES FM_SNAPSHOT_SECONDMATE_CHILDREN \
+    FM_SNAPSHOT_SECONDMATE_QUEUED FM_SNAPSHOT_SECONDMATE_DECISIONS \
+    FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME
+  do
+    if err=$(env "$bound=-1" FM_HOME="$home" "$SNAPSHOT" --json 2>&1 >/dev/null); then
+      rc=0
+    else
+      rc=$?
+    fi
+    [ "$rc" -eq 2 ] || fail "$bound negative value must fail before jq"
+    assert_contains "$err" "$bound must be 0 or a canonical positive integer (0 means unbounded)" \
+      "$bound negative-value diagnostic was unclear"
+    if err=$(env "$bound=bad" FM_HOME="$home" "$SNAPSHOT" --json 2>&1 >/dev/null); then
+      rc=0
+    else
+      rc=$?
+    fi
+    [ "$rc" -eq 2 ] || fail "$bound nonnumeric value must fail before jq"
+    assert_contains "$err" "$bound must be 0 or a canonical positive integer (0 means unbounded)" \
+      "$bound nonnumeric-value diagnostic was unclear"
+    for invalid in '' 01
+    do
+      if err=$(env "$bound=$invalid" FM_HOME="$home" "$SNAPSHOT" --json 2>&1 >/dev/null); then
+        rc=0
+      else
+        rc=$?
+      fi
+      [ "$rc" -eq 2 ] || fail "$bound value '$invalid' must fail before jq"
+      assert_contains "$err" "$bound must be 0 or a canonical positive integer (0 means unbounded)" \
+        "$bound value '$invalid' diagnostic was unclear"
+    done
+  done
+  pass "secondmate summary caps disclose truncation, expand at zero, and validate canonical bounds"
+}
+
 test_view_renders_snapshot() {
   local home fakebin view
   home=$(make_home view)
@@ -409,5 +559,7 @@ test_fixture_snapshot_json
 test_event_hints_follow_reconciled_current_state
 test_scout_reports_include_teardown_reports
 test_backlog_tasks_axi_forms_and_overrides
+test_bearings_schema_surfaces_are_emitted_from_real_fleet_data
+test_secondmate_summary_caps_disclose_and_expand
 test_view_renders_snapshot
 test_view_renders_dead_secondmate_agent_status
