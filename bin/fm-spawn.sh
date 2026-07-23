@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout] [--dry-run] [--adopt-worktree [--adopt-worktree-path <path>] [--mode <mode>] [--yolo <on|off>]]
+# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--role <review-crew|smoke-crew|marketing-crew>] [--scout] [--dry-run] [--adopt-worktree [--adopt-worktree-path <path>] [--mode <mode>] [--yolo <on|off>]]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--dry-run] --secondmate
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
@@ -9,6 +9,12 @@
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
 #   from that harness's launch rather than guessed.
+#   --role <review-crew|smoke-crew|marketing-crew> is an explicit role-identity tag
+#   for crewmate/scout spawns only (never inferred from the task id). It injects a
+#   symlink of that firstmate role skill into the worktree under .agents/skills/
+#   (and a .claude/skills -> .agents/skills layout mirror when needed) so Claude and
+#   Grok project-skill discovery can resolve it in a product worktree, git-excludes
+#   the injected paths, and records role= in meta. Secondmate spawns reject --role.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   spawn. Without it, the script resolves FM_BACKEND, then config/backend, then
 #   runtime auto-detection (the runtime firstmate itself is executing inside -
@@ -100,7 +106,7 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-  sed -n '2,78p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,103p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in
@@ -130,6 +136,7 @@ HARNESS_ARG=
 MODEL=
 EFFORT=
 BACKEND_ARG=
+ROLE=
 ADOPT_WORKTREE=0
 ADOPT_WORKTREE_PATH=
 DRY_RUN=0
@@ -139,6 +146,7 @@ HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
 BACKEND_SET=0
+ROLE_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -151,6 +159,7 @@ for a in "$@"; do
       model) MODEL=$a; MODEL_SET=1 ;;
       effort) EFFORT=$a; EFFORT_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
+      role) ROLE=$a; ROLE_SET=1 ;;
       adopt-worktree-path) ADOPT_WORKTREE_PATH=$a ;;
       mode) MODE_OVERRIDE=$a ;;
       yolo) YOLO_OVERRIDE=$a ;;
@@ -172,6 +181,8 @@ for a in "$@"; do
     --effort=*) EFFORT=${a#--effort=}; EFFORT_SET=1 ;;
     --backend) want_value=backend ;;
     --backend=*) BACKEND_ARG=${a#--backend=}; BACKEND_SET=1 ;;
+    --role) want_value=role ;;
+    --role=*) ROLE=${a#--role=}; ROLE_SET=1 ;;
     --adopt-worktree-path) want_value=adopt-worktree-path ;;
     --adopt-worktree-path=*) ADOPT_WORKTREE_PATH=${a#--adopt-worktree-path=} ;;
     --mode) want_value=mode ;;
@@ -186,6 +197,15 @@ done
 [ "$MODEL_SET" -eq 0 ] || [ -n "$MODEL" ] || { echo "error: --model requires a non-empty value" >&2; exit 1; }
 [ "$EFFORT_SET" -eq 0 ] || [ -n "$EFFORT" ] || { echo "error: --effort requires a non-empty value" >&2; exit 1; }
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || { echo "error: --backend requires a non-empty value" >&2; exit 1; }
+[ "$ROLE_SET" -eq 0 ] || [ -n "$ROLE" ] || { echo "error: --role requires a non-empty value" >&2; exit 1; }
+case "$ROLE" in
+  ''|review-crew|smoke-crew|marketing-crew) ;;
+  *) echo "error: --role must be one of review-crew, smoke-crew, marketing-crew" >&2; exit 1 ;;
+esac
+if [ -n "$ROLE" ] && [ "$KIND" = secondmate ]; then
+  echo "error: --role applies only to crewmate ship or scout spawns, not --secondmate" >&2
+  exit 1
+fi
 [ -z "$ADOPT_WORKTREE_PATH" ] || [ "$ADOPT_WORKTREE" -eq 1 ] || { echo "error: --adopt-worktree-path requires --adopt-worktree" >&2; exit 1; }
 [ -z "$MODE_OVERRIDE" ] || [ "$ADOPT_WORKTREE" -eq 1 ] || { echo "error: --mode override requires --adopt-worktree" >&2; exit 1; }
 [ -z "$YOLO_OVERRIDE" ] || [ "$ADOPT_WORKTREE" -eq 1 ] || { echo "error: --yolo override requires --adopt-worktree" >&2; exit 1; }
@@ -294,6 +314,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
+  [ -z "$ROLE" ] || shared_args+=(--role "$ROLE")
   [ "$DRY_RUN" -eq 0 ] || shared_args+=(--dry-run)
   for pair in "${POS[@]}"; do
     case "$pair" in
@@ -545,10 +566,12 @@ effort_flag_for_harness() {
       ;;
     grok)
       # grok exposes both --effort and --reasoning-effort; firstmate's profile
-      # axis is the reasoning knob, and --reasoning-effort rejects max, so pass
-      # only its accepted shared vocabulary subset.
+      # axis is the reasoning knob. Docs list low|medium|high|xhigh|max as
+      # canonical tiers, but the active model (verified grok 0.2.111 / grok-4.5)
+      # only accepts high|medium|low at runtime - xhigh and max fail with
+      # "unknown effort level". Pass only the model-advertised subset.
       case "$effort" in
-        low|medium|high|xhigh) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
+        low|medium|high) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
       esac
       ;;
     pi)
@@ -1067,10 +1090,171 @@ STATE_REAL=$(cd "$STATE" && pwd -P)
 TURNEND="$STATE_REAL/$ID.turn-ended"
 exclude_path() {
   local rel=$1 EXCL
-  EXCL=$(git -C "$WT" rev-parse --git-path info/exclude 2>/dev/null || true)
-  [ -n "$EXCL" ] || return 0
-  mkdir -p "$(dirname "$EXCL")"
-  grep -qxF "$rel" "$EXCL" 2>/dev/null || echo "$rel" >> "$EXCL"
+  EXCL=$(git -C "$WT" rev-parse --git-path info/exclude 2>/dev/null) \
+    || { echo "error: could not resolve git exclude file for $WT" >&2; return 1; }
+  [ -n "$EXCL" ] \
+    || { echo "error: git returned an empty exclude path for $WT" >&2; return 1; }
+  mkdir -p "$(dirname "$EXCL")" \
+    || { echo "error: could not create git exclude directory for $WT" >&2; return 1; }
+  if ! grep -qxF "$rel" "$EXCL" 2>/dev/null; then
+    printf '%s\n' "$rel" >> "$EXCL" \
+      || { echo "error: could not exclude $rel in $WT" >&2; return 1; }
+  fi
+  grep -qxF "$rel" "$EXCL" 2>/dev/null \
+    || { echo "error: could not verify git exclusion for $rel in $WT" >&2; return 1; }
+}
+verify_excluded_path() {
+  local rel=$1
+  exclude_path "$rel" || return 1
+  git -C "$WT" check-ignore --no-index --quiet -- "$rel" \
+    || { echo "error: git exclusion is not effective for $rel in $WT" >&2; return 1; }
+}
+validate_role_parent() {
+  local parent=$1 wt_real=$2 parent_real
+  [ ! -L "$parent" ] \
+    || { echo "error: role skill parent must not be a symlink: $parent" >&2; return 1; }
+  if [ -e "$parent" ]; then
+    [ -d "$parent" ] \
+      || { echo "error: role skill parent must be a directory: $parent" >&2; return 1; }
+    parent_real=$(cd "$parent" 2>/dev/null && pwd -P) \
+      || { echo "error: could not resolve role skill parent: $parent" >&2; return 1; }
+    case "$parent_real" in
+      "$wt_real"|"$wt_real"/*) ;;
+      *) echo "error: role skill parent escapes worktree: $parent" >&2; return 1 ;;
+    esac
+  fi
+}
+rollback_role_skill_links() {
+  local created_dest=$1 dest=$2 src=$3 created_claude=$4 claude_dest=$5 claude_target=$6
+  if [ "$created_claude" -eq 1 ] && [ -L "$claude_dest" ] \
+    && [ "$(readlink "$claude_dest" 2>/dev/null)" = "$claude_target" ]; then
+    rm -f -- "$claude_dest" \
+      || echo "error: could not roll back role skill link at $claude_dest" >&2
+  fi
+  if [ "$created_dest" -eq 1 ] && [ -L "$dest" ] \
+    && [ "$(readlink "$dest" 2>/dev/null)" = "$src" ]; then
+    rm -f -- "$dest" \
+      || echo "error: could not roll back role skill link at $dest" >&2
+  fi
+}
+# Role-identity skill delivery (C3 Option 2): symlink the named firstmate role
+# skill into the crew worktree so Claude/Grok project-skill discovery can resolve
+# it outside the firstmate repo. Paths are git-excluded so they never enter a
+# product PR. Symlinks die with the worktree; no teardown change required.
+inject_role_skill() {
+  local role=$1 src dest claude_skills claude_dest claude_layout parent wt_real
+  local claude_rel claude_target claude_link_path created_dest=0 created_claude=0
+  [ -n "$role" ] || return 0
+  [ "$KIND" != secondmate ] || return 0
+  src="$FM_ROOT/.agents/skills/$role"
+  [ -f "$src/SKILL.md" ] || { echo "error: role skill not found: $src/SKILL.md" >&2; return 1; }
+  dest="$WT/.agents/skills/$role"
+  claude_skills="$WT/.claude/skills"
+  claude_dest="$claude_skills/$role"
+  claude_layout=mirror
+  claude_rel=.claude/skills
+  claude_target=../.agents/skills
+  claude_link_path=$claude_skills
+  wt_real=$(cd "$WT" 2>/dev/null && pwd -P) \
+    || { echo "error: could not resolve role skill worktree: $WT" >&2; return 1; }
+
+  for parent in "$WT/.agents" "$WT/.agents/skills" "$WT/.claude"; do
+    validate_role_parent "$parent" "$wt_real" || return 1
+  done
+  mkdir -p "$WT/.agents/skills" \
+    || { echo "error: could not create role skill directory in $WT" >&2; return 1; }
+  for parent in "$WT/.agents" "$WT/.agents/skills"; do
+    validate_role_parent "$parent" "$wt_real" || return 1
+  done
+
+  if [ -e "$dest" ] || [ -L "$dest" ]; then
+    if ! { [ -L "$dest" ] && [ "$(readlink "$dest" 2>/dev/null)" = "$src" ]; }; then
+      echo "error: role skill destination collision: $dest" >&2
+      return 1
+    fi
+  fi
+  if [ -L "$claude_skills" ]; then
+    [ "$(real_path_or_raw "$claude_skills")" = "$(real_path_or_raw "$WT/.agents/skills")" ] \
+      || { echo "error: $claude_skills symlink must resolve to $WT/.agents/skills" >&2; return 1; }
+    claude_layout=linked
+  elif [ -e "$claude_skills" ]; then
+    [ -d "$claude_skills" ] \
+      || { echo "error: Claude skills destination collision: $claude_skills" >&2; return 1; }
+    validate_role_parent "$claude_skills" "$wt_real" || return 1
+    claude_layout=directory
+    claude_rel=.claude/skills/$role
+    claude_target=$src
+    claude_link_path=$claude_dest
+    if [ -e "$claude_dest" ] || [ -L "$claude_dest" ]; then
+      if ! { [ -L "$claude_dest" ] && [ "$(readlink "$claude_dest" 2>/dev/null)" = "$src" ]; }; then
+        echo "error: role skill destination collision: $claude_dest" >&2
+        return 1
+      fi
+    fi
+  fi
+
+  verify_excluded_path ".agents/skills/$role" || return 1
+  verify_excluded_path "$claude_rel" || return 1
+  if [ ! -L "$dest" ]; then
+    ln -s "$src" "$dest" \
+      || { echo "error: could not link role skill at $dest" >&2; return 1; }
+    created_dest=1
+  fi
+  if ! { [ -L "$dest" ] && [ "$(readlink "$dest" 2>/dev/null)" = "$src" ]; }; then
+    echo "error: could not verify role skill link at $dest" >&2
+    rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_dest" "$claude_target"
+    return 1
+  fi
+
+  case "$claude_layout" in
+    linked) ;;
+    mirror)
+      mkdir -p "$WT/.claude" \
+        || {
+          echo "error: could not create Claude skill directory in $WT" >&2
+          rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_skills" "$claude_target"
+          return 1
+        }
+      if ! validate_role_parent "$WT/.claude" "$wt_real"; then
+        rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_skills" "$claude_target"
+        return 1
+      fi
+      ln -s "../.agents/skills" "$claude_skills" \
+        || {
+          echo "error: could not create Claude skills mirror at $claude_skills" >&2
+          rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_skills" "$claude_target"
+          return 1
+        }
+      created_claude=1
+      if ! { [ -L "$claude_skills" ] \
+        && [ "$(real_path_or_raw "$claude_skills")" = "$(real_path_or_raw "$WT/.agents/skills")" ]; }; then
+        echo "error: could not verify Claude skills mirror at $claude_skills" >&2
+        rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_skills" "$claude_target"
+        return 1
+      fi
+      ;;
+    directory)
+      if [ ! -L "$claude_dest" ]; then
+        ln -s "$src" "$claude_dest" \
+          || {
+            echo "error: could not link Claude role skill at $claude_dest" >&2
+            rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_dest" "$claude_target"
+            return 1
+          }
+        created_claude=1
+      fi
+      if ! { [ -L "$claude_dest" ] && [ "$(readlink "$claude_dest" 2>/dev/null)" = "$src" ]; }; then
+        echo "error: could not verify Claude role skill link at $claude_dest" >&2
+        rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_dest" "$claude_target"
+        return 1
+      fi
+      ;;
+  esac
+  if ! verify_excluded_path ".agents/skills/$role" || ! verify_excluded_path "$claude_rel"; then
+    rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" \
+      "$claude_link_path" "$claude_target"
+    return 1
+  fi
 }
 TURNEND_BACKUP_DIR=
 adopt_hook_backup() {
@@ -1095,6 +1279,10 @@ adopt_hook_backup() {
     printf 'absent\t%s\n' "$rel" >> "$TURNEND_BACKUP_DIR/manifest"
   fi
 }
+if [ -n "$ROLE" ]; then
+  inject_role_skill "$ROLE" || exit 1
+fi
+
 if [ "$KIND" != secondmate ]; then
   case "$HARNESS" in
     claude*)
@@ -1384,6 +1572,7 @@ META_WINDOW=$T
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
+  [ -z "$ROLE" ] || echo "role=$ROLE"
   # backend= is written only for a non-default (non-tmux) backend, so the
   # default path's meta stays byte-identical (absent backend= means tmux;
   # data/fm-backend-design-d7's P1 compatibility contract).

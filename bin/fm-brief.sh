@@ -6,10 +6,13 @@
 # description, acceptance criteria, and context, and may adjust other sections
 # when the task genuinely deviates (e.g. working an existing external PR instead
 # of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> [--scout] [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> [--scout] [--herdr-lab] [--role <review-crew|smoke-crew|marketing-crew>]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
+#   --role <review-crew|smoke-crew|marketing-crew> inserts a one-line role-identity
+#   load instruction into ship/scout briefs (matches fm-spawn --role). Not valid
+#   with --secondmate.
 #   --secondmate writes a persistent secondmate charter. The project list
 #   is cloned into the secondmate home, while the natural-language scope
 #   tells the main firstmate when to route work there; routine churn stays in its own home;
@@ -77,20 +80,47 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 KIND=ship
 HERDR_LAB=0
 NO_PROJECTS=0
+ROLE=
+ROLE_SET=0
 POS=()
+want_value=
 for a in "$@"; do
+  if [ -n "$want_value" ]; then
+    case "$a" in
+      --*) echo "error: --$want_value requires a value" >&2; exit 1 ;;
+    esac
+    case "$want_value" in
+      role) ROLE=$a; ROLE_SET=1 ;;
+      *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
+    esac
+    want_value=
+    continue
+  fi
   case "$a" in
     --scout) KIND=scout ;;
     --secondmate) KIND=secondmate ;;
     --herdr-lab) HERDR_LAB=1 ;;
     --no-projects) NO_PROJECTS=1 ;;
+    --role) want_value=role ;;
+    --role=*) ROLE=${a#--role=}; ROLE_SET=1 ;;
     *) POS+=("$a") ;;
   esac
 done
+[ -z "$want_value" ] || { echo "error: --$want_value requires a value" >&2; exit 1; }
+[ "$ROLE_SET" -eq 0 ] || [ -n "$ROLE" ] || { echo "error: --role requires a non-empty value" >&2; exit 1; }
+case "$ROLE" in
+  ''|review-crew|smoke-crew|marketing-crew) ;;
+  *) echo "error: --role must be one of review-crew, smoke-crew, marketing-crew" >&2; exit 1 ;;
+esac
 ID=${POS[0]}
 
 if [ "$KIND" = secondmate ] && [ "$HERDR_LAB" -eq 1 ]; then
   echo "error: --herdr-lab applies only to crewmate ship or scout briefs" >&2
+  exit 1
+fi
+
+if [ "$KIND" = secondmate ] && [ -n "$ROLE" ]; then
+  echo "error: --role applies only to crewmate ship or scout briefs, not --secondmate" >&2
   exit 1
 fi
 
@@ -223,12 +253,24 @@ EOF
 )
 fi
 
+ROLE_SECTION=
+if [ -n "$ROLE" ]; then
+  ROLE_SKILL_ABS="$FM_ROOT/.agents/skills/$ROLE/SKILL.md"
+  ROLE_SECTION=$(cat <<EOF
+# Role identity
+Load your role identity: \`/$ROLE\` (or read \`$ROLE_SKILL_ABS\` in full).
+EOF
+)
+fi
+
 if [ "$KIND" = scout ]; then
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
 # Task
 {TASK}
+
+$ROLE_SECTION
 
 $HERDR_SECTION
 
@@ -415,6 +457,8 @@ You are a crewmate: an autonomous worker agent managed by firstmate. Work on you
 
 # Task
 {TASK}
+
+$ROLE_SECTION
 
 $HERDR_SECTION
 

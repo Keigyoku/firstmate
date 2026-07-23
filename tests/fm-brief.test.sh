@@ -322,6 +322,50 @@ test_scout_brief_has_no_tdd_contract() {
   pass "fm-brief.sh: scout briefs stay free of the ship TDD contract"
 }
 
+test_role_line_on_ship_and_scout() {
+  local home id brief skill_abs
+  home="$TMP_ROOT/role-brief-home"
+  mkdir -p "$home/data"
+  skill_abs="$ROOT/.agents/skills/review-crew/SKILL.md"
+
+  id="brief-role-ship-r1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --role review-crew >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "role-tagged ship brief was not scaffolded"
+  assert_grep "# Role identity" "$brief" "ship brief missing Role identity section"
+  assert_grep "Load your role identity: \`/review-crew\`" "$brief" \
+    "ship brief missing slash role load instruction"
+  assert_grep "read \`$skill_abs\` in full" "$brief" \
+    "ship brief missing absolute SKILL.md read fallback"
+
+  id="brief-role-scout-r2"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --scout --role smoke-crew >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "role-tagged scout brief was not scaffolded"
+  assert_grep "Load your role identity: \`/smoke-crew\`" "$brief" \
+    "scout brief missing slash role load instruction"
+  assert_grep "read \`$ROOT/.agents/skills/smoke-crew/SKILL.md\` in full" "$brief" \
+    "scout brief missing absolute SKILL.md read fallback"
+  pass "fm-brief.sh: --role inserts load instruction on ship and scout briefs"
+}
+
+test_role_rejected_for_secondmate_and_unknown() {
+  local home out status
+  home="$TMP_ROOT/role-reject-home"
+  mkdir -p "$home/data"
+
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" role-sm --secondmate --no-projects --role review-crew 2>&1) || status=$?
+  status=${status:-0}
+  expect_code 1 "$status" "--role with --secondmate should fail"
+  assert_contains "$out" "--role" "secondmate role rejection should mention --role"
+
+  status=0
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" role-bad some-proj --role not-a-crew 2>&1) || status=$?
+  expect_code 1 "$status" "unknown --role should fail"
+  assert_contains "$out" "review-crew" "unknown role error should list allowed roles"
+  pass "fm-brief.sh: --role rejects secondmate and unknown names"
+}
+
 test_script_parses
 test_help_includes_entire_header
 test_ship_modes_generate_clean_briefs
@@ -335,3 +379,5 @@ test_secondmate_no_projects_charter
 test_pause_verb_override_renders_all_brief_scaffolds
 test_ship_briefs_emit_tdd_contract
 test_scout_brief_has_no_tdd_contract
+test_role_line_on_ship_and_scout
+test_role_rejected_for_secondmate_and_unknown
