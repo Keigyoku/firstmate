@@ -928,6 +928,12 @@ test_teardown_conformance_old_vs_new() {
     "window=firstmate:fm-$id" "worktree=$wt" "project=$proj" "harness=claude" "kind=scout" "mode=no-mistakes" "yolo=off"
   fm_write_meta "$state_new/$id.meta" \
     "window=firstmate:fm-$id" "worktree=$wt" "project=$proj" "harness=claude" "kind=scout" "mode=no-mistakes" "yolo=off"
+  FM_STATE_OVERRIDE="$state_old" FM_DATA_OVERRIDE="$data" \
+    "$ROOT/bin/fm-decision-hold.sh" complete "$id" --none >/dev/null \
+    || fail "old teardown fixture could not complete its decision inventory"
+  FM_STATE_OVERRIDE="$state_new" FM_DATA_OVERRIDE="$data" \
+    "$ROOT/bin/fm-decision-hold.sh" complete "$id" --none >/dev/null \
+    || fail "new teardown fixture could not complete its decision inventory"
   touch "$state_old/.last-watcher-beat" "$state_new/.last-watcher-beat"
 
   log_old="$TMP_ROOT/teardown-old.log"; log_new="$TMP_ROOT/teardown-new.log"
