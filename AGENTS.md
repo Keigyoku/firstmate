@@ -545,12 +545,14 @@ bin/fm-spawn.sh <id> projects/<repo> --backend orca   # experimental Orca backen
 bin/fm-spawn.sh <id> projects/<repo> --backend cmux   # experimental cmux backend (docs/cmux-backend.md); GUI-first macOS-only, treehouse still owns worktree; requires a one-time socket-access setup (docs/cmux-backend.md "Setup")
 # backend=codex-app is not accepted yet; see docs/codex-app-backend.md.
 bin/fm-spawn.sh <id> projects/<repo> --scout     # scout task; records kind=scout in meta
+bin/fm-spawn.sh <id> projects/<repo> --role review-crew   # inject role skill into the worktree (explicit; never infer from task id)
 bin/fm-spawn.sh <id> --secondmate                 # launch a registered persistent secondmate in its home
 bin/fm-spawn.sh <id> <firstmate-home> --secondmate   # launch or recover an explicit secondmate home
 bin/fm-spawn.sh <id1>=projects/<repo1> <id2>=projects/<repo2> [--scout]   # batch: one call, several tasks
 ```
 
-Dispatch several tasks in one call by passing `id=repo` pairs instead of a single `<id> <project>`; each pair is spawned through the same single-task path, shared `--scout`, `--harness`, `--model`, `--effort`, and `--backend` flags apply to all, and the looping happens inside the script so you never hand-write a multi-task shell loop.
+For review-crew, smoke-crew, or marketing-crew dispatches, pass matching `--role <name>` on both `fm-brief.sh` and `fm-spawn.sh` so the worktree gets a discoverable role skill symlink (git-excluded); never infer role from the task id text.
+Dispatch several tasks in one call by passing `id=repo` pairs instead of a single `<id> <project>`; each pair is spawned through the same single-task path, shared `--scout`, `--harness`, `--model`, `--effort`, `--role`, and `--backend` flags apply to all, and the looping happens inside the script so you never hand-write a multi-task shell loop.
 If one pair fails, the rest still run and the batch exits non-zero.
 When `config/crew-dispatch.json` exists, include a shared `--harness` for every crewmate or scout batch after consulting the dispatch rules.
 
@@ -908,6 +910,7 @@ Correct or delete stale free-form notes the moment you catch them, and put durab
 ## 11. Crewmate briefs
 
 Scaffold with `bin/fm-brief.sh <id> <repo-name>` - it writes `data/<id>/brief.md` with the standard contract (branch setup, status-reporting protocol, push/merge rules, definition of done) and all paths filled in.
+For a role-identity crew, add matching `--role <review-crew|smoke-crew|marketing-crew>` so the brief tells the crewmate to load that skill (pairs with the same flag on `fm-spawn.sh`).
 The ship-brief Setup opens with a worktree-isolation assertion ahead of the branch step: the crewmate confirms it is in its own disposable task worktree, not the primary checkout, and stops with `blocked: launched in primary checkout, not an isolated worktree` if not - the upstream half of the worktree-tangle guard (section 8).
 For a ship task the definition of done is shaped by the project's delivery mode (section 6): `no-mistakes` stops after the implementation commit, then firstmate triggers the harness-appropriate no-mistakes validation pipeline; `direct-PR` has the crewmate push and open the PR itself, and `local-only` has it stop at "ready in branch" for firstmate to review and merge locally.
 The no-mistakes brief points to no-mistakes' version-matched guidance and keeps only firstmate-specific wrapper rules for `ask-user` escalation, `--yes` avoidance, and the CI-green done line.
@@ -946,9 +949,9 @@ These skills are not captain-invocable; they are conditional operating reference
 - `fmx-respond` - load on an `x-mention <request_id>` `check:` wake to handle the mention, on an `x-mode-error ...` `check:` wake to report the X-mode configuration blocker, and on any milestone or terminal wake for an X-mode-linked task before posting its completion follow-up; relevant only when X mode is on.
 - `firstmate-codexapp` - load before coordinating a visible Codex Desktop thread, evaluating a Codex App backend request, or reconciling Codex Desktop host-tool smoke evidence for Firstmate work.
 - `firstmate-coding-guidelines` - load before changing firstmate's shared, tracked material, as defined by section 1's list, whether editing directly or briefing a crewmate for a firstmate-repo task.
-- `review-crew` - load when dispatched as a Review Crew round (a review-fix cycle round on a PR, or an independent pre-merge review).
-- `smoke-crew` - load when dispatched for smoke verification (a Smoke Crew pass, pre-ship live-app matrix run, or regression smoke of a merged or candidate build).
-- `marketing-crew` - load when dispatched as a Marketing Crew task (marketing strategy, copy, content, SEO, launch, growth work).
+- `review-crew` - load when dispatched as a Review Crew round (a review-fix cycle round on a PR, or an independent pre-merge review). Deliver into project worktrees with matching `--role review-crew` on brief and spawn (never infer from the task id).
+- `smoke-crew` - load when dispatched for smoke verification (a Smoke Crew pass, pre-ship live-app matrix run, or regression smoke of a merged or candidate build). Deliver with matching `--role smoke-crew` on brief and spawn.
+- `marketing-crew` - load when dispatched as a Marketing Crew task (marketing strategy, copy, content, SEO, launch, growth work). Deliver with matching `--role marketing-crew` on brief and spawn.
 
 ## 14. X mode
 
