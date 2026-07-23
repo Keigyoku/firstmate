@@ -354,14 +354,14 @@ MODEL=$(printf '%s' "$SNAP" | jq \
          | select(.endpoint.exists == false or .endpoint.agent_alive == "dead")
          | {id:($m.id + "/" + .id),backend:"secondmate-home",target:(.endpoint.target // "-"),exists:.endpoint.exists,agent:.endpoint.agent_alive} ]) as $unhealthy_all
   | ([ (.secondmate_current.records // [])[]
-       | ([.decisions_open[]? | select(.source == "backlog" and .verb == "captain-hold")]) as $captain_holds
+       | ([.decisions_open[]? | select(.source == "status" and (.verb == "needs-decision" or .verb == "blocked"))]) as $status_decisions
        | ([.holds[]? | select(.source == "backlog")]) as $backlog_holds
        | . + {
-           bearings_captain_holds:$captain_holds,
+           bearings_decisions:$status_decisions,
            bearings_holds:(if .current.state == "captain_decision" then $backlog_holds else .holds end),
            bearings_state:(
              if .current.state == "captain_decision" then
-               if ($captain_holds | length) > 0 then "captain_decision"
+               if ($status_decisions | length) > 0 then "captain_decision"
                elif (.active_children | length) > 0 then "active_child_work"
                elif ($backlog_holds | length) > 0 then "externally_held"
                else "unknown" end
@@ -378,7 +378,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
           doing:((if .bearings_state == "active_child_work" then
                     ([.active_children[] | .id + ": " + (.doing // .state)] | join("; "))
                   elif .bearings_state == "captain_decision" then
-                    ([.bearings_captain_holds[] | .summary] | join("; "))
+                    ([.bearings_decisions[] | .summary] | join("; "))
                   elif .bearings_state == "externally_held" then
                     ([.bearings_holds[] | .id + ": " + (.reason // "held")] | join("; "))
                   elif .bearings_state == "no_active_work" then "No active child work"
@@ -396,8 +396,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                 | (if $d != "" then $d else (.hints.last_event_text // "") end) | trunc(90))
       } ]
      + [ $secondmate_views[]
-         | select(.bearings_state == "active_child_work")
-         | {id,kind:"secondmate",state:.bearings_state,
+         | select((.active_children | length) > 0)
+         | {id,kind:"secondmate",state:"active_child_work",
             doing:([.active_children[] | .id + ": " + (.doing // .state)] | join("; ") | trunc(90))} ]) as $in_flight_all
   | ([ .tasks[]
          | select(.kind != "secondmate")
@@ -425,10 +425,9 @@ MODEL=$(printf '%s' "$SNAP" | jq \
            )
          | {id,key:.id,verb:"blocked",
             summary:((.hints.last_event_text // "blocked") | trunc(90)),owner:"(main)"} ]
-     + [ (.secondmate_current.records // [])[] as $m | $m.decisions_open[]?
-         | select(.verb == "needs-decision" or .verb == "blocked" or .verb == "captain-hold")
+     + [ $secondmate_views[] as $m | $m.bearings_decisions[]?
          | {id:($m.id + "/" + .id),key:(.key // .id),verb,
-            summary:(((.summary // .id) + ": " + (.reason // "captain decision pending")) | trunc(90)),owner:$m.id} ]) as $decisions_all
+            summary:((.summary // .id) | trunc(90)),owner:$m.id} ]) as $decisions_all
   | ((if (.main_inventory.valid == false) then
         [{id:"(main-inventory)",
           title:((.main_inventory.reason // "main inventory invalid") | trunc(60)),

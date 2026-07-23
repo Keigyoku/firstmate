@@ -214,6 +214,52 @@ EOF
   pass "decision-hold captain-hold path is stubbed without #593"
 }
 
+test_secondmate_status_decisions_preserve_captain_decision() {
+  local home mate fakebin json id
+  home=$(make_home secondmate-status-decisions)
+  mate="$TMP_ROOT/secondmate-status-decisions-home"
+  mkdir -p "$mate/state" "$mate/data" "$mate/config" "$mate/projects" "$mate/bin"
+  printf 'mate-status\n' > "$mate/.fm-secondmate-home"
+  printf '# Firstmate\n' > "$mate/AGENTS.md"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+
+## Done
+EOF
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+
+## Done
+EOF
+  for id in choose-rollout blocked-release; do
+    mkdir -p "$mate/projects/$id"
+    fm_write_meta "$mate/state/$id.meta" \
+      "window=firstmate:fm-$id" "worktree=$mate/projects/$id" \
+      "project=alpha" "harness=codex" "kind=ship" "mode=ship"
+  done
+  printf 'needs-decision: choose blue or green rollout\n' > "$mate/state/choose-rollout.status"
+  printf 'blocked: release credentials need approval\n' > "$mate/state/blocked-release.status"
+  printf '%s\n' "- mate-status - delivery (home: $mate; scope: alpha; projects: alpha; added 2026-07-01)" \
+    > "$home/data/secondmates.md"
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json --all-decisions)
+  printf '%s' "$json" | jq -e '
+    ([.secondmates[]
+      | select(.id == "mate-status" and .state == "captain_decision")
+      | select(.doing | contains("choose blue or green rollout") and contains("release credentials need approval"))]
+      | length) == 1
+      and ([.decisions_open[]
+        | select(.owner == "mate-status" and (.verb == "needs-decision" or .verb == "blocked"))]
+        | length) == 2
+      and (.decisions_open | any(.[]; .owner == "mate-status" and .verb == "captain-hold") | not)
+  ' >/dev/null || fail "supported secondmate status decisions must preserve captain_decision without #593: $json"
+  pass "secondmate status decisions preserve captain_decision without decision-hold machinery"
+}
+
 test_gates_use_string_blocked_by() {
   local home fakebin json
   home=$(make_home blocked-by); write_fixture "$home"
@@ -642,6 +688,7 @@ test_toon_json_parity
 test_completed_scout_report_not_pending
 test_open_decision_surfaces_end_to_end
 test_decision_hold_captain_hold_is_stubbed
+test_secondmate_status_decisions_preserve_captain_decision
 test_gates_use_string_blocked_by
 test_gates_distinguish_empty_normalized_blockers_from_absent
 test_report_pointers_surface
