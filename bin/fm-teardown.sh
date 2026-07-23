@@ -1001,10 +1001,10 @@ cleanup_firstmate_home_children() {
       fi
     fi
     if [ -n "$child_t" ]; then
-      if [ "$child_backend" = zellij ]; then
-        # Zellij titles are scoped by the owning home tag, so forced secondmate
-        # cleanup must verify child tabs as that child home, not the parent.
-        ( unset FM_ROOT_OVERRIDE; FM_HOME=$home FM_ROOT=$home fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" ) 2>/dev/null || true
+      if [ "$child_backend" = zellij ] || [ "$child_backend" = cmux ]; then
+        if ! ( unset FM_ROOT_OVERRIDE; FM_HOME=$home FM_ROOT=$home fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" ) 2>/dev/null; then
+          [ "$child_backend" != cmux ] || return 1
+        fi
       else
         fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" 2>/dev/null || true
       fi
@@ -1013,8 +1013,8 @@ cleanup_firstmate_home_children() {
       child_home=$(meta_value "$child_meta" home)
       [ -n "$child_home" ] || child_home=$child_wt
       if [ -n "$child_home" ] && [ -d "$child_home" ]; then
-        cleanup_firstmate_home_children "$child_home"
-        remove_firstmate_home "$child_home" "child firstmate home" "$child_id"
+        cleanup_firstmate_home_children "$child_home" || return 1
+        remove_firstmate_home "$child_home" "child firstmate home" "$child_id" || return 1
       fi
     elif [ "$child_backend" = orca ]; then
       if [ -n "$child_wt" ] && [ -d "$child_wt" ]; then
@@ -1075,7 +1075,7 @@ if [ "$KIND" = secondmate ] && [ "$FORCE" != "--force" ]; then
 fi
 
 if [ "$KIND" = secondmate ] && [ "$FORCE" = "--force" ]; then
-  cleanup_firstmate_home_children "$HOME_PATH"
+  cleanup_firstmate_home_children "$HOME_PATH" || exit 1
 fi
 
 if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ]; then
@@ -1152,11 +1152,16 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
 fi
 
 if [ "$BACKEND" != orca ]; then
-  fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
+  if ! fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null; then
+    if [ "$BACKEND" = cmux ]; then
+      echo "error: cmux workspace teardown could not be verified; task metadata preserved" >&2
+      exit 1
+    fi
+  fi
 fi
 if [ "$KIND" = secondmate ]; then
   [ -n "$HOME_PATH" ] || HOME_PATH=$WT
-  remove_firstmate_home "$HOME_PATH" "secondmate home" "$ID"
+  remove_firstmate_home "$HOME_PATH" "secondmate home" "$ID" || exit 1
   remove_secondmate_registry_entry "$ID"
 fi
 remove_grok_turnend_auth "$STATE" "$ID"

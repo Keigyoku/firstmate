@@ -83,6 +83,20 @@ cmux_panes_response() {  # <dir> <n> <surface_id>
   printf '{"panes":[{"selected_surface_id":"%s","surface_ids":["%s"]}]}' "$3" "$3" > "$1/responses/$2.out"
 }
 
+cmux_windows_response() {  # <dir> <n> <window_id1> <count1> [<window_id2> <count2> ...]
+  local dir=$1 n=$2 json first=1
+  shift 2
+  json='['
+  while [ $# -ge 2 ]; do
+    [ "$first" -eq 1 ] || json="$json,"
+    json="$json{\"id\":\"$1\",\"workspace_count\":$2}"
+    first=0
+    shift 2
+  done
+  json="$json]"
+  printf '%s' "$json" > "$dir/responses/$n.out"
+}
+
 cmux_panes_empty_response() {  # <dir> <n>
   printf '{"panes":[]}' > "$1/responses/$2.out"
 }
@@ -845,25 +859,121 @@ test_send_text_submit_send_failed_when_target_absent() {
   pass "fm_backend_cmux_send_text_submit: reports 'send-failed' when the target workspace/surface is absent"
 }
 
-# --- kill: close whole workspace ---------------------------------------------
+# --- window_of_workspace: which window holds a workspace, and its count ------
 
-test_kill_closes_workspace_directly() {
+test_window_of_workspace_finds_window_and_count() {
+  local dir fb out
+  dir="$TMP_ROOT/win-of-ws"; mkdir -p "$dir/responses"
+  # 1: list-windows --json -> two windows
+  cmux_windows_response "$dir" 1 "e1111111-0000-0000-0000-000000000000" 2 "e2222222-0000-0000-0000-000000000000" 2
+  # 2: workspace list --window e1111111 -> does NOT contain the target
+  cmux_workspace_list_response "$dir" 2 "ffffffff-0000-0000-0000-000000000000" "other"
+  # 3: workspace list --window e2222222 -> contains the target
+  cmux_workspace_list_response "$dir" 3 "aaaaaaaa-0000-0000-0000-000000000000" "the-task"
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_window_of_workspace "aaaaaaaa-0000-0000-0000-000000000000"' "$ROOT" )
+  [ "$out" = "e2222222-0000-0000-0000-000000000000 1" ] \
+    || fail "window_of_workspace should echo the owning window and its matched-list count, got '$out'"
+  cmux_assert_call_order "$dir/log" $'\x1f''list-windows' $'\x1f''workspace'$'\x1f''list'$'\x1f''--json'$'\x1f''--id-format'$'\x1f''uuids'$'\x1f''--window'$'\x1f''e1111111-0000-0000-0000-000000000000' \
+    "window_of_workspace did not list windows before scanning per-window workspaces"
+  pass "fm_backend_cmux_window_of_workspace: walks windows and counts the membership-confirming workspace list"
+}
+
+test_window_of_workspace_empty_when_not_found() {
+  local dir fb out status
+  dir="$TMP_ROOT/win-of-ws-none"; mkdir -p "$dir/responses"
+  cmux_windows_response "$dir" 1 "e1111111-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 2 "ffffffff-0000-0000-0000-000000000000" "other"
+  fb=$(make_cmux_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_window_of_workspace "aaaaaaaa-0000-0000-0000-000000000000"' "$ROOT" )
+  status=$?
+  expect_code 0 "$status" "window_of_workspace should succeed after a complete not-found scan"
+  [ -z "$out" ] || fail "window_of_workspace should echo nothing when the workspace is not found, got '$out'"
+  pass "fm_backend_cmux_window_of_workspace: echoes nothing when no window holds the workspace"
+}
+
+test_window_of_workspace_fails_when_window_list_fails() {
+  local dir fb status
+  dir="$TMP_ROOT/win-of-ws-list-failure"; mkdir -p "$dir/responses"
+  printf '1\n' > "$dir/responses/1.exit"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_window_of_workspace "aaaaaaaa-0000-0000-0000-000000000000"' "$ROOT"
+  status=$?
+  [ "$status" -ne 0 ] || fail "window_of_workspace should fail when list-windows fails"
+  pass "fm_backend_cmux_window_of_workspace: fails when window enumeration fails"
+}
+
+test_window_of_workspace_fails_when_workspace_json_is_invalid() {
+  local dir fb status
+  dir="$TMP_ROOT/win-of-ws-invalid-workspaces"; mkdir -p "$dir/responses"
+  cmux_windows_response "$dir" 1 "e1111111-0000-0000-0000-000000000000" 1
+  printf '{"workspaces":null}' > "$dir/responses/2.out"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_window_of_workspace "aaaaaaaa-0000-0000-0000-000000000000"' "$ROOT"
+  status=$?
+  [ "$status" -ne 0 ] || fail "window_of_workspace should fail on malformed workspace JSON"
+  pass "fm_backend_cmux_window_of_workspace: fails on malformed workspace JSON"
+}
+
+# --- kill: close the task workspace, adding a sibling when it is the last one -
+
+# The common case: the task workspace shares its window with at least one other
+# workspace, so cmux closes it directly with no sibling dance.
+test_kill_closes_workspace_directly_when_not_last() {
   local dir fb
   dir="$TMP_ROOT/kill-workspace"; mkdir -p "$dir/responses"
+  # 1: list-windows -> the owning window has 2 workspaces (target is NOT last)
+  cmux_windows_response "$dir" 1 "eeeeeeee-0000-0000-0000-000000000000" 2
+  # 2: workspace list --window eeeeeeee -> contains the target
+  cmux_workspace_list_response "$dir" 2 "aaaaaaaa-0000-0000-0000-000000000000" "the-task" "ffffffff-0000-0000-0000-000000000000" "other"
   fb=$(make_cmux_fakebin "$dir")
   PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111"' "$ROOT"
   assert_contains "$(cat "$dir/log")" $'\x1f''close-workspace'$'\x1f''--workspace'$'\x1f''aaaaaaaa-0000-0000-0000-000000000000' \
     "kill did not close the task workspace"
+  assert_not_contains "$(cat "$dir/log")" $'\x1f''new-workspace' \
+    "kill should not add a sibling workspace when the target is not the last one in its window"
   assert_not_contains "$(cat "$dir/log")" $'\x1f''close-surface' \
     "kill should close the whole workspace directly"
-  pass "fm_backend_cmux_kill: closes the whole task workspace directly"
+  pass "fm_backend_cmux_kill: closes the task workspace directly when it is not the last in its window"
+}
+
+# The selected-workspace teardown bug: cmux refuses to close the only workspace
+# in a window (returns OK but no-ops), so kill first creates a throwaway sibling
+# and only then closes the target - which now succeeds.
+test_kill_adds_sibling_when_last_in_window() {
+  local dir fb
+  dir="$TMP_ROOT/kill-last-in-window"; mkdir -p "$dir/responses"
+  cmux_windows_response "$dir" 1 "eeeeeeee-0000-0000-0000-000000000000" 2
+  # 2: workspace list --window eeeeeeee -> contains the target
+  cmux_workspace_list_response "$dir" 2 "aaaaaaaa-0000-0000-0000-000000000000" "the-task"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111"' "$ROOT"
+  assert_contains "$(cat "$dir/log")" $'\x1f''new-workspace'$'\x1f''--window'$'\x1f''eeeeeeee-0000-0000-0000-000000000000'$'\x1f''--focus'$'\x1f''false' \
+    "kill did not add a throwaway sibling in the target's own window before closing the last workspace"
+  assert_not_contains "$(cat "$dir/log")" $'\x1f''new-workspace'$'\x1f''--name' \
+    "the throwaway sibling must stay an unnamed default workspace, never an fm- task title"
+  assert_contains "$(cat "$dir/log")" $'\x1f''close-workspace'$'\x1f''--workspace'$'\x1f''aaaaaaaa-0000-0000-0000-000000000000' \
+    "kill did not close the target workspace after adding the sibling"
+  cmux_assert_call_order "$dir/log" $'\x1f''new-workspace'$'\x1f''--window' $'\x1f''close-workspace'$'\x1f''--workspace'$'\x1f''aaaaaaaa-0000-0000-0000-000000000000' \
+    "kill must add the sibling BEFORE closing the last workspace, or the close still no-ops"
+  assert_not_contains "$(cat "$dir/log")" $'\x1f''close-surface' \
+    "kill should not call close-surface"
+  pass "fm_backend_cmux_kill: adds a throwaway sibling then closes the target when it is the last workspace in its window"
 }
 
 test_kill_is_best_effort_when_close_workspace_fails() {
   local dir fb
   dir="$TMP_ROOT/kill-workspace-fail"; mkdir -p "$dir/responses"
-  printf '1\n' > "$dir/responses/1.exit"
+  # 1: list-windows (not last), 2: workspace list --window, 3: close-workspace fails
+  cmux_windows_response "$dir" 1 "eeeeeeee-0000-0000-0000-000000000000" 2
+  cmux_workspace_list_response "$dir" 2 "aaaaaaaa-0000-0000-0000-000000000000" "the-task" "ffffffff-0000-0000-0000-000000000000" "other"
+  printf '1\n' > "$dir/responses/3.exit"
   fb=$(make_cmux_fakebin "$dir")
   PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111"' "$ROOT"
@@ -875,13 +985,51 @@ test_kill_is_best_effort_when_close_workspace_fails() {
   pass "fm_backend_cmux_kill: never fails even when close-workspace fails"
 }
 
+test_kill_fails_closed_when_window_scan_fails() {
+  local dir fb status log
+  dir="$TMP_ROOT/kill-window-scan-failure"; mkdir -p "$dir/responses"
+  printf '1\n' > "$dir/responses/1.exit"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111"' "$ROOT"
+  status=$?
+  [ "$status" -ne 0 ] || fail "kill should fail when the containing-window scan fails"
+  log=$(cat "$dir/log")
+  assert_not_contains "$log" $'\x1f''new-workspace' \
+    "kill must not create a sibling after an incomplete containing-window scan"
+  assert_not_contains "$log" $'\x1f''close-workspace' \
+    "kill must not close the workspace after an incomplete containing-window scan"
+  pass "fm_backend_cmux_kill: fails closed when the containing-window scan fails"
+}
+
+test_kill_fails_closed_when_sibling_creation_fails() {
+  local dir fb status log
+  dir="$TMP_ROOT/kill-sibling-failure"; mkdir -p "$dir/responses"
+  cmux_windows_response "$dir" 1 "eeeeeeee-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 2 "aaaaaaaa-0000-0000-0000-000000000000" "the-task"
+  printf '1\n' > "$dir/responses/3.exit"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111"' "$ROOT"
+  status=$?
+  [ "$status" -ne 0 ] || fail "kill should fail when it cannot prepare a last-workspace sibling"
+  log=$(cat "$dir/log")
+  assert_not_contains "$log" $'\x1f''close-workspace' \
+    "kill must not attempt a known no-op last-workspace close after sibling creation fails"
+  pass "fm_backend_cmux_kill: fails closed when last-workspace preparation fails"
+}
+
 test_kill_recovers_stale_target_by_label() {
   local dir fb title
   dir="$TMP_ROOT/kill-stale-target"; mkdir -p "$dir/responses"
   title=$(cmux_expected_scoped_title fm-label)
-  cmux_workspace_list_response "$dir" 1 "cccccccc-2222-2222-2222-222222222222" "$title"
+  cmux_windows_response "$dir" 1 "eeeeeeee-0000-0000-0000-000000000000" 2
   cmux_workspace_list_response "$dir" 2 "cccccccc-2222-2222-2222-222222222222" "$title"
-  cmux_panes_response "$dir" 3 "dddddddd-3333-3333-3333-333333333333"
+  cmux_windows_response "$dir" 3 "eeeeeeee-0000-0000-0000-000000000000" 2
+  cmux_workspace_list_response "$dir" 4 "cccccccc-2222-2222-2222-222222222222" "$title"
+  cmux_panes_response "$dir" 5 "dddddddd-3333-3333-3333-333333333333"
+  cmux_windows_response "$dir" 6 "eeeeeeee-0000-0000-0000-000000000000" 2
+  cmux_workspace_list_response "$dir" 7 "cccccccc-2222-2222-2222-222222222222" "$title" "ffffffff-0000-0000-0000-000000000000" "other"
   fb=$(make_cmux_fakebin "$dir")
   PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "" fm-label' "$ROOT"
@@ -893,6 +1041,204 @@ test_kill_recovers_stale_target_by_label() {
   assert_not_contains "$(cat "$dir/log")" $'\x1f''close-surface' \
     "kill should not call close-surface"
   pass "fm_backend_cmux_kill: recovers stale workspace/surface ids by expected label"
+}
+
+test_kill_validates_expected_label_in_another_window() {
+  local dir fb title
+  dir="$TMP_ROOT/kill-another-window"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-label)
+  cmux_windows_response "$dir" 1 \
+    "e1111111-0000-0000-0000-000000000000" 1 \
+    "e2222222-0000-0000-0000-000000000000" 2
+  cmux_workspace_list_response "$dir" 2 "ffffffff-0000-0000-0000-000000000000" "other-window"
+  cmux_workspace_list_response "$dir" 3 "aaaaaaaa-0000-0000-0000-000000000000" "$title" "cccccccc-2222-2222-2222-222222222222" "sibling"
+  cmux_panes_response "$dir" 4 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_windows_response "$dir" 5 \
+    "e1111111-0000-0000-0000-000000000000" 1 \
+    "e2222222-0000-0000-0000-000000000000" 2
+  cmux_workspace_list_response "$dir" 6 "ffffffff-0000-0000-0000-000000000000" "other-window"
+  cmux_workspace_list_response "$dir" 7 "aaaaaaaa-0000-0000-0000-000000000000" "$title" "cccccccc-2222-2222-2222-222222222222" "sibling"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "" fm-label' "$ROOT"
+  assert_contains "$(cat "$dir/log")" $'\x1f''close-workspace'$'\x1f''--workspace'$'\x1f''aaaaaaaa-0000-0000-0000-000000000000' \
+    "kill did not close the expected-label workspace in another cmux window"
+  assert_contains "$(cat "$dir/log")" $'\x1f''workspace'$'\x1f''list'$'\x1f''--json'$'\x1f''--id-format'$'\x1f''uuids'$'\x1f''--window'$'\x1f''e2222222-0000-0000-0000-000000000000' \
+    "kill did not validate expected-label membership in the target's cmux window"
+  pass "fm_backend_cmux_kill: validates and closes an expected-label workspace in another window"
+}
+
+test_kill_refuses_ambiguous_stale_label_across_windows() {
+  local dir fb title log
+  dir="$TMP_ROOT/kill-ambiguous-stale-label"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-label)
+  cmux_windows_response "$dir" 1 \
+    "e1111111-0000-0000-0000-000000000000" 1 \
+    "e2222222-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 2 "cccccccc-2222-2222-2222-222222222222" "$title"
+  cmux_workspace_list_response "$dir" 3 "dddddddd-3333-3333-3333-333333333333" "$title"
+  cmux_windows_response "$dir" 4 \
+    "e1111111-0000-0000-0000-000000000000" 1 \
+    "e2222222-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 5 "cccccccc-2222-2222-2222-222222222222" "$title"
+  cmux_workspace_list_response "$dir" 6 "dddddddd-3333-3333-3333-333333333333" "$title"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "" fm-label' "$ROOT"
+  log=$(cat "$dir/log")
+  assert_not_contains "$log" $'\x1f''list-panes' \
+    "ambiguous stale-label recovery must not resolve a surface"
+  assert_not_contains "$log" $'\x1f''new-workspace' \
+    "ambiguous stale-label recovery must not create a sibling workspace"
+  assert_not_contains "$log" $'\x1f''close-workspace' \
+    "ambiguous stale-label recovery must not close either duplicate workspace"
+  pass "fm_backend_cmux_kill: refuses ambiguous stale-label matches across windows"
+}
+
+test_kill_refuses_stale_label_when_a_window_scan_fails() {
+  local dir fb title log status
+  dir="$TMP_ROOT/kill-stale-label-scan-failure"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-label)
+  cmux_windows_response "$dir" 1 \
+    "e1111111-0000-0000-0000-000000000000" 1 \
+    "e2222222-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 2 "cccccccc-2222-2222-2222-222222222222" "$title"
+  cmux_workspace_list_response "$dir" 3 "dddddddd-3333-3333-3333-333333333333" "other"
+  cmux_windows_response "$dir" 4 \
+    "e1111111-0000-0000-0000-000000000000" 1 \
+    "e2222222-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 5 "cccccccc-2222-2222-2222-222222222222" "$title"
+  printf '1\n' > "$dir/responses/6.exit"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "" fm-label' "$ROOT"
+  status=$?
+  [ "$status" -ne 0 ] || fail "incomplete stale-label recovery should fail so teardown preserves metadata"
+  log=$(cat "$dir/log")
+  assert_not_contains "$log" $'\x1f''list-panes' \
+    "incomplete stale-label recovery must not resolve a surface"
+  assert_not_contains "$log" $'\x1f''new-workspace' \
+    "incomplete stale-label recovery must not create a sibling workspace"
+  assert_not_contains "$log" $'\x1f''close-workspace' \
+    "incomplete stale-label recovery must not close the visible title match"
+  pass "fm_backend_cmux_kill: refuses stale-label recovery after an incomplete window scan"
+}
+
+test_kill_fails_when_surface_scan_command_fails() {
+  local dir fb title log status
+  dir="$TMP_ROOT/kill-surface-command-failure"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-label)
+  cmux_windows_response "$dir" 1 "e1111111-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 2 "aaaaaaaa-0000-0000-0000-000000000000" "$title"
+  printf '1\n' > "$dir/responses/3.exit"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "" fm-label' "$ROOT"
+  status=$?
+  [ "$status" -ne 0 ] || fail "kill should fail when list-panes fails during expected-label teardown"
+  log=$(cat "$dir/log")
+  assert_not_contains "$log" $'\x1f''new-workspace' \
+    "kill must not prepare a sibling after an incomplete surface scan"
+  assert_not_contains "$log" $'\x1f''close-workspace' \
+    "kill must not close after an incomplete surface scan"
+  pass "fm_backend_cmux_kill: preserves retry state when list-panes fails during teardown"
+}
+
+test_kill_fails_when_surface_scan_json_is_invalid() {
+  local dir fb title log status
+  dir="$TMP_ROOT/kill-surface-json-failure"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-label)
+  cmux_windows_response "$dir" 1 "e1111111-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 2 "aaaaaaaa-0000-0000-0000-000000000000" "$title"
+  printf '{"panes":null}' > "$dir/responses/3.out"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "" fm-label' "$ROOT"
+  status=$?
+  [ "$status" -ne 0 ] || fail "kill should fail when list-panes returns invalid JSON structure"
+  log=$(cat "$dir/log")
+  assert_not_contains "$log" $'\x1f''new-workspace' \
+    "kill must not prepare a sibling after an invalid surface scan"
+  assert_not_contains "$log" $'\x1f''close-workspace' \
+    "kill must not close after an invalid surface scan"
+  pass "fm_backend_cmux_kill: preserves retry state when list-panes JSON is invalid"
+}
+
+test_forced_secondmate_teardown_propagates_nested_cmux_failure() {
+  local dir home first_home second_home fb title out status
+  dir="$TMP_ROOT/teardown-nested-cmux-failure"
+  home="$dir/home"
+  first_home="$dir/first-home"
+  second_home="$dir/second-home"
+  mkdir -p "$home/state" "$home/data" "$home/config" \
+    "$first_home/state" "$first_home/data" "$first_home/config" "$first_home/projects" \
+    "$second_home/state" "$second_home/data" "$second_home/config" "$second_home/projects" "$dir/responses"
+  printf 'domain\n' > "$first_home/.fm-secondmate-home"
+  printf 'nested\n' > "$second_home/.fm-secondmate-home"
+  fm_write_meta "$home/state/domain.meta" \
+    "window=firstmate:fm-domain" "worktree=$first_home" "project=$first_home" \
+    "kind=secondmate" "mode=secondmate" "home=$first_home"
+  fm_write_meta "$first_home/state/nested.meta" \
+    "window=firstmate:fm-nested" "worktree=$second_home" "project=$second_home" \
+    "kind=secondmate" "mode=secondmate" "home=$second_home"
+  fm_write_meta "$second_home/state/deep.meta" \
+    "window=aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" \
+    "backend=cmux" "worktree=$dir/missing-worktree" "project=$dir/missing-project" "kind=scout"
+  title=$(cmux_expected_scoped_title fm-deep "$second_home" "$second_home")
+  cmux_windows_response "$dir" 1 "e1111111-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 2 "aaaaaaaa-0000-0000-0000-000000000000" "$title"
+  printf '1\n' > "$dir/responses/3.exit"
+  fb=$(make_cmux_fakebin "$dir")
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$fb/tmux"
+  chmod +x "$fb/tmux"
+  out=$( PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    "$ROOT/bin/fm-teardown.sh" domain --force 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "forced teardown should fail when a nested cmux surface scan fails"
+  [ -e "$home/state/domain.meta" ] || fail "nested cmux failure should preserve parent metadata"
+  [ -e "$first_home/state/nested.meta" ] || fail "nested cmux failure should preserve nested secondmate metadata"
+  [ -e "$second_home/state/deep.meta" ] || fail "nested cmux failure should preserve deep cmux metadata"
+  [ -d "$second_home" ] || fail "nested cmux failure should preserve the nested home"
+  pass "fm-teardown.sh: propagates nested cmux scan failures before deleting parent records"
+}
+
+test_forced_secondmate_teardown_propagates_nested_home_removal_failure() {
+  local dir home first_home second_home fb out status
+  dir="$TMP_ROOT/teardown-nested-home-removal-failure"
+  home="$dir/home"
+  first_home="$dir/first-home"
+  second_home="$dir/second-home"
+  mkdir -p "$home/state" "$home/data" "$home/config" \
+    "$first_home/state" "$first_home/data" "$first_home/config" "$first_home/projects" \
+    "$second_home/state" "$second_home/data" "$second_home/config" "$second_home/projects" "$dir/responses"
+  printf 'domain\n' > "$first_home/.fm-secondmate-home"
+  printf 'nested\n' > "$second_home/.fm-secondmate-home"
+  fm_write_meta "$home/state/domain.meta" \
+    "window=firstmate:fm-domain" "worktree=$first_home" "project=$first_home" \
+    "kind=secondmate" "mode=secondmate" "home=$first_home"
+  fm_write_meta "$first_home/state/nested.meta" \
+    "window=firstmate:fm-nested" "worktree=$second_home" "project=$second_home" \
+    "kind=secondmate" "mode=secondmate" "home=$second_home"
+  fb=$(make_cmux_fakebin "$dir")
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$fb/tmux"
+  chmod +x "$fb/tmux"
+  cat > "$fb/rm" <<'SH'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  [ "$arg" != "$FM_FAIL_RM_PATH" ] || exit 1
+done
+exec /bin/rm "$@"
+SH
+  chmod +x "$fb/rm"
+  out=$( PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_FAIL_RM_PATH="$second_home" \
+    "$ROOT/bin/fm-teardown.sh" domain --force 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "forced teardown should fail when nested home removal fails"
+  [ -e "$home/state/domain.meta" ] || fail "nested home removal failure should preserve parent metadata"
+  [ -e "$first_home/state/nested.meta" ] || fail "nested home removal failure should preserve nested secondmate metadata"
+  [ -d "$second_home" ] || fail "nested home removal failure should preserve the nested home"
+  pass "fm-teardown.sh: propagates nested home removal failures before deleting parent records"
 }
 
 # --- list_live: label-based orphan discovery ---------------------------------
@@ -983,8 +1329,22 @@ test_send_text_submit_push_queued_after_landed_send
 test_send_text_submit_detects_swallowed_enter
 test_send_text_submit_popup_autocomplete_requires_second_enter
 test_send_text_submit_send_failed_when_target_absent
-test_kill_closes_workspace_directly
+test_window_of_workspace_finds_window_and_count
+test_window_of_workspace_empty_when_not_found
+test_window_of_workspace_fails_when_window_list_fails
+test_window_of_workspace_fails_when_workspace_json_is_invalid
+test_kill_closes_workspace_directly_when_not_last
+test_kill_adds_sibling_when_last_in_window
 test_kill_is_best_effort_when_close_workspace_fails
+test_kill_fails_closed_when_window_scan_fails
+test_kill_fails_closed_when_sibling_creation_fails
 test_kill_recovers_stale_target_by_label
+test_kill_validates_expected_label_in_another_window
+test_kill_refuses_ambiguous_stale_label_across_windows
+test_kill_refuses_stale_label_when_a_window_scan_fails
+test_kill_fails_when_surface_scan_command_fails
+test_kill_fails_when_surface_scan_json_is_invalid
+test_forced_secondmate_teardown_propagates_nested_cmux_failure
+test_forced_secondmate_teardown_propagates_nested_home_removal_failure
 test_list_live_filters_by_title_prefix
 test_secondmate_spawn_refuses_cmux_backend

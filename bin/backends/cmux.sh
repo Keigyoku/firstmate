@@ -63,10 +63,11 @@
 #      herdr (auto-closes the workspace) nor zellij (leaves a ghost tab):
 #      `close-surface` REFUSES outright with a typed error
 #      (`invalid_state: Cannot close the last surface`), leaving both the
-#      surface and the workspace untouched. `close-workspace` cleanly removes
-#      the whole workspace (surface included) in one call with no ghost left
-#      behind. Kill therefore closes the whole workspace directly, which also
-#      reclaims any extra surfaces inside the task workspace.
+#      surface and the workspace untouched. `close-workspace` removes the
+#      whole workspace (surface included) only when it is not the last
+#      workspace in its window. `fm_backend_cmux_kill` handles the documented
+#      last-in-window exception below, while still reclaiming every surface in
+#      the task workspace.
 #   5. Workspace ids do NOT survive an app relaunch - verified via source
 #      (`Sources/Workspace.swift`'s only initializer unconditionally sets
 #      `self.id = UUID()`, with no restored-id parameter, unlike surfaces'
@@ -334,9 +335,15 @@ fm_backend_cmux_workspace_id_for_label() {  # <label>
 }
 
 fm_backend_cmux_surface_id_for_workspace() {  # <workspace_id>
-  local wsid=$1
-  fm_backend_cmux_cli list-panes --workspace "$wsid" --json --id-format uuids 2>/dev/null \
-    | jq -r '.panes[0] // {} | .selected_surface_id // (.surface_ids[0] // empty)' 2>/dev/null
+  local wsid=$1 panes
+  panes=$(fm_backend_cmux_cli list-panes --workspace "$wsid" --json --id-format uuids 2>/dev/null) || return 1
+  printf '%s' "$panes" | jq -r '
+    if (.panes | type) != "array" then error("invalid pane list")
+    elif (.panes | length) == 0 then empty
+    elif (.panes[0] | type) != "object" then error("invalid pane")
+    else .panes[0] | .selected_surface_id // (.surface_ids[0] // empty)
+    end
+  ' 2>/dev/null
 }
 
 # fm_backend_cmux_create_task: create the task's workspace (one surface),
@@ -604,17 +611,116 @@ fm_backend_cmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> 
   done
 }
 
-# fm_backend_cmux_kill: remove the task's whole workspace, best-effort (mirrors
-# every other backend's `kill` `|| true` contract). A cmux task owns one
+# fm_backend_cmux_window_of_workspace: echo "<window_id> <workspace_count>" for
+# the window that contains <workspace_id>, or nothing if it is not found live.
+# `workspace list --json` with no `--window` is scoped to the CURRENT window
+# only (verified live), so the containing window is found by walking every
+# window from `list-windows --json` and asking each for its own scoped list.
+# The count comes from the same scoped workspace list that confirms membership.
+fm_backend_cmux_window_of_workspace() {  # <workspace_id> -> "<window_id> <count>"
+  local wsid=$1 wins window_ids wid wss count
+  wins=$(fm_backend_cmux_cli list-windows --json --id-format uuids 2>/dev/null) || return 1
+  window_ids=$(printf '%s' "$wins" | jq -r '
+    if type == "array" and all(.[]?; (.id | type) == "string" and (.id | length) > 0)
+    then .[]?.id
+    else error("invalid window list")
+    end
+  ' 2>/dev/null) || return 1
+  while IFS= read -r wid; do
+    [ -n "$wid" ] || continue
+    wss=$(fm_backend_cmux_cli workspace list --json --id-format uuids --window "$wid" 2>/dev/null) || return 1
+    count=$(printf '%s' "$wss" | jq -r --arg id "$wsid" '
+      if (.workspaces | type) == "array"
+      then .workspaces as $workspaces
+        | if any($workspaces[]?; .id == $id) then ($workspaces | length) else empty end
+      else error("invalid workspace list")
+      end
+    ' 2>/dev/null) || return 1
+    if [ -n "$count" ]; then
+      printf '%s %s' "$wid" "$count"
+      return 0
+    fi
+  done <<< "$window_ids"
+}
+
+fm_backend_cmux_workspace_lookup_all_windows() {  # <field> <value> <result-field>
+  local field=$1 value=$2 result_field=$3 wins window_ids wid wss result
+  case "$field:$result_field" in
+    id:title|title:id) ;;
+    *) return 1 ;;
+  esac
+  wins=$(fm_backend_cmux_cli list-windows --json --id-format uuids 2>/dev/null) || return 1
+  window_ids=$(printf '%s' "$wins" | jq -r 'if type == "array" then .[]?.id else error("invalid window list") end' 2>/dev/null) || return 1
+  while IFS= read -r wid; do
+    [ -n "$wid" ] || continue
+    wss=$(fm_backend_cmux_cli workspace list --json --id-format uuids --window "$wid" 2>/dev/null) || return 1
+    result=$(printf '%s' "$wss" | jq -r --arg field "$field" --arg value "$value" --arg result "$result_field" \
+      'if (.workspaces | type) == "array" then .workspaces[]? | select(.[$field] == $value) | .[$result] else error("invalid workspace list") end' 2>/dev/null) || return 1
+    if [ -n "$result" ]; then
+      printf '%s\n' "$result"
+    fi
+  done <<< "$window_ids"
+}
+
+fm_backend_cmux_teardown_target_ready() {  # <target> <expected-label>
+  local expected_title title wsid sfid
+  fm_backend_cmux_parse_target "$1" || return 1
+  expected_title=$(fm_backend_cmux_scoped_title "$2")
+  title=$(fm_backend_cmux_workspace_lookup_all_windows id "$FM_BACKEND_CMUX_WORKSPACE" title) || return 2
+  if [ "$title" = "$expected_title" ]; then
+    wsid=$FM_BACKEND_CMUX_WORKSPACE
+  elif [ -n "$title" ]; then
+    return 1
+  else
+    wsid=$(fm_backend_cmux_workspace_lookup_all_windows title "$expected_title" id) || return 2
+    [ -n "$wsid" ] || return 1
+    case "$wsid" in
+      *$'\n'*) return 1 ;;
+    esac
+  fi
+  sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid") || return 2
+  [ -n "$sfid" ] || return 1
+  FM_BACKEND_CMUX_WORKSPACE=$wsid
+  FM_BACKEND_CMUX_SURFACE=$sfid
+}
+
+# fm_backend_cmux_kill: remove the task's whole workspace. A cmux task owns one
 # workspace, so teardown reclaims that workspace and all of its surfaces.
+#
+# The selected-workspace teardown bug (docs/cmux-backend.md "Closing the last
+# workspace in a window"): cmux keeps every window at >=1 workspace, so
+# `close-workspace` on the ONLY workspace in its window silently no-ops - it
+# still returns `OK`, but the workspace stays, which is exactly what left a
+# selected task workspace open at teardown (the last workspace in a window is
+# always the selected one). `close-window`/`window.close` cannot rescue it
+# either: a window holding a live terminal session cannot be closed over the
+# control socket (verified: returns success-shaped output, closes nothing).
+# The reliable primitive is close-workspace on a NON-last workspace, so when the
+# target is the last one in its window a throwaway sibling is created first,
+# leaving that window a fresh default workspace (never an fm-<home>- title, so
+# recovery/list_live ignore it) - cmux's own "closed the last tab" outcome.
 fm_backend_cmux_kill() {  # <target> [unused] [expected-label]
-  local expected_label=${3:-}
+  local expected_label=${3:-} ready_rc wsid wininfo win count
   if [ -n "$expected_label" ]; then
-    fm_backend_cmux_target_ready "$1" "$expected_label" || return 0
+    if fm_backend_cmux_teardown_target_ready "$1" "$expected_label"; then
+      :
+    else
+      ready_rc=$?
+      [ "$ready_rc" -eq 1 ] && return 0
+      return 1
+    fi
   else
     fm_backend_cmux_parse_target "$1" || return 0
   fi
-  fm_backend_cmux_cli close-workspace --workspace "$FM_BACKEND_CMUX_WORKSPACE" >/dev/null 2>&1 || true
+  wsid=$FM_BACKEND_CMUX_WORKSPACE
+  wininfo=$(fm_backend_cmux_window_of_workspace "$wsid") || return 1
+  [ -n "$wininfo" ] || return 0
+  win=${wininfo%% *}
+  count=${wininfo##* }
+  if [ -n "$win" ] && [ "$count" = 1 ]; then
+    fm_backend_cmux_cli new-workspace --window "$win" --focus false --id-format uuids >/dev/null 2>&1 || return 1
+  fi
+  fm_backend_cmux_cli close-workspace --workspace "$wsid" >/dev/null 2>&1 || true
 }
 
 # fm_backend_cmux_list_live: recovery/orphan discovery. Lists every workspace

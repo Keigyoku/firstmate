@@ -23,6 +23,9 @@
 #     endpoint.agent_alive is populated for secondmates only, where it is useful
 #     return-channel supervision data; other tasks use "not_checked".
 #   scout_reports[]: present data/<id>/report.md pointers.
+#   main_inventory: current-backlog consistency checks for the main home.
+#   secondmate_current: bounded structured summaries for registered secondmates.
+#   secondmate_landed: landed-work roll-up derived from secondmate_current.
 #   secondmate_guidance: return-channel action note for renderers and bearings.
 #
 # Compatibility: JSON is the primary machine-readable surface.
@@ -37,22 +40,58 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 BACKLOG="$DATA/backlog.md"
+SNAPSHOT_NOW=${FM_SNAPSHOT_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
+FM_SNAPSHOT_SECONDMATES=${FM_SNAPSHOT_SECONDMATES-20}
+FM_SNAPSHOT_SECONDMATE_CHILDREN=${FM_SNAPSHOT_SECONDMATE_CHILDREN-20}
+FM_SNAPSHOT_SECONDMATE_QUEUED=${FM_SNAPSHOT_SECONDMATE_QUEUED-20}
+FM_SNAPSHOT_SECONDMATE_DECISIONS=${FM_SNAPSHOT_SECONDMATE_DECISIONS-20}
+FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME=${FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME-10}
+FM_SNAPSHOT_REGISTRY_LINES=${FM_SNAPSHOT_REGISTRY_LINES-2000}
+FM_SNAPSHOT_REGISTRY_BYTES=${FM_SNAPSHOT_REGISTRY_BYTES-262144}
+FM_SNAPSHOT_REGISTRY_RECORDS=${FM_SNAPSHOT_REGISTRY_RECORDS-200}
+
+for bound_name in \
+  FM_SNAPSHOT_SECONDMATES \
+  FM_SNAPSHOT_SECONDMATE_CHILDREN \
+  FM_SNAPSHOT_SECONDMATE_QUEUED \
+  FM_SNAPSHOT_SECONDMATE_DECISIONS \
+  FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME \
+  FM_SNAPSHOT_REGISTRY_LINES \
+  FM_SNAPSHOT_REGISTRY_BYTES \
+  FM_SNAPSHOT_REGISTRY_RECORDS
+do
+  bound_value=${!bound_name}
+  case "$bound_value" in
+    0|[1-9]|[1-9][0-9]*) ;;
+    *)
+      echo "fm-fleet-snapshot: $bound_name must be 0 or a canonical positive integer (0 means unbounded)" >&2
+      exit 2
+      ;;
+  esac
+done
 
 # shellcheck source=bin/fm-backend.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-ff-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-ff-lib.sh"
 
 usage() {
   cat <<'EOF'
 usage: fm-fleet-snapshot.sh --json
+       fm-fleet-snapshot.sh --secondmate-home-summary
 
 Print a read-only structured snapshot of the firstmate fleet.
 JSON is the stable machine-readable output contract.
+The secondmate home mode emits the local structured summary used by a parent.
 EOF
 }
 
+OUTPUT_MODE=json
 case "${1:---json}" in
   --json) ;;
+  --secondmate-home-summary) OUTPUT_MODE=secondmate-home-summary ;;
   -h|--help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
@@ -176,7 +215,7 @@ backlog_json() {
     def links($rest): [$rest | scan(url_pattern)];
     def strip_trailing_metadata:
       reduce range(0; 20) as $_ (.;
-        sub("[[:space:]]*\\([[:space:]]*(?:(?:repo|kind|priority):[[:space:]]*[^)]*|(?:since|merged|reported|done)[[:space:]]+[^)]*)[[:space:]]*\\)[[:space:]]*$"; ""));
+        sub("[[:space:]]*\\([[:space:]]*(?:(?:repo|kind|priority|hold|hold-kind):[[:space:]]*[^)]*|(?:since|merged|reported|done)[[:space:]]+[^)]*)[[:space:]]*\\)[[:space:]]*$"; ""));
     def strip_title_artifacts:
       sub("[[:space:]]+-[[:space:]]+data/[^[:space:])]+/report\\.md$"; "")
       | sub("[[:space:]]+data/[^[:space:])]+/report\\.md$"; "")
@@ -194,6 +233,9 @@ backlog_json() {
       | sub("[[:space:]]*blocked-by:[[:space:]]+[^[:space:])]+[[:space:]]+-[[:space:]]+.*$"; "")
       | gsub("[[:space:]]*blocked-by:[[:space:]]+[^[:space:]]+"; "")
       | clean_title;
+    def blocked_by_ids($rest):
+      [ $rest | scan("blocked-by:[[:space:]]+(?<id>[^[:space:])]+)") | .[0] ]
+      | reduce .[] as $id ([]; if index($id) == null then . + [$id] else . end);
     def blocked_reason($rest):
       cap($rest; ".*blocked-by:[[:space:]]*[^[:space:])]+[[:space:]]+-[[:space:]]*(?<v>.*)$") as $reason
       | if $reason == null then null
@@ -231,7 +273,10 @@ backlog_json() {
              repo:metadata($rest; "repo"),
              kind:metadata($rest; "kind"),
              priority:metadata($rest; "priority"),
+             hold_reason:metadata($rest; "hold"),
+             hold_kind:metadata($rest; "hold-kind"),
              blocked_by:cap($rest; ".*blocked-by:[[:space:]]*(?<v>[^[:space:])]+).*"),
+             blocked_by_ids:blocked_by_ids($rest),
              blocked_reason:blocked_reason($rest),
              since:metadata_word($rest; "since"),
              merged:metadata_word($rest; "merged"),
@@ -266,6 +311,26 @@ backlog_json() {
     | .records |= map(
         if (.body_lines | length) > 0 then
           .body_excerpt = ((.body_lines | join(" "))[:240])
+        else . end)
+    | .records as $records
+    | (reduce ($records[] | select(.structured)) as $record ({};
+         .[$record.id] = ((.[$record.id] // true) and ($record.state == "done")))) as $resolved_ids
+    | .records |= map(
+        if .structured then
+          . as $record
+          | .unresolved_blocker_ids = [
+              $record.blocked_by_ids[] as $blocker
+              | select($resolved_ids[$blocker] != true)
+              | $blocker
+            ]
+          | .current_role =
+              (if .state == "in_flight" and .hold_reason != null and .hold_kind != null then "held"
+               elif .state == "in_flight" and .kind == "program" then "program"
+               elif .state == "in_flight" then "worker"
+               elif .state == "queued" then "queued"
+               else "done" end)
+          | .requires_child_metadata = (.current_role == "worker")
+          | .captain_actionable = false
         else . end)
     | del(.section,.order)
   ' < "$BACKLOG"
@@ -398,6 +463,216 @@ task_json_lines() {
   done | jq -s 'sort_by(.id)'
 }
 
+main_inventory_json() {  # <backlog-json> <tasks-json>
+  jq -n --argjson backlog "$1" --argjson tasks "$2" '
+    ([ $backlog.records[]?
+       | select((.state == "in_flight" or .state == "queued") and (.structured | not)) ]) as $unstructured
+    | ([ $backlog.records[]?
+         | select(.state == "in_flight" and .structured and .requires_child_metadata) ]) as $owned
+    | ([ $owned[] | select(.id as $id | [$tasks[].id] | index($id) | not) | .id ]) as $orphans
+    | {valid:(($unstructured | length) == 0 and ($orphans | length) == 0),
+       reason:(if ($unstructured | length) > 0 then "unstructured current backlog row"
+               elif ($orphans | length) > 0 then "in-flight backlog item has no child metadata"
+               else null end),
+       orphan_in_flight:$orphans,
+       unstructured_current_count:($unstructured | length)}'
+}
+
+secondmate_home_summary_json() {  # <backlog-json> <tasks-json>
+  jq -n \
+    --arg generated "$SNAPSHOT_NOW" \
+    --arg home "$FM_HOME" \
+    --argjson child_n "$FM_SNAPSHOT_SECONDMATE_CHILDREN" \
+    --argjson queued_n "$FM_SNAPSHOT_SECONDMATE_QUEUED" \
+    --argjson decisions_n "$FM_SNAPSHOT_SECONDMATE_DECISIONS" \
+    --argjson landed_n "$FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME" \
+    --argjson backlog "$1" \
+    --argjson tasks "$2" '
+    def trunc($n): tostring | gsub("\\s+"; " ") | if length > $n then .[:$n] + "…" else . end;
+    def bounded($rows; $n): if $n == 0 then $rows else $rows[:$n] end;
+    def omission($surface; $rows; $n; $reveal):
+      if $n > 0 and ($rows | length) > $n
+      then {surface:("\($surface) showing \($n) of \($rows | length)"),reveal:$reveal}
+      else empty end;
+    ([ $backlog.records[]? | select(.state == "in_flight" and .structured) ]) as $in_flight
+    | ([ $backlog.records[]?
+         | select(.structured and
+             (.state == "queued" or
+              (.state == "in_flight" and .current_role == "held"
+               and (.id as $id | any($tasks[]; .id == $id and .current_state.state == "working") | not)))) ]) as $queued
+    | ([ $in_flight[] | select(.requires_child_metadata)
+         | select(.id as $id | [$tasks[].id] | index($id) | not) | .id ]) as $orphans
+    | ([ $backlog.records[]?
+         | select((.state == "in_flight" or .state == "queued") and (.structured | not)) ]) as $unstructured
+    | ([ $in_flight[] as $work | $tasks[]
+         | select(.id == $work.id and .current_state.state == "working" and $work.current_role != "program")
+         | {id,kind,state:.current_state.state,source:.current_state.source,
+            doing:((.current_state.detail // "") | trunc(120))} ]) as $active
+    | ([ $tasks[]
+         | if .hints.pending_decision == true then
+             {id,key:.id,verb:"needs-decision",summary:((.hints.last_event_text // "needs decision") | trunc(160)),reason:null,source:"status"}
+           elif .hints.blocked_event == true then
+             {id,key:.id,verb:"blocked",summary:((.hints.last_event_text // "blocked") | trunc(160)),reason:null,source:"status"}
+           else empty end ]) as $decisions
+    | ([ $queued[]
+         | select((.unresolved_blocker_ids | length) > 0 or .hold_reason != null)
+         | {id,title:(.title | trunc(90)),blocked_by:(.unresolved_blocker_ids | join(",")),
+            blocked_by_ids:.blocked_by_ids,unresolved_blocker_ids:.unresolved_blocker_ids,
+            reason:((.hold_reason // .blocked_reason // "blocked") | trunc(120)),source:"backlog"} ]) as $holds
+    | ([ $backlog.records[]? | select(.state == "done" and .structured and .kind != "captain")
+         | {id:(.id | trunc(120)),title:(.title | trunc(120)),pr_url,report_path,local_note,completion} ]
+       | sort_by([(.completion.date // ""),.id]) | reverse) as $landed
+    | ([ $queued[] | {id:(.id | trunc(120)),title:(.title | trunc(120)),blocked_by,
+         blocked_by_ids,unresolved_blocker_ids,blocked_reason,hold_reason,hold_kind,captain_actionable,repo,kind}]) as $queued_rows
+    | ([ $tasks[] | {id,state:.current_state.state,source:.current_state.source,endpoint}]) as $endpoints
+    | (($backlog.present == true) and (($unstructured | length) == 0) and (($orphans | length) == 0)) as $valid
+    | (if ($unstructured | length) > 0 then "unstructured current backlog row"
+       elif ($orphans | length) > 0 then "in-flight backlog item has no child metadata"
+       elif $backlog.present != true then "missing structured backlog"
+       else null end) as $reason
+    | {schema:"fm-secondmate-home-summary.v1",generated:$generated,home:$home,valid:$valid,reason:$reason,
+       state:(if $valid | not then "unknown" elif ($decisions | length) > 0 then "captain_decision"
+              elif ($active | length) > 0 then "active_child_work"
+              elif ($holds | length) > 0 then "externally_held" else "no_active_work" end),
+       active_children:bounded($active;$child_n),decisions_open:bounded($decisions;$decisions_n),
+       holds:bounded($holds;$queued_n),queued:bounded($queued_rows;$queued_n),
+       landed:bounded($landed;$landed_n),endpoints:bounded($endpoints;$child_n),
+       counts:{active_children:($active|length),decisions_open:($decisions|length),holds:($holds|length),
+         queued:($queued|length),landed:($landed|length),endpoints:($tasks|length)},
+       omitted:[
+         omission("active_children";$active;$child_n;"--all-in-flight"),
+         omission("decisions_open";$decisions;$decisions_n;"--all-decisions"),
+         omission("holds";$holds;$queued_n;"--all-queued"),
+         omission("queued";$queued_rows;$queued_n;"--all-queued"),
+         omission("endpoints";$endpoints;$child_n;"--all-unhealthy")
+       ]}'
+}
+
+registry_secondmates_json() {
+  local registry="$DATA/secondmates.md" input='' read_rc=0 input_truncated=0
+  local line_count byte_count LC_ALL=C
+  if [ ! -e "$registry" ]; then
+    jq -n --arg path "$registry" '{present:false,available:true,reason:null,provenance:"registered-table",path:$path,records:[],input_truncated:false,records_truncated:false}'
+    return 0
+  fi
+  if [ ! -f "$registry" ]; then
+    jq -n --arg path "$registry" '{present:true,available:false,reason:"registry path is not a regular file",provenance:"registered-table",path:$path,records:[],input_truncated:false,records_truncated:false}'
+    return 0
+  fi
+  if [ ! -r "$registry" ]; then
+    jq -n --arg path "$registry" '{present:true,available:false,reason:"registry file is not readable",provenance:"registered-table",path:$path,records:[],input_truncated:false,records_truncated:false}'
+    return 0
+  fi
+  if [ "$FM_SNAPSHOT_REGISTRY_BYTES" -gt 0 ]; then
+    input=$({ head -c "$((FM_SNAPSHOT_REGISTRY_BYTES + 1))" -- "$registry" 2>/dev/null; printf '\034%s' "$?"; })
+    read_rc=${input##*$'\034'}
+    input=${input%$'\034'*}
+    if [ "$read_rc" -eq 0 ]; then
+      byte_count=${#input}
+      if [ "$byte_count" -gt "$FM_SNAPSHOT_REGISTRY_BYTES" ]; then
+        input=${input:0:FM_SNAPSHOT_REGISTRY_BYTES}
+        case "$input" in
+          *$'\n') ;;
+          *$'\n'*) input=${input%$'\n'*} ;;
+          *) input='' ;;
+        esac
+        input_truncated=1
+      fi
+    fi
+  elif [ "$FM_SNAPSHOT_REGISTRY_LINES" -gt 0 ]; then
+    input=$({ head -n "$((FM_SNAPSHOT_REGISTRY_LINES + 1))" -- "$registry" 2>/dev/null; printf '\034%s' "$?"; })
+    read_rc=${input##*$'\034'}
+    input=${input%$'\034'*}
+  else
+    input=$({ cat -- "$registry" 2>/dev/null; printf '\034%s' "$?"; })
+    read_rc=${input##*$'\034'}
+    input=${input%$'\034'*}
+  fi
+  if [ "$read_rc" -ne 0 ]; then
+    jq -n --arg path "$registry" --arg reason "registry read failed (exit $read_rc)" \
+      '{present:true,available:false,reason:$reason,provenance:"registered-table",path:$path,records:[],input_truncated:false,records_truncated:false}'
+    return 0
+  fi
+  if [ "$FM_SNAPSHOT_REGISTRY_LINES" -gt 0 ]; then
+    line_count=$(printf '%s' "$input" | awk 'END { print NR }')
+    if [ "$line_count" -gt "$FM_SNAPSHOT_REGISTRY_LINES" ]; then
+      input=$(printf '%s' "$input" | awk -v limit="$FM_SNAPSHOT_REGISTRY_LINES" 'NR <= limit')
+      input_truncated=1
+    fi
+  fi
+  printf '%s\n' "$input" | jq -Rn \
+    --arg path "$registry" \
+    --argjson input_truncated "$(bool_json "$input_truncated")" \
+    --argjson record_limit "$FM_SNAPSHOT_REGISTRY_RECORDS" '
+    ([ inputs | select(startswith("- "))
+      | (capture("^- (?<id>[^[:space:]]+)")?) as $id
+      | (capture("\\(home:[[:space:]]*(?<home>[^;)]*)[;)]")?) as $home
+      | select($id != null)
+      | {id:$id.id,home:($home.home // null)} ]) as $parsed
+    | {present:true,available:true,reason:null,provenance:"registered-table",path:$path,
+       records:(if $record_limit == 0 then $parsed else $parsed[:$record_limit] end),
+       input_truncated:$input_truncated,
+       records_truncated:($record_limit > 0 and ($parsed | length) > $record_limit)}'
+}
+
+secondmate_current_json() {
+  local registry records total shown id home summary reason record
+  registry=$(registry_secondmates_json) || return 1
+  records='[]'
+  total=$(printf '%s' "$registry" | jq '.records | length')
+  shown=$total
+  if [ "$FM_SNAPSHOT_SECONDMATES" -gt 0 ] && [ "$shown" -gt "$FM_SNAPSHOT_SECONDMATES" ]; then
+    shown=$FM_SNAPSHOT_SECONDMATES
+  fi
+  while IFS=$'\t' read -r id home; do
+    [ -n "$id" ] || continue
+    reason=
+    summary=
+    if [ -z "$home" ]; then
+      reason="registry entry has no home"
+    elif validate_secondmate_home "$id" "$home"; then
+      home=$VALIDATED_HOME
+      summary=$(env -u FM_STATE_OVERRIDE -u FM_DATA_OVERRIDE -u FM_CONFIG_OVERRIDE -u FM_PROJECTS_OVERRIDE \
+        FM_ROOT_OVERRIDE="$FM_ROOT" FM_HOME="$home" FM_SNAPSHOT_NOW="$SNAPSHOT_NOW" \
+        FM_SNAPSHOT_SECONDMATE_CHILDREN="$FM_SNAPSHOT_SECONDMATE_CHILDREN" \
+        FM_SNAPSHOT_SECONDMATE_QUEUED="$FM_SNAPSHOT_SECONDMATE_QUEUED" \
+        FM_SNAPSHOT_SECONDMATE_DECISIONS="$FM_SNAPSHOT_SECONDMATE_DECISIONS" \
+        FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME="$FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME" \
+        "$SCRIPT_DIR/fm-fleet-snapshot.sh" --secondmate-home-summary 2>/dev/null) || reason="structured home summary failed"
+    else
+      reason=$VALIDATION_ERROR
+    fi
+    if [ -n "$summary" ] && printf '%s' "$summary" | jq -e '.schema == "fm-secondmate-home-summary.v1"' >/dev/null 2>&1; then
+      record=$(jq -n --arg id "$id" --arg home "$home" --arg observed "$SNAPSHOT_NOW" --argjson summary "$summary" '
+        {id:$id,home:$home,registered:true,current:{state:$summary.state,reason:$summary.reason},
+         active_children:$summary.active_children,decisions_open:$summary.decisions_open,holds:$summary.holds,
+         queued:$summary.queued,landed:$summary.landed,endpoints:$summary.endpoints,counts:$summary.counts,omitted:$summary.omitted,
+         provenance:{selected:"structured-home"},freshness:{status:"fresh",observed_at:$observed,age_seconds:0},
+         contradiction:false,parent_event:{activity_scan:{available:true,input_truncated:false,retained_truncated:false}}}')
+    else
+      record=$(jq -n --arg id "$id" --arg home "$home" --arg reason "${reason:-structured home summary unavailable}" --arg observed "$SNAPSHOT_NOW" '
+        {id:$id,home:($home | if . == "" then null else . end),registered:true,
+         current:{state:"unknown",reason:$reason},active_children:[],decisions_open:[],holds:[],queued:[],landed:[],endpoints:[],
+         counts:{active_children:0,decisions_open:0,holds:0,queued:0,landed:0,endpoints:0},omitted:[],
+         provenance:{selected:"registered-table"},freshness:{status:"unavailable",observed_at:$observed,age_seconds:null},
+         contradiction:false,parent_event:{activity_scan:{available:false,input_truncated:false,retained_truncated:false}}}')
+    fi
+    records=$(jq -n --argjson records "$records" --argjson record "$record" '$records + [$record]')
+  done < <(printf '%s' "$registry" | jq -r --argjson shown "$shown" '.records[:$shown][] | [.id,(.home // "")] | @tsv')
+  jq -n --argjson registry "$registry" --argjson records "$records" --argjson total "$total" --argjson shown "$shown" \
+    '{registry:$registry,records:$records,total:$total,shown:$shown,truncated:($total-$shown)}'
+}
+
+secondmate_landed_from_current_json() {
+  jq -n --argjson current "$1" '
+    {records:[ $current.records[] | select(.provenance.selected == "structured-home") as $mate
+      | $mate.landed[] | . + {home:$mate.home,home_id:$mate.id}],
+     truncated:[ $current.records[] | select(.provenance.selected == "structured-home" and .counts.landed > (.landed|length)) | .home],
+     unreadable:[ $current.records[] | select(.provenance.selected != "structured-home") | .home // ("<" + .id + ": unavailable>")],
+     partial:[ $current.records[] | select(.provenance.selected == "structured-home" and .current.state == "unknown") | .home]}
+    | .records |= sort_by([(.completion.date // ""),.id]) | .records |= reverse'
+}
+
 scout_report_lines() {
   local report id
   if [ ! -d "$DATA" ]; then
@@ -415,9 +690,19 @@ scout_report_lines() {
 
 BACKLOG_JSON=$(backlog_json)
 TASKS_JSON=$(task_json_lines)
+
+if [ "$OUTPUT_MODE" = secondmate-home-summary ]; then
+  secondmate_home_summary_json "$BACKLOG_JSON" "$TASKS_JSON"
+  exit $?
+fi
+
 SCOUT_REPORTS_JSON=$(scout_report_lines)
+MAIN_INVENTORY_JSON=$(main_inventory_json "$BACKLOG_JSON" "$TASKS_JSON")
+SECONDMATE_CURRENT_JSON=$(secondmate_current_json)
+SECONDMATE_LANDED_JSON=$(secondmate_landed_from_current_json "$SECONDMATE_CURRENT_JSON")
 
 jq -n \
+  --arg generated "$SNAPSHOT_NOW" \
   --arg fm_home "$FM_HOME" \
   --arg fm_root "$FM_ROOT" \
   --arg state "$STATE" \
@@ -426,17 +711,24 @@ jq -n \
   --arg projects "$PROJECTS" \
   --argjson backlog "$BACKLOG_JSON" \
   --argjson tasks "$TASKS_JSON" \
+  --argjson main_inventory "$MAIN_INVENTORY_JSON" \
   --argjson scout_reports "$SCOUT_REPORTS_JSON" \
+  --argjson secondmate_current "$SECONDMATE_CURRENT_JSON" \
+  --argjson secondmate_landed "$SECONDMATE_LANDED_JSON" \
   'def backlog_by_id($id): ($backlog.records[]? | select(.structured == true and .id == $id) | .) // null;
    def task_by_id($id): ($tasks[]? | select(.id == $id) | .) // null;
    def report_kind($id): (task_by_id($id).kind // backlog_by_id($id).kind // "scout");
    {
      schema:"fm-fleet-snapshot.v1",
+     generated:$generated,
      fm_home:$fm_home,
      roots:{fm_root:$fm_root,state:$state,data:$data,config:$config,projects:$projects},
      backlog:$backlog,
      tasks:($tasks | map(. + {backlog:backlog_by_id(.id)})),
+     main_inventory:$main_inventory,
      scout_reports:($scout_reports | map(. + {kind:report_kind(.id)})),
+     secondmate_current:$secondmate_current,
+     secondmate_landed:$secondmate_landed,
      secondmate_guidance:{
        note:"For kind=secondmate, send marked supervisor requests with fm-send and read the status/doc return channel; do not routinely fm-peek the secondmate chat for answers."
      }

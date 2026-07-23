@@ -1279,6 +1279,44 @@ test_local_only_force_overrides_unpushed() {
   pass "local-only worktree with unpushed work is torn down under --force (escape hatch)"
 }
 
+test_cmux_window_scan_failure_preserves_metadata() {
+  local case_dir rc title
+  case_dir=$(make_case cmux-window-scan-failure)
+  write_meta "$case_dir" local-only ship
+  sed -i 's|^window=.*|window=aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111|' \
+    "$case_dir/state/task-x1.meta"
+  printf '%s\n' 'backend=cmux' >> "$case_dir/state/task-x1.meta"
+  title=$(FM_ROOT_OVERRIDE="$ROOT" bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_scoped_title fm-task-x1' "$ROOT")
+  cat > "$case_dir/fakebin/cmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+count_file="${FM_CMUX_TEST_COUNT:?}"
+count=$(( $(cat "$count_file" 2>/dev/null || echo 0) + 1 ))
+printf '%s\n' "$count" > "$count_file"
+case "$count" in
+  1) printf '[{"id":"eeeeeeee-0000-0000-0000-000000000000","workspace_count":1}]' ;;
+  2) printf '{"workspaces":[{"id":"aaaaaaaa-0000-0000-0000-000000000000","title":"%s"}]}' "${FM_CMUX_EXPECTED_TITLE:?}" ;;
+  3) printf '{"panes":[{"selected_surface_id":"bbbbbbbb-1111-1111-1111-111111111111","surface_ids":["bbbbbbbb-1111-1111-1111-111111111111"]}]}' ;;
+  4) exit 1 ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$case_dir/fakebin/cmux"
+
+  set +e
+  FM_CMUX_TEST_COUNT="$case_dir/cmux-count" FM_CMUX_EXPECTED_TITLE="$title" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "cmux-window-scan-failure: teardown should fail closed"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "cmux-window-scan-failure: teardown removed retry metadata after an incomplete scan"
+  assert_grep "task metadata preserved" "$case_dir/stderr" \
+    "cmux-window-scan-failure: teardown did not report the preserved retry state"
+  pass "cmux window scan failure preserves task metadata for retry"
+}
+
 test_local_only_fork_remote_allows
 test_teardown_prompts_tasks_axi_done_when_compatible
 test_teardown_manual_backend_prompts_hand_edit_even_when_tasks_axi_present
@@ -1287,6 +1325,7 @@ test_local_only_merged_to_local_main_allows
 test_no_mistakes_origin_remote_allows
 test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
+test_cmux_window_scan_failure_preserves_metadata
 test_squash_merged_branch_deleted_allows
 test_squash_merged_pr_allows_when_head_ancestor_of_pr_head
 test_no_pr_recorded_discovers_merged_pr_by_branch_allows

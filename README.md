@@ -32,10 +32,12 @@ But the moment you want three project tasks done in parallel - fixes, investigat
 firstmate flips the model.
 You talk to a single agent - the first mate - and it runs the crew for you: spawning autonomous agents in a visible session backend, giving each a clean git worktree, supervising them to completion, and handing you finished PRs, approved local merges, or standalone investigation reports.
 For larger fleets, you can opt in to persistent secondmates: domain supervisors that are still ordinary direct reports, but run from their own isolated firstmate homes.
-There is no app to install; the orchestrator is `AGENTS.md`, bundled firstmate skills, and helper scripts that any terminal coding agent can follow.
 
-This is not an agent harness. This is not a single skill. This is not a CLI.
-This is.. a directory that turns any agent into your firstmate, and you the captain.
+firstmate is not a model, not a harness, not a skill, not an MCP server, and not a CLI.
+firstmate is an agent distro for running a crew of agents.
+An agent distro is a portable directory of instructions, skills, tooling, policies, and state conventions that turns a general-purpose agent into a specialized one.
+There is no app to install: the cloned repo is the distro - `AGENTS.md`, bundled firstmate skills, and helper scripts that any terminal coding agent can follow.
+Launching a supported harness inside it instantiates your first mate - and makes you the captain.
 
 ## Features
 
@@ -163,7 +165,8 @@ Hermes has no verified skill slash form; use natural language there.
 | Skill              | What it does                                                                                                                                  |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/afk`             | Enter away-mode supervision: the sub-supervisor self-handles routine wakes in bash, escalates captain-relevant events and bounded declared-external-wait rechecks as batched digests, and actively alerts if delivery wedges while you step away |
-| `/bearings`        | Generate a "pick up where I left off" status report from the read-only fleet snapshot - backlog, per-task crew state, open PRs, scout reports, pending decisions, and date-gated queued work - written to a dated file in `data/` and surfaced concisely in chat; read-mostly, mutates no task state |
+| `/ahoy`            | Recap only visible session events since the prior real captain message, falling back to Bearings when invoked as the session's first real captain message |
+| `/bearings`        | Generate a standalone current-status report from one bounded local snapshot (four-section chat: Captain's Call / Recently Landed / Underway / Charted Next), with live PR enrichment only when requested; written to a dated file in `data/` and surfaced concisely in chat; read-mostly, mutates no task state |
 | `/updatefirstmate` | Self-update the running firstmate and its secondmates to the latest from origin with fast-forward-only pulls, then re-read instructions and nudge secondmates |
 | `/stow`            | Sweep the session for uncaptured durable knowledge, route each finding to its disk home per AGENTS.md, file undone next steps to the backlog, and report what is now safe to reset |
 
@@ -198,7 +201,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/crew-tdd-guard.md](docs/crew-tdd-guard.md) - the ship-crew TDD pre-execution guard riding the kill-guard rails, its escape hatch, and per-harness enforcement.
 - [docs/supervision-protocols/](docs/supervision-protocols/) - rendered primary-harness watcher protocols for Claude, Codex, OpenCode, Pi, Grok, and unknown harness fallback.
 - [docs/scripts.md](docs/scripts.md) - the `bin/` toolbelt reference.
-- [`AGENTS.md`](AGENTS.md) - firstmate's full operating manual for the orchestrator agent.
+- [`AGENTS.md`](AGENTS.md) - the distro's core instruction file and the first mate's full operating manual.
 - [CONTRIBUTING.md](CONTRIBUTING.md) - how to contribute, including the dev/test commands.
 
 ## Contributing
