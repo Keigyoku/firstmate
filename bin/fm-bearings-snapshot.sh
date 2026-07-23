@@ -58,7 +58,7 @@
 # Output contract: `fm-bearings.v1`. Read-only; no locks, no mutation, no reports.
 # Fork adaptations (Batch A port of upstream tip #875 / 5549834 family):
 # - Soft-gate fm-afk-return.sh when absent (upstream return-catch-up path not ported).
-# - Decision-hold (#593) captain-hold surfaces omitted; decisions_open uses fork status hints.
+# - Decision-hold (#593) captain-hold surfaces in decisions_open; status hints remain for parked needs-decision/blocked.
 # - gates.blocked_by falls back to the string backlog.blocked_by field when
 #   unresolved_blocker_ids is absent (older fleet-snapshot schema).
 #
@@ -289,8 +289,7 @@ EOF
 fi
 
 # --- projection: canonical snapshot -> fm-bearings.v1 model (JSON) ----------
-# decisions_open adaptation (no #593 decision-hold): use fork status hints
-# (pending_decision / blocked_event) instead of captain_actionable captain-hold rows.
+# decisions_open: structured captain holds (#593) plus fork status hints for parked needs-decision/blocked.
 MODEL=$(printf '%s' "$SNAP" | jq \
   --arg home "$HOME_LABEL" \
   --arg now "$NOW" \
@@ -354,14 +353,17 @@ MODEL=$(printf '%s' "$SNAP" | jq \
          | select(.endpoint.exists == false or .endpoint.agent_alive == "dead")
          | {id:($m.id + "/" + .id),backend:"secondmate-home",target:(.endpoint.target // "-"),exists:.endpoint.exists,agent:.endpoint.agent_alive} ]) as $unhealthy_all
   | ([ (.secondmate_current.records // [])[]
+       | ([.decisions_open[]? | select(.source == "backlog" and .verb == "captain-hold")]) as $captain_holds
        | ([.decisions_open[]? | select(.source == "status" and (.verb == "needs-decision" or .verb == "blocked"))]) as $status_decisions
        | ([.holds[]? | select(.source == "backlog")]) as $backlog_holds
        | . + {
+           bearings_captain_holds:$captain_holds,
            bearings_decisions:$status_decisions,
            bearings_holds:(if .current.state == "captain_decision" then $backlog_holds else .holds end),
            bearings_state:(
              if .current.state == "captain_decision" then
-               if ($status_decisions | length) > 0 then "captain_decision"
+               if ($captain_holds | length) > 0 then "captain_decision"
+               elif ($status_decisions | length) > 0 then "captain_decision"
                elif (.active_children | length) > 0 then "active_child_work"
                elif ($backlog_holds | length) > 0 then "externally_held"
                else "unknown" end
@@ -378,7 +380,11 @@ MODEL=$(printf '%s' "$SNAP" | jq \
           doing:((if .bearings_state == "active_child_work" then
                     ([.active_children[] | .id + ": " + (.doing // .state)] | join("; "))
                   elif .bearings_state == "captain_decision" then
-                    ([.bearings_decisions[] | .summary] | join("; "))
+                    (if (.bearings_captain_holds | length) > 0 then
+                       ([.bearings_captain_holds[] | .summary] | join("; "))
+                     else
+                       ([.bearings_decisions[] | .summary] | join("; "))
+                     end)
                   elif .bearings_state == "externally_held" then
                     ([.bearings_holds[] | .id + ": " + (.reason // "held")] | join("; "))
                   elif .bearings_state == "no_active_work" then "No active child work"
@@ -399,7 +405,16 @@ MODEL=$(printf '%s' "$SNAP" | jq \
          | select(.bearings_state == "active_child_work")
          | {id,kind:"secondmate",state:.bearings_state,
             doing:([.active_children[] | .id + ": " + (.doing // .state)] | join("; ") | trunc(90))} ]) as $in_flight_all
-  | ([ .tasks[]
+  | ([ .backlog.records[]
+         | select(.state == "queued" and .structured and .kind == "captain"
+                  and .hold_kind == "captain" and .hold_reason != null)
+         | {id,key:.id,verb:"captain-hold",
+            summary:((.title + ": " + .hold_reason) | trunc(90)),owner:"(main)"} ]
+     + [ (.secondmate_current.records // [])[] as $m | $m.decisions_open[]?
+         | select(.source == "backlog" and .verb == "captain-hold")
+         | {id:($m.id + "/" + .id),key,verb,
+            summary:(((.summary // .id) + ": " + (.reason // "captain decision pending")) | trunc(90)),owner:$m.id} ]
+     + [ .tasks[]
          | select(.kind != "secondmate")
          | select(
              .hints.pending_decision == true
@@ -440,6 +455,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
          | select(.structured and
              (.state == "queued" or
               (.state == "in_flight" and .current_role == "held" and ($working_ids | index($record.id) | not))))
+         | select((.kind == "captain" and .hold_kind == "captain" and .hold_reason != null) | not)
          | select(.captain_actionable != true)
          | select(($all_queued == 1)
                   or (((.body_excerpt // "") | test("SUPERSEDED|NOT REQUIRED|NOT-REQUIRED|DEFERRED"; "i")) | not))

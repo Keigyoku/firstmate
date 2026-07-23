@@ -24,7 +24,7 @@ It never tears down a task, merges a PR, dispatches new work, or mutates any tas
    When the captain asks to include PRs, use the command's live-PR opt-in; otherwise keep the default local-only read.
    If the command is unavailable, fall back to `bin/fm-fleet-snapshot.sh --json` and `bin/fm-crew-state.sh <id>`; never infer current state from a raw `tail` of `state/<id>.status`, which is append-only wake-event history whose last line goes stale.
    For registered secondmates, use the snapshot's structured-home classification and provenance; a parent event or bounded terminal contradiction is fallback evidence, never authority over readable structured home state.
-   Structured captain-held decisions from `decision-hold-lifecycle` (#593) are not yet ported on this fork; `decisions_open` surfaces fork-native parked `needs-decision` / `blocked` status hints instead, and does not scrape reports or visual-review artifacts to invent decisions.
+   `decisions_open` surfaces structured captain holds from `decision-hold-lifecycle` plus parked `needs-decision` / `blocked` status hints; it does not scrape reports or visual-review artifacts to invent decisions.
    A queued item under `gates` only becomes "next work" when its blocker is gone and its time/date gate has arrived; until then it stays queued with the reason.
    The `(main-inventory)` gate is an action-free integrity warning rather than queued work: render it under Charted Next with the related `omitted` disclosure, never invent an Underway row from backlog-only state, and never move it into Captain's Call.
 

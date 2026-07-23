@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Primary turn-end guard for the firstmate PRIMARY session only.
+# Turn-end guard for any firstmate PRIMARY session: the main home OR a
+# secondmate's own home. A secondmate runs its own primary firstmate session and
+# is guarded exactly like the main primary; only child crew/scout worktrees are
+# exempt (see the scoping block and docs/turnend-guard.md).
 #
 # fm-guard.sh (bin/fm-guard.sh) is pull-based: it only warns when some other
 # supervision script happens to run. A primary session that ends a turn without
@@ -14,11 +17,12 @@
 # and fail-open tradeoffs.
 #
 # Ships with TRACKED harness hook files at the repo root, so this file is
-# checked out into every worktree of this repo: the primary checkout, any
-# crewmate/scout task worktree spawned to work on firstmate itself (the
-# recursive "firstmate improving itself" case), and every secondmate home
-# (treehouse-leased or git-cloned). It must therefore scope itself to the
-# PRIMARY at runtime and stay a silent, fast no-op everywhere else.
+# checked out into every worktree of this repo: the primary checkout, every
+# secondmate home (treehouse-leased or git-cloned), and any crewmate/scout task
+# worktree spawned to work on firstmate itself. A secondmate home runs its OWN
+# primary firstmate session, so it must be guarded like the main primary; only
+# child crew/scout worktrees are exempt. Physical-identity watcher matching and
+# the settled healthy predicate are fork private evolution and must not regress.
 #
 # Loop-guard: never block twice in the same turn. Claude Code and codex Stop
 # payloads carry stop_hook_active=true when the CURRENT stop attempt was itself
@@ -70,22 +74,14 @@ command -v jq >/dev/null 2>&1 || exit 0
 STOP_HOOK_ACTIVE=$(printf '%s' "$PAYLOAD" | jq -r '.stop_hook_active // false' 2>/dev/null) || exit 0
 [ "$STOP_HOOK_ACTIVE" = "true" ] && exit 0
 
-# --- scope precisely to the PRIMARY checkout --------------------------------
-# Excludes secondmate homes (the .fm-secondmate-home marker is written at seed
-# time regardless of whether the home was treehouse-leased or git-cloned; see
-# bin/fm-home-seed.sh) and ordinary crewmate/scout task worktrees of
-# firstmate-on-itself (bin/fm-spawn.sh only ever hands those out as genuine
-# linked `git worktree`s - it aborts the spawn otherwise - so a plain,
-# non-worktree checkout is never one of those). A linked worktree's git-dir
-# lives under the main repo's .git/worktrees/<name> and differs from the common
-# (shared) git-dir; only the main, non-worktree checkout has the two equal.
-[ -f "$FM_ROOT/.fm-secondmate-home" ] && exit 0
-GIT_DIR=$(git -C "$FM_ROOT" rev-parse --git-dir 2>/dev/null) || exit 0
-GIT_COMMON_DIR=$(git -C "$FM_ROOT" rev-parse --git-common-dir 2>/dev/null) || exit 0
-[ "$GIT_DIR" = "$GIT_COMMON_DIR" ] || exit 0
-[ -f "$FM_ROOT/AGENTS.md" ] || exit 0
-[ -d "$FM_ROOT/bin" ] || exit 0
-[ -d "$STATE" ] || exit 0
+# --- scope precisely to a PRIMARY checkout ----------------------------------
+# A genuinely-marked secondmate home runs its OWN primary firstmate session, so
+# force-INCLUDE it (treehouse-leased linked or git-cloned plain). Only unmarked
+# linked task worktrees stay exempt. Shared predicates live in
+# bin/fm-primary-scope-lib.sh (one owner with subagent/cd-adjacent scope checks).
+# shellcheck source=bin/fm-primary-scope-lib.sh
+. "$SCRIPT_DIR/fm-primary-scope-lib.sh"
+fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 
 # --- the actual predicate ----------------------------------------------------
 # shellcheck source=bin/fm-wake-lib.sh
