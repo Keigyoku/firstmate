@@ -60,7 +60,7 @@
 # removing any lock. On lock-backed failures, teardown_treehouse_return waits and
 # retries once, since the owning process may simply be exiting. If the lock is
 # still present, it is removed and the return retried ONE more time, but ONLY
-# when the lock is provably stale, meaning ALL of the following hold:
+# when the lock is provably stale per bin/fm-lock-lib.sh (fm_lock_is_provably_stale), meaning ALL of the following hold:
 #   1. the lock file still exists after the retry wait above;
 #   2. its mtime age is at least FM_STALE_WORKTREE_LOCK_AGE_SECS (default 30s) - a
 #      freshly created lock might belong to a process `lsof` has not yet reflected;
@@ -97,6 +97,9 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never tear
 # down a worktree (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
+# shellcheck source=bin/fm-lock-lib.sh
+. "$SCRIPT_DIR/fm-lock-lib.sh"
+FM_LOCK_LOG_PREFIX=teardown
 "$FM_ROOT/bin/fm-guard.sh" || true
 ID=$1
 FORCE=${2:-}
@@ -458,70 +461,9 @@ worktree_git_lock_path() {
   esac
 }
 
-lsof_path_has_holder() {
-  local target=$1 output status
-  if output=$(lsof -- "$target" 2>&1); then
-    return 0
-  else
-    status=$?
-  fi
-  if [ "$status" -eq 1 ] && [ -z "$output" ]; then
-    return 1
-  fi
-  if [ -n "$output" ]; then
-    printf '%s\n' "$output" | sed 's/^/teardown: lsof check failed: /' >&2
-  else
-    echo "teardown: lsof check failed for $target with exit $status" >&2
-  fi
-  return 2
-}
 
-# Does any live process hold $lock open, or hold the worktree $dir itself open
-# (as cwd or an fd)? See the script header for why this proves liveness. A
-# missing lsof is treated as "cannot prove no holder" (fail safe: assume live).
-worktree_lock_has_live_holder() {
-  local lock=$1 dir=$2 status
-  command -v lsof >/dev/null 2>&1 || return 0
-  if [ -n "$lock" ]; then
-    if lsof_path_has_holder "$lock"; then
-      return 0
-    else
-      status=$?
-      [ "$status" -eq 1 ] || return 0
-    fi
-  fi
-  if [ -n "$dir" ]; then
-    if lsof_path_has_holder "$dir"; then
-      return 0
-    else
-      status=$?
-      [ "$status" -eq 1 ] || return 0
-    fi
-  fi
-  return 1
-}
 
-worktree_lock_age() {
-  local lock=$1 m now
-  m=$(fm_path_mtime "$lock") || return 1
-  case "$m" in ''|*[!0-9]*) return 1 ;; esac
-  now=$(date +%s) || return 1
-  case "$now" in ''|*[!0-9]*) return 1 ;; esac
-  printf '%s\n' "$(( now - m ))"
-}
 
-# Is $lock provably stale per the header's staleness proof? Returns non-zero
-# (never remove) unless the lock exists, has no live holder, and is old enough.
-worktree_lock_is_provably_stale() {
-  local lock=$1 dir=$2 age
-  [ -n "$lock" ] && [ -e "$lock" ] || return 1
-  worktree_lock_has_live_holder "$lock" "$dir" && return 1
-  if ! age=$(worktree_lock_age "$lock"); then
-    echo "teardown: cannot read mtime for git lock $lock; leaving it in place" >&2
-    return 1
-  fi
-  [ "$age" -ge "$STALE_WORKTREE_LOCK_AGE_SECS" ]
-}
 
 worktree_safety_blocked_by_lock() {
   local reason=$1 lock
@@ -544,7 +486,7 @@ cleanup_stale_lock_for_safety_check() {
     return 0
   fi
 
-  if worktree_lock_is_provably_stale "$lock" "$dir"; then
+  if fm_lock_is_provably_stale "$lock" "$dir" "$STALE_WORKTREE_LOCK_AGE_SECS"; then
     rm -f "$lock"
     echo "teardown: removed provably-stale git lock $lock (age >= ${STALE_WORKTREE_LOCK_AGE_SECS}s, no live holder) and retrying worktree safety checks" >&2
     return 0
@@ -584,7 +526,7 @@ finish_treehouse_return_after_retry_failed() {
   local dir=$1 cd_dir=$2 label=$3 post_cleanup_check=${4:-} lock=$5
 
   if [ -e "$lock" ]; then
-    if worktree_lock_is_provably_stale "$lock" "$dir"; then
+    if fm_lock_is_provably_stale "$lock" "$dir" "$STALE_WORKTREE_LOCK_AGE_SECS"; then
       rm -f "$lock"
       echo "teardown: removed provably-stale git lock $lock (age >= ${STALE_WORKTREE_LOCK_AGE_SECS}s, no live holder) and retrying $label return" >&2
       if [ -n "$post_cleanup_check" ]; then
