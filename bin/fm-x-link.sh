@@ -19,12 +19,14 @@
 # x_followups and x_request_ts before its meta goes away and passes both here,
 # so the new task does not get a fresh follow-up budget, a refreshed local
 # window, or a dropped reply-platform context against a binding the relay
-# already knows about. Pass --carry-platform and --carry-max from the prior
-# task's x_platform and x_reply_max_chars when the original inbox file is gone.
+# already knows about. Pass --carry-platform and, when present, --carry-max from
+# the prior task's x_platform and x_reply_max_chars when the original inbox file
+# is gone. A platform-only carry uses that platform's configured default budget.
 #
 # Fresh-link context resolution fills platform and explicit budget independently
 # through the durable per-request registry, inbox payload, then authoritative
-# relay lookup by request_id. If either axis remains missing, the link is still
+# relay lookup by request_id. A known platform supplies its configured default
+# when the relay omits a budget. If platform remains missing, the link is still
 # recorded but a loud warning is printed and follow-ups fail closed.
 #
 # This is a separate step the fmx-respond skill runs AFTER fm-spawn.sh, so it
@@ -42,6 +44,7 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-x-lib.sh
+# shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-x-lib.sh"
 
 usage() {
@@ -147,13 +150,17 @@ if [ -z "$CARRY_TS" ]; then
   REQ_REPLY_MAX=$REQ_EXPLICIT_MAX
 fi
 
-if [ -n "$CARRY_TS" ] && { [ -z "$REQ_PLATFORM" ] || [ -z "$REQ_REPLY_MAX" ]; }; then
-  echo "fm-x-link: relink requires carried reply context; pass --carry-platform and --carry-max from the prior task" >&2
+if [ -n "$CARRY_TS" ] && [ -z "$REQ_PLATFORM" ]; then
+  echo "fm-x-link: relink requires a carried reply platform; pass --carry-platform from the prior task" >&2
   exit 2
 fi
 
-if [ -z "$CARRY_TS" ] && { [ -z "$REQ_PLATFORM" ] || [ -z "$REQ_REPLY_MAX" ]; }; then
-  echo "fm-x-link: WARNING: incomplete authoritative reply context for request $RID; every completion follow-up will be HELD until both platform and explicit budget can be resolved. Ensure the relay request-context lookup supplies both values." >&2
+if [ -n "$REQ_PLATFORM" ]; then
+  REQ_REPLY_MAX=$(fmx_reply_limit_for_platform "$REQ_PLATFORM" "$REQ_REPLY_MAX")
+fi
+
+if [ -z "$CARRY_TS" ] && [ -z "$REQ_PLATFORM" ]; then
+  echo "fm-x-link: WARNING: incomplete authoritative reply context for request $RID; every completion follow-up will be HELD until its platform can be resolved. Ensure the relay request-context lookup supplies a platform." >&2
 fi
 
 FOLLOWUPS=0

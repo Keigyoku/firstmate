@@ -49,10 +49,10 @@
 # The relay step is confined to a live follow-up so the answer path and every
 # dry-run stay network-free. This is what keeps a delayed request-id follow-up on
 # the ORIGINAL platform's budget even after the inbox is drained and with no task
-# link surviving. FAIL-SAFE: if a --followup reply's platform/budget cannot be
+# link surviving. FAIL-SAFE: if a --followup reply's platform cannot be
 # authoritatively resolved, this REFUSES with exit 8 (distinct from the 409 exit
-# 9) rather than posting with a locally defaulted budget - firstmate holds and
-# retries it.
+# 9) rather than guessing a platform; an omitted explicit budget uses that
+# platform's configured default.
 #
 # Long replies auto-split into a numbered thread. X stays within
 # FMX_X_REPLY_MAX_CHARS, default 280. Discord uses
@@ -232,17 +232,15 @@ esac
 case "$REQ_EXPLICIT_MAX" in
   ''|*[!0-9]*) REQ_EXPLICIT_MAX= ;;
 esac
-# Was the platform/budget authoritatively resolved by any source (override,
-# registry, inbox, or relay)? Drives the follow-up fail-safe below.
 CONTEXT_RESOLVED=0
-if [ -n "$REQ_PLATFORM" ] && [ -n "$REQ_EXPLICIT_MAX" ]; then
+if [ -n "$REQ_PLATFORM" ]; then
   CONTEXT_RESOLVED=1
 fi
 
 if [ "$FOLLOWUP" = 1 ] && [ "$CONTEXT_RESOLVED" = 0 ]; then
   relay_note=
-  [ "$ALLOW_RELAY" = 1 ] && relay_note=", and the relay did not supply the missing value by request_id"
-  printf 'fm-x-reply: refusing follow-up for %s: could not authoritatively determine both the reply platform and explicit budget (local per-request context was incomplete%s). Hold and retry once both values are recoverable.\n' \
+  [ "$ALLOW_RELAY" = 1 ] && relay_note=", and the relay did not supply it by request_id"
+  printf 'fm-x-reply: refusing follow-up for %s: could not authoritatively determine the reply platform (local per-request context was incomplete%s). Hold and retry once it is recoverable.\n' \
     "$REQ" "$relay_note" >&2
   exit 8
 fi

@@ -1379,9 +1379,25 @@ test_regression_x_followup_still_splits_after_cleanup() {
   pass "an X follow-up over 280 still splits correctly after inbox cleanup"
 }
 
-# Regression case 3: when the platform/budget cannot be authoritatively
-# determined, a splitting follow-up is REFUSED (fail-safe) - never a silent X
-# split, never a wrong-platform post.
+test_followup_known_platform_uses_default_budget() {
+  local home out rc reply
+  home="$TMP_ROOT/reg-platform-default"; mkdir -p "$home/state/x-inbox"
+  jq -cn '{request_id:"req-default",tweet_id:"discord:123",text:"q"}' \
+    > "$home/state/x-inbox/req-default.json"
+  reply="This Discord follow-up deliberately exceeds the X message limit while staying below the Discord default. It verifies that a legacy request with a recoverable platform and no optional relay budget still posts using the platform default instead of being held indefinitely by an unnecessary explicit-limit requirement."
+  [ "$(printf '%s' "$reply" | wc -m | tr -d '[:space:]')" -gt 280 ] \
+    || fail "the platform-default reply must exceed 280 chars"
+  out=$(FM_HOME="$home" FMX_DRY_RUN=1 "$ROOT/bin/fm-x-reply.sh" req-default --followup - <<<"$reply" 2>/dev/null); rc=$?
+  expect_code 0 "$rc" "known-platform default-budget follow-up exit"
+  [ "$out" = "req-default" ] || fail "default-budget follow-up must echo the request_id (got: $out)"
+  jq -e 'has("texts")|not' "$home/state/x-outbox/req-default.json" >/dev/null \
+    || fail "a known Discord platform without an explicit limit must use the Discord default"
+  pass "a known follow-up platform uses its default when the optional budget is absent"
+}
+
+# Regression case 3: when the platform cannot be authoritatively determined, a
+# follow-up is REFUSED (fail-safe) - never a silent X split, never a
+# wrong-platform post.
 test_regression_unresolved_followup_fails_safe() {
   local home fakebin log out rc reply err
   reply="Short follow-up."
@@ -1484,17 +1500,26 @@ TXT
   pass "concurrent requests each recover their own platform/budget with no cross-overwrite"
 }
 
-test_dismiss_clears_context_registry() {
-  local home out rc reg
+test_dismiss_clears_context_registry_only_after_live_success() {
+  local home fakebin out rc reg
   home="$TMP_ROOT/dismiss-clears-registry"; mkdir -p "$home/state/x-context"
+  fakebin=$(make_fake_curl "$home")
   reg="$home/state/x-context/req-dis.json"
   jq -cn '{request_id:"req-dis",platform:"discord",reply_max_chars:""}' > "$reg"
-  # A dismissed mention will never get a follow-up, so its context is dropped.
   out=$(FM_HOME="$home" FMX_DRY_RUN=1 "$ROOT/bin/fm-x-dismiss.sh" req-dis 2>/dev/null); rc=$?
-  expect_code 0 "$rc" "dismiss registry-clear exit"
+  expect_code 0 "$rc" "dismiss dry-run registry-preserve exit"
   [ "$out" = "req-dis" ] || fail "dismiss must still echo the request_id (got: $out)"
-  assert_absent "$reg" "dismiss must clear the durable per-request context"
-  pass "fm-x-dismiss clears the durable per-request context (a dismissed mention gets no follow-up)"
+  assert_present "$reg" "a dismiss preview must preserve durable per-request context"
+  printf 'FMX_PAIRING_TOKEN=tok-dis\n' > "$home/.env"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FMX_RELAY_URL="https://relay.test" \
+    FAKE_DISMISS_CODE=500 "$ROOT/bin/fm-x-dismiss.sh" req-dis 2>/dev/null); rc=$?
+  [ "$rc" -ne 0 ] || fail "a failed live dismiss must fail"
+  assert_present "$reg" "a failed live dismiss must preserve durable per-request context"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FMX_RELAY_URL="https://relay.test" \
+    FAKE_DISMISS_CODE=200 "$ROOT/bin/fm-x-dismiss.sh" req-dis 2>/dev/null); rc=$?
+  expect_code 0 "$rc" "successful live dismiss registry-clear exit"
+  assert_absent "$reg" "a successful live dismiss must clear durable per-request context"
+  pass "fm-x-dismiss clears durable context only after live success"
 }
 
 # --- fm-x-dismiss: drop a mention at the relay without replying ---------------
@@ -1806,6 +1831,20 @@ TXT
   pass "fm-x-link recovery relink preserves Discord platform context after inbox drain"
 }
 
+test_link_recovery_relink_defaults_missing_budget_from_platform() {
+  local home meta rc
+  home="$TMP_ROOT/link-carry-platform-only"; mkdir -p "$home/state"
+  meta="$home/state/successor-platform-only.meta"
+  printf 'window=w\nkind=ship\n' > "$meta"
+  FM_HOME="$home" FMX_DISCORD_REPLY_MAX_CHARS=1800 FMX_NOW_OVERRIDE=1700999999 \
+    "$ROOT/bin/fm-x-link.sh" successor-platform-only req-platform-only \
+      --carry-count 1 --carry-ts 1700000000 --carry-platform discord >/dev/null; rc=$?
+  expect_code 0 "$rc" "platform-only recovery relink exit"
+  assert_grep "x_platform=discord" "$meta" "platform-only recovery must preserve the carried platform"
+  assert_grep "x_reply_max_chars=1800" "$meta" "platform-only recovery must derive the configured platform budget"
+  pass "fm-x-link derives a missing recovery budget from the carried platform"
+}
+
 test_link_carry_count_validation() {
   local home rc err
   home="$TMP_ROOT/link-carry-bad"; mkdir -p "$home/state"
@@ -1833,7 +1872,7 @@ test_link_carry_count_validation() {
   PATH="$BASE_PATH" FM_HOME="$home" \
     "$ROOT/bin/fm-x-link.sh" ok req-1 --carry-count 1 --carry-ts 1700000000 >/dev/null 2>"$err"; rc=$?
   expect_code 2 "$rc" "link carry without reply context exit"
-  assert_grep "relink requires carried reply context" "$err" "link must not silently drop reply context on relink"
+  assert_grep "relink requires a carried reply platform" "$err" "link must not silently drop the reply platform on relink"
   PATH="$BASE_PATH" FM_HOME="$home" \
     "$ROOT/bin/fm-x-link.sh" ok req-1 --carry-platform discord >/dev/null 2>"$err"; rc=$?
   expect_code 2 "$rc" "link --carry-platform without paired carry flags exit"
@@ -2052,6 +2091,22 @@ test_followup_post_failure_keeps_link() {
   pass "fm-x-followup keeps the link and counter when the post fails"
 }
 
+test_followup_unresolved_platform_diagnostic_ignores_optional_budget() {
+  local home out rc meta err
+  home="$TMP_ROOT/fu-platform-hold"; mkdir -p "$home/state"
+  meta="$home/state/task-platform.meta"
+  err="$home/err.txt"
+  printf 'kind=ship\nx_request=req-platform\nx_request_ts=1700000000\nx_followups=0\n' > "$meta"
+  out=$(FM_HOME="$home" FMX_DRY_RUN=1 FMX_NOW_OVERRIDE=1700003600 \
+    "$ROOT/bin/fm-x-followup.sh" task-platform - <<<"retry once routed" 2>"$err"); rc=$?
+  expect_code 1 "$rc" "unresolved-platform followup exit"
+  [ -z "$out" ] || fail "an unresolved-platform followup must echo nothing (got: $out)"
+  assert_grep "lacks an authoritative platform" "$err" "the hold must name the missing authority"
+  assert_no_grep "budget" "$err" "the hold must not wait for an optional budget"
+  assert_grep "x_request=req-platform" "$meta" "the retryable platform hold must keep the link"
+  pass "fm-x-followup holds only for an unresolved platform"
+}
+
 test_followup_post_record_failure_clears_link() {
   local home fakebin out rc meta err flag mvflag
   home="$TMP_ROOT/fu-post-record-fail"; mkdir -p "$home/state"
@@ -2244,10 +2299,11 @@ test_context_registry_preserves_first_seen_timestamp
 test_context_registry_retention_starts_on_successful_live_answer
 test_regression_discord_followup_survives_inbox_cleanup
 test_regression_x_followup_still_splits_after_cleanup
+test_followup_known_platform_uses_default_budget
 test_regression_unresolved_followup_fails_safe
 test_followup_partial_registry_uses_relay_budget_live
 test_regression_concurrent_requests_keep_own_platform
-test_dismiss_clears_context_registry
+test_dismiss_clears_context_registry_only_after_live_success
 test_dismiss_success_posts_request_only
 test_dismiss_dry_run_records_not_posts
 test_dismiss_dry_run_needs_no_token
@@ -2261,6 +2317,7 @@ test_link_resolves_platform_by_request_id_after_inbox_cleanup
 test_link_warns_loudly_when_platform_unresolvable
 test_link_carry_count_and_ts_preserve_followup_binding
 test_link_recovery_relink_carries_discord_context_after_inbox_drain
+test_link_recovery_relink_defaults_missing_budget_from_platform
 test_link_carry_count_validation
 test_meta_rewrites_do_not_depend_on_tmpdir
 test_link_rejects_unsafe_and_missing
@@ -2272,6 +2329,7 @@ test_followup_post_final_clears_link_immediately
 test_followup_post_cap_reached_clears_link
 test_followup_post_forwards_image_to_reply_client
 test_followup_post_failure_keeps_link
+test_followup_unresolved_platform_diagnostic_ignores_optional_budget
 test_followup_post_record_failure_clears_link
 test_followup_post_relay_rejection_degrades_gracefully
 test_followup_post_expired_skips_and_clears

@@ -79,9 +79,6 @@ if [ -n "$FMX_DRY" ]; then
     echo "fm-x-dismiss: cannot write dry-run outbox: $outbox_file" >&2
     exit 1
   }
-  # A dismissed mention will never get a follow-up, so drop its durable
-  # per-request reply context too. Best-effort; a no-op when none was recorded.
-  fmx_context_registry_clear "$STATE" "$REQ"
   printf 'fm-x-dismiss: DRY RUN - would POST to %s/connector/dismiss (recorded: state/x-outbox/%s.json)\n' \
     "$FMX_RELAY" "$REQ" >&2
   printf '%s\n' "$REQ"
