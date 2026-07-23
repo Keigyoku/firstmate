@@ -512,6 +512,89 @@ EOF
   pass "secondmate summary caps disclose truncation, expand at zero, and validate canonical bounds"
 }
 
+test_secondmate_registry_bounds_and_read_failures() {
+  local home out err rc bound byte_limit fakebin real_head
+  home=$(make_home registry-bounds)
+  cat > "$home/data/secondmates.md" <<'EOF'
+# Secondmates
+- mate-a (home: /missing-a)
+- mate-b (home: /missing-b)
+- mate-c (home: /missing-c)
+EOF
+  out=$(FM_HOME="$home" FM_SNAPSHOT_REGISTRY_LINES=2 FM_SNAPSHOT_REGISTRY_BYTES=0 FM_SNAPSHOT_REGISTRY_RECORDS=0 "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e '
+    .secondmate_current.registry
+    | .available == true and .input_truncated == true and .records_truncated == false
+      and (.records | map(.id)) == ["mate-a"]
+  ' >/dev/null || fail "registry line bound was not applied before parsing: $out"
+
+  byte_limit=$(printf '%s\n%s\n%s' '# Secondmates' '- mate-a (home: /missing-a)' '- mate-b (home: /missing-b)' | wc -c)
+  byte_limit=${byte_limit//[[:space:]]/}
+  out=$(FM_HOME="$home" FM_SNAPSHOT_REGISTRY_LINES=0 FM_SNAPSHOT_REGISTRY_BYTES="$byte_limit" FM_SNAPSHOT_REGISTRY_RECORDS=0 "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e '
+    .secondmate_current.registry
+    | .available == true and .input_truncated == true and .records_truncated == false
+      and (.records | map(.id)) == ["mate-a"]
+  ' >/dev/null || fail "registry byte bound was not applied before parsing: $out"
+
+  out=$(FM_HOME="$home" FM_SNAPSHOT_REGISTRY_LINES=0 FM_SNAPSHOT_REGISTRY_BYTES=0 FM_SNAPSHOT_REGISTRY_RECORDS=2 "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e '
+    .secondmate_current.registry
+    | .available == true and .input_truncated == false and .records_truncated == true
+      and (.records | map(.id)) == ["mate-a","mate-b"]
+  ' >/dev/null || fail "registry record bound was not applied after bounded parsing: $out"
+
+  out=$(FM_HOME="$home" FM_SNAPSHOT_REGISTRY_LINES=0 FM_SNAPSHOT_REGISTRY_BYTES=0 FM_SNAPSHOT_REGISTRY_RECORDS=0 "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e '
+    .secondmate_current.registry
+    | .available == true and .input_truncated == false and .records_truncated == false
+      and (.records | map(.id)) == ["mate-a","mate-b","mate-c"]
+  ' >/dev/null || fail "zero registry bounds should preserve every registry row: $out"
+
+  for bound in FM_SNAPSHOT_REGISTRY_LINES FM_SNAPSHOT_REGISTRY_BYTES FM_SNAPSHOT_REGISTRY_RECORDS
+  do
+    if err=$(env "$bound=01" FM_HOME="$home" "$SNAPSHOT" --json 2>&1 >/dev/null); then
+      rc=0
+    else
+      rc=$?
+    fi
+    [ "$rc" -eq 2 ] || fail "$bound noncanonical value must fail before jq"
+    assert_contains "$err" "$bound must be 0 or a canonical positive integer (0 means unbounded)" \
+      "$bound noncanonical-value diagnostic was unclear"
+  done
+
+  rm "$home/data/secondmates.md"
+  mkdir "$home/data/secondmates.md"
+  out=$(FM_HOME="$home" "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e '
+    .secondmate_current.registry
+    | .present == true and .available == false and (.reason | contains("not a regular file"))
+      and .records == []
+  ' >/dev/null || fail "non-regular registry should produce fail-soft availability metadata: $out"
+
+  rmdir "$home/data/secondmates.md"
+  printf '%s\n' '- mate-a (home: /missing-a)' > "$home/data/secondmates.md"
+  fakebin=$(fm_fakebin "$home/read-failure")
+  real_head=$(command -v head)
+  cat > "$fakebin/head" <<'SH'
+#!/usr/bin/env bash
+case "${*: -1}" in
+  */data/secondmates.md) exit 7 ;;
+esac
+exec "${FM_TEST_REAL_HEAD:?}" "$@"
+SH
+  chmod +x "$fakebin/head"
+  out=$(PATH="$fakebin:$PATH" FM_TEST_REAL_HEAD="$real_head" FM_HOME="$home" "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e '
+    .secondmate_current as $current
+    | $current.registry.present == true and $current.registry.available == false
+      and $current.registry.reason == "registry read failed (exit 7)"
+      and $current.registry.records == [] and $current.records == []
+      and $current.total == 0 and $current.shown == 0
+  ' >/dev/null || fail "registry read-command failure should not abort the snapshot: $out"
+  pass "secondmate registry enforces bounded ingestion and fails soft on read errors"
+}
+
 test_view_renders_snapshot() {
   local home fakebin view
   home=$(make_home view)
@@ -561,5 +644,6 @@ test_scout_reports_include_teardown_reports
 test_backlog_tasks_axi_forms_and_overrides
 test_bearings_schema_surfaces_are_emitted_from_real_fleet_data
 test_secondmate_summary_caps_disclose_and_expand
+test_secondmate_registry_bounds_and_read_failures
 test_view_renders_snapshot
 test_view_renders_dead_secondmate_agent_status

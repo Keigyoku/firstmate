@@ -46,13 +46,19 @@ FM_SNAPSHOT_SECONDMATE_CHILDREN=${FM_SNAPSHOT_SECONDMATE_CHILDREN-20}
 FM_SNAPSHOT_SECONDMATE_QUEUED=${FM_SNAPSHOT_SECONDMATE_QUEUED-20}
 FM_SNAPSHOT_SECONDMATE_DECISIONS=${FM_SNAPSHOT_SECONDMATE_DECISIONS-20}
 FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME=${FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME-10}
+FM_SNAPSHOT_REGISTRY_LINES=${FM_SNAPSHOT_REGISTRY_LINES-2000}
+FM_SNAPSHOT_REGISTRY_BYTES=${FM_SNAPSHOT_REGISTRY_BYTES-262144}
+FM_SNAPSHOT_REGISTRY_RECORDS=${FM_SNAPSHOT_REGISTRY_RECORDS-200}
 
 for bound_name in \
   FM_SNAPSHOT_SECONDMATES \
   FM_SNAPSHOT_SECONDMATE_CHILDREN \
   FM_SNAPSHOT_SECONDMATE_QUEUED \
   FM_SNAPSHOT_SECONDMATE_DECISIONS \
-  FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME
+  FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME \
+  FM_SNAPSHOT_REGISTRY_LINES \
+  FM_SNAPSHOT_REGISTRY_BYTES \
+  FM_SNAPSHOT_REGISTRY_RECORDS
 do
   bound_value=${!bound_name}
   case "$bound_value" in
@@ -543,20 +549,70 @@ secondmate_home_summary_json() {  # <backlog-json> <tasks-json>
 }
 
 registry_secondmates_json() {
-  local registry="$DATA/secondmates.md"
-  if [ ! -f "$registry" ]; then
+  local registry="$DATA/secondmates.md" input='' read_rc=0 input_truncated=0
+  local line_count byte_count LC_ALL=C
+  if [ ! -e "$registry" ]; then
     jq -n --arg path "$registry" '{present:false,available:true,reason:null,provenance:"registered-table",path:$path,records:[],input_truncated:false,records_truncated:false}'
     return 0
   fi
-  # shellcheck disable=SC2094
-  jq -Rn --arg path "$registry" '
-    [ inputs | select(startswith("- "))
+  if [ ! -f "$registry" ]; then
+    jq -n --arg path "$registry" '{present:true,available:false,reason:"registry path is not a regular file",provenance:"registered-table",path:$path,records:[],input_truncated:false,records_truncated:false}'
+    return 0
+  fi
+  if [ ! -r "$registry" ]; then
+    jq -n --arg path "$registry" '{present:true,available:false,reason:"registry file is not readable",provenance:"registered-table",path:$path,records:[],input_truncated:false,records_truncated:false}'
+    return 0
+  fi
+  if [ "$FM_SNAPSHOT_REGISTRY_BYTES" -gt 0 ]; then
+    input=$({ head -c "$((FM_SNAPSHOT_REGISTRY_BYTES + 1))" -- "$registry" 2>/dev/null; printf '\034%s' "$?"; })
+    read_rc=${input##*$'\034'}
+    input=${input%$'\034'*}
+    if [ "$read_rc" -eq 0 ]; then
+      byte_count=${#input}
+      if [ "$byte_count" -gt "$FM_SNAPSHOT_REGISTRY_BYTES" ]; then
+        input=${input:0:FM_SNAPSHOT_REGISTRY_BYTES}
+        case "$input" in
+          *$'\n') ;;
+          *$'\n'*) input=${input%$'\n'*} ;;
+          *) input='' ;;
+        esac
+        input_truncated=1
+      fi
+    fi
+  elif [ "$FM_SNAPSHOT_REGISTRY_LINES" -gt 0 ]; then
+    input=$({ head -n "$((FM_SNAPSHOT_REGISTRY_LINES + 1))" -- "$registry" 2>/dev/null; printf '\034%s' "$?"; })
+    read_rc=${input##*$'\034'}
+    input=${input%$'\034'*}
+  else
+    input=$({ cat -- "$registry" 2>/dev/null; printf '\034%s' "$?"; })
+    read_rc=${input##*$'\034'}
+    input=${input%$'\034'*}
+  fi
+  if [ "$read_rc" -ne 0 ]; then
+    jq -n --arg path "$registry" --arg reason "registry read failed (exit $read_rc)" \
+      '{present:true,available:false,reason:$reason,provenance:"registered-table",path:$path,records:[],input_truncated:false,records_truncated:false}'
+    return 0
+  fi
+  if [ "$FM_SNAPSHOT_REGISTRY_LINES" -gt 0 ]; then
+    line_count=$(printf '%s' "$input" | awk 'END { print NR }')
+    if [ "$line_count" -gt "$FM_SNAPSHOT_REGISTRY_LINES" ]; then
+      input=$(printf '%s' "$input" | awk -v limit="$FM_SNAPSHOT_REGISTRY_LINES" 'NR <= limit')
+      input_truncated=1
+    fi
+  fi
+  printf '%s\n' "$input" | jq -Rn \
+    --arg path "$registry" \
+    --argjson input_truncated "$(bool_json "$input_truncated")" \
+    --argjson record_limit "$FM_SNAPSHOT_REGISTRY_RECORDS" '
+    ([ inputs | select(startswith("- "))
       | (capture("^- (?<id>[^[:space:]]+)")?) as $id
       | (capture("\\(home:[[:space:]]*(?<home>[^;)]*)[;)]")?) as $home
       | select($id != null)
-      | {id:$id.id,home:($home.home // null)} ]
+      | {id:$id.id,home:($home.home // null)} ]) as $parsed
     | {present:true,available:true,reason:null,provenance:"registered-table",path:$path,
-       records:.,input_truncated:false,records_truncated:false}' < "$registry"
+       records:(if $record_limit == 0 then $parsed else $parsed[:$record_limit] end),
+       input_truncated:$input_truncated,
+       records_truncated:($record_limit > 0 and ($parsed | length) > $record_limit)}'
 }
 
 secondmate_current_json() {

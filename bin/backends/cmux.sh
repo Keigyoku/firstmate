@@ -628,36 +628,39 @@ fm_backend_cmux_window_of_workspace() {  # <workspace_id> -> "<window_id> <count
 }
 
 fm_backend_cmux_workspace_lookup_all_windows() {  # <field> <value> <result-field>
-  local field=$1 value=$2 result_field=$3 wins wid wss result
+  local field=$1 value=$2 result_field=$3 wins window_ids wid wss result
   case "$field:$result_field" in
     id:title|title:id) ;;
     *) return 1 ;;
   esac
-  wins=$(fm_backend_cmux_cli list-windows --json --id-format uuids 2>/dev/null) || return 0
+  wins=$(fm_backend_cmux_cli list-windows --json --id-format uuids 2>/dev/null) || return 1
+  window_ids=$(printf '%s' "$wins" | jq -r 'if type == "array" then .[]?.id else error("invalid window list") end' 2>/dev/null) || return 1
   while IFS= read -r wid; do
     [ -n "$wid" ] || continue
-    wss=$(fm_backend_cmux_cli workspace list --json --id-format uuids --window "$wid" 2>/dev/null) || continue
+    wss=$(fm_backend_cmux_cli workspace list --json --id-format uuids --window "$wid" 2>/dev/null) || return 1
     result=$(printf '%s' "$wss" | jq -r --arg field "$field" --arg value "$value" --arg result "$result_field" \
-      '.workspaces[]? | select(.[$field] == $value) | .[$result]' 2>/dev/null | head -1)
+      'if (.workspaces | type) == "array" then .workspaces[]? | select(.[$field] == $value) | .[$result] else error("invalid workspace list") end' 2>/dev/null) || return 1
     if [ -n "$result" ]; then
-      printf '%s' "$result"
-      return 0
+      printf '%s\n' "$result"
     fi
-  done < <(printf '%s' "$wins" | jq -r '.[]? | .id' 2>/dev/null)
+  done <<< "$window_ids"
 }
 
 fm_backend_cmux_teardown_target_ready() {  # <target> <expected-label>
   local expected_title title wsid sfid
   fm_backend_cmux_parse_target "$1" || return 1
   expected_title=$(fm_backend_cmux_scoped_title "$2")
-  title=$(fm_backend_cmux_workspace_lookup_all_windows id "$FM_BACKEND_CMUX_WORKSPACE" title)
+  title=$(fm_backend_cmux_workspace_lookup_all_windows id "$FM_BACKEND_CMUX_WORKSPACE" title) || return 1
   if [ "$title" = "$expected_title" ]; then
     wsid=$FM_BACKEND_CMUX_WORKSPACE
   elif [ -n "$title" ]; then
     return 1
   else
-    wsid=$(fm_backend_cmux_workspace_lookup_all_windows title "$expected_title" id)
+    wsid=$(fm_backend_cmux_workspace_lookup_all_windows title "$expected_title" id) || return 1
     [ -n "$wsid" ] || return 1
+    case "$wsid" in
+      *$'\n'*) return 1 ;;
+    esac
   fi
   sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid")
   [ -n "$sfid" ] || return 1

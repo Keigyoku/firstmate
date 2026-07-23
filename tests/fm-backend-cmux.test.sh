@@ -1007,6 +1007,60 @@ test_kill_validates_expected_label_in_another_window() {
   pass "fm_backend_cmux_kill: validates and closes an expected-label workspace in another window"
 }
 
+test_kill_refuses_ambiguous_stale_label_across_windows() {
+  local dir fb title log
+  dir="$TMP_ROOT/kill-ambiguous-stale-label"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-label)
+  cmux_windows_response "$dir" 1 \
+    "e1111111-0000-0000-0000-000000000000" 1 \
+    "e2222222-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 2 "cccccccc-2222-2222-2222-222222222222" "$title"
+  cmux_workspace_list_response "$dir" 3 "dddddddd-3333-3333-3333-333333333333" "$title"
+  cmux_windows_response "$dir" 4 \
+    "e1111111-0000-0000-0000-000000000000" 1 \
+    "e2222222-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 5 "cccccccc-2222-2222-2222-222222222222" "$title"
+  cmux_workspace_list_response "$dir" 6 "dddddddd-3333-3333-3333-333333333333" "$title"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "" fm-label' "$ROOT"
+  log=$(cat "$dir/log")
+  assert_not_contains "$log" $'\x1f''list-panes' \
+    "ambiguous stale-label recovery must not resolve a surface"
+  assert_not_contains "$log" $'\x1f''new-workspace' \
+    "ambiguous stale-label recovery must not create a sibling workspace"
+  assert_not_contains "$log" $'\x1f''close-workspace' \
+    "ambiguous stale-label recovery must not close either duplicate workspace"
+  pass "fm_backend_cmux_kill: refuses ambiguous stale-label matches across windows"
+}
+
+test_kill_refuses_stale_label_when_a_window_scan_fails() {
+  local dir fb title log
+  dir="$TMP_ROOT/kill-stale-label-scan-failure"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-label)
+  cmux_windows_response "$dir" 1 \
+    "e1111111-0000-0000-0000-000000000000" 1 \
+    "e2222222-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 2 "cccccccc-2222-2222-2222-222222222222" "$title"
+  cmux_workspace_list_response "$dir" 3 "dddddddd-3333-3333-3333-333333333333" "other"
+  cmux_windows_response "$dir" 4 \
+    "e1111111-0000-0000-0000-000000000000" 1 \
+    "e2222222-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 5 "cccccccc-2222-2222-2222-222222222222" "$title"
+  printf '1\n' > "$dir/responses/6.exit"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "" fm-label' "$ROOT"
+  log=$(cat "$dir/log")
+  assert_not_contains "$log" $'\x1f''list-panes' \
+    "incomplete stale-label recovery must not resolve a surface"
+  assert_not_contains "$log" $'\x1f''new-workspace' \
+    "incomplete stale-label recovery must not create a sibling workspace"
+  assert_not_contains "$log" $'\x1f''close-workspace' \
+    "incomplete stale-label recovery must not close the visible title match"
+  pass "fm_backend_cmux_kill: refuses stale-label recovery after an incomplete window scan"
+}
+
 # --- list_live: label-based orphan discovery ---------------------------------
 
 test_list_live_filters_by_title_prefix() {
@@ -1102,5 +1156,7 @@ test_kill_adds_sibling_when_last_in_window
 test_kill_is_best_effort_when_close_workspace_fails
 test_kill_recovers_stale_target_by_label
 test_kill_validates_expected_label_in_another_window
+test_kill_refuses_ambiguous_stale_label_across_windows
+test_kill_refuses_stale_label_when_a_window_scan_fails
 test_list_live_filters_by_title_prefix
 test_secondmate_spawn_refuses_cmux_backend
