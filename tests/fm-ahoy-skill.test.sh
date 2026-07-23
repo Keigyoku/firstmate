@@ -21,7 +21,7 @@ test_ahoy_is_an_internal_user_invocable_skill() {
 }
 
 test_ahoy_readme_uses_cross_harness_convention() {
-  assert_grep '| `/ahoy`' "$README" "README built-in skills table does not list /ahoy"
+  assert_grep "| \`/ahoy\`" "$README" "README built-in skills table does not list /ahoy"
   assert_grep 'Recap only visible session events' "$README" "README /ahoy description is missing"
   pass "README lists /ahoy with the cross-harness convention"
 }
