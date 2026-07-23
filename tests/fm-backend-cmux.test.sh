@@ -1124,6 +1124,123 @@ test_kill_refuses_stale_label_when_a_window_scan_fails() {
   pass "fm_backend_cmux_kill: refuses stale-label recovery after an incomplete window scan"
 }
 
+test_kill_fails_when_surface_scan_command_fails() {
+  local dir fb title log status
+  dir="$TMP_ROOT/kill-surface-command-failure"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-label)
+  cmux_windows_response "$dir" 1 "e1111111-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 2 "aaaaaaaa-0000-0000-0000-000000000000" "$title"
+  printf '1\n' > "$dir/responses/3.exit"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "" fm-label' "$ROOT"
+  status=$?
+  [ "$status" -ne 0 ] || fail "kill should fail when list-panes fails during expected-label teardown"
+  log=$(cat "$dir/log")
+  assert_not_contains "$log" $'\x1f''new-workspace' \
+    "kill must not prepare a sibling after an incomplete surface scan"
+  assert_not_contains "$log" $'\x1f''close-workspace' \
+    "kill must not close after an incomplete surface scan"
+  pass "fm_backend_cmux_kill: preserves retry state when list-panes fails during teardown"
+}
+
+test_kill_fails_when_surface_scan_json_is_invalid() {
+  local dir fb title log status
+  dir="$TMP_ROOT/kill-surface-json-failure"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-label)
+  cmux_windows_response "$dir" 1 "e1111111-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 2 "aaaaaaaa-0000-0000-0000-000000000000" "$title"
+  printf '{"panes":null}' > "$dir/responses/3.out"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "" fm-label' "$ROOT"
+  status=$?
+  [ "$status" -ne 0 ] || fail "kill should fail when list-panes returns invalid JSON structure"
+  log=$(cat "$dir/log")
+  assert_not_contains "$log" $'\x1f''new-workspace' \
+    "kill must not prepare a sibling after an invalid surface scan"
+  assert_not_contains "$log" $'\x1f''close-workspace' \
+    "kill must not close after an invalid surface scan"
+  pass "fm_backend_cmux_kill: preserves retry state when list-panes JSON is invalid"
+}
+
+test_forced_secondmate_teardown_propagates_nested_cmux_failure() {
+  local dir home first_home second_home fb title out status
+  dir="$TMP_ROOT/teardown-nested-cmux-failure"
+  home="$dir/home"
+  first_home="$dir/first-home"
+  second_home="$dir/second-home"
+  mkdir -p "$home/state" "$home/data" "$home/config" \
+    "$first_home/state" "$first_home/data" "$first_home/config" "$first_home/projects" \
+    "$second_home/state" "$second_home/data" "$second_home/config" "$second_home/projects" "$dir/responses"
+  printf 'domain\n' > "$first_home/.fm-secondmate-home"
+  printf 'nested\n' > "$second_home/.fm-secondmate-home"
+  fm_write_meta "$home/state/domain.meta" \
+    "window=firstmate:fm-domain" "worktree=$first_home" "project=$first_home" \
+    "kind=secondmate" "mode=secondmate" "home=$first_home"
+  fm_write_meta "$first_home/state/nested.meta" \
+    "window=firstmate:fm-nested" "worktree=$second_home" "project=$second_home" \
+    "kind=secondmate" "mode=secondmate" "home=$second_home"
+  fm_write_meta "$second_home/state/deep.meta" \
+    "window=aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" \
+    "backend=cmux" "worktree=$dir/missing-worktree" "project=$dir/missing-project" "kind=scout"
+  title=$(cmux_expected_scoped_title fm-deep "$second_home" "$second_home")
+  cmux_windows_response "$dir" 1 "e1111111-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 2 "aaaaaaaa-0000-0000-0000-000000000000" "$title"
+  printf '1\n' > "$dir/responses/3.exit"
+  fb=$(make_cmux_fakebin "$dir")
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$fb/tmux"
+  chmod +x "$fb/tmux"
+  out=$( PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    "$ROOT/bin/fm-teardown.sh" domain --force 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "forced teardown should fail when a nested cmux surface scan fails"
+  [ -e "$home/state/domain.meta" ] || fail "nested cmux failure should preserve parent metadata"
+  [ -e "$first_home/state/nested.meta" ] || fail "nested cmux failure should preserve nested secondmate metadata"
+  [ -e "$second_home/state/deep.meta" ] || fail "nested cmux failure should preserve deep cmux metadata"
+  [ -d "$second_home" ] || fail "nested cmux failure should preserve the nested home"
+  pass "fm-teardown.sh: propagates nested cmux scan failures before deleting parent records"
+}
+
+test_forced_secondmate_teardown_propagates_nested_home_removal_failure() {
+  local dir home first_home second_home fb out status
+  dir="$TMP_ROOT/teardown-nested-home-removal-failure"
+  home="$dir/home"
+  first_home="$dir/first-home"
+  second_home="$dir/second-home"
+  mkdir -p "$home/state" "$home/data" "$home/config" \
+    "$first_home/state" "$first_home/data" "$first_home/config" "$first_home/projects" \
+    "$second_home/state" "$second_home/data" "$second_home/config" "$second_home/projects" "$dir/responses"
+  printf 'domain\n' > "$first_home/.fm-secondmate-home"
+  printf 'nested\n' > "$second_home/.fm-secondmate-home"
+  fm_write_meta "$home/state/domain.meta" \
+    "window=firstmate:fm-domain" "worktree=$first_home" "project=$first_home" \
+    "kind=secondmate" "mode=secondmate" "home=$first_home"
+  fm_write_meta "$first_home/state/nested.meta" \
+    "window=firstmate:fm-nested" "worktree=$second_home" "project=$second_home" \
+    "kind=secondmate" "mode=secondmate" "home=$second_home"
+  fb=$(make_cmux_fakebin "$dir")
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$fb/tmux"
+  chmod +x "$fb/tmux"
+  cat > "$fb/rm" <<'SH'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  [ "$arg" != "$FM_FAIL_RM_PATH" ] || exit 1
+done
+exec /bin/rm "$@"
+SH
+  chmod +x "$fb/rm"
+  out=$( PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_FAIL_RM_PATH="$second_home" \
+    "$ROOT/bin/fm-teardown.sh" domain --force 2>&1 )
+  status=$?
+  [ "$status" -ne 0 ] || fail "forced teardown should fail when nested home removal fails"
+  [ -e "$home/state/domain.meta" ] || fail "nested home removal failure should preserve parent metadata"
+  [ -e "$first_home/state/nested.meta" ] || fail "nested home removal failure should preserve nested secondmate metadata"
+  [ -d "$second_home" ] || fail "nested home removal failure should preserve the nested home"
+  pass "fm-teardown.sh: propagates nested home removal failures before deleting parent records"
+}
+
 # --- list_live: label-based orphan discovery ---------------------------------
 
 test_list_live_filters_by_title_prefix() {
@@ -1225,5 +1342,9 @@ test_kill_recovers_stale_target_by_label
 test_kill_validates_expected_label_in_another_window
 test_kill_refuses_ambiguous_stale_label_across_windows
 test_kill_refuses_stale_label_when_a_window_scan_fails
+test_kill_fails_when_surface_scan_command_fails
+test_kill_fails_when_surface_scan_json_is_invalid
+test_forced_secondmate_teardown_propagates_nested_cmux_failure
+test_forced_secondmate_teardown_propagates_nested_home_removal_failure
 test_list_live_filters_by_title_prefix
 test_secondmate_spawn_refuses_cmux_backend
