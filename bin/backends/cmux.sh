@@ -612,19 +612,29 @@ fm_backend_cmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> 
 # window from `list-windows --json` and asking each for its own scoped list.
 # The count comes from the same scoped workspace list that confirms membership.
 fm_backend_cmux_window_of_workspace() {  # <workspace_id> -> "<window_id> <count>"
-  local wsid=$1 wins wid wss count
-  wins=$(fm_backend_cmux_cli list-windows --json --id-format uuids 2>/dev/null) || return 0
+  local wsid=$1 wins window_ids wid wss count
+  wins=$(fm_backend_cmux_cli list-windows --json --id-format uuids 2>/dev/null) || return 1
+  window_ids=$(printf '%s' "$wins" | jq -r '
+    if type == "array" and all(.[]?; (.id | type) == "string" and (.id | length) > 0)
+    then .[]?.id
+    else error("invalid window list")
+    end
+  ' 2>/dev/null) || return 1
   while IFS= read -r wid; do
     [ -n "$wid" ] || continue
-    wss=$(fm_backend_cmux_cli workspace list --json --id-format uuids --window "$wid" 2>/dev/null) || continue
-    count=$(printf '%s' "$wss" | jq -er --arg id "$wsid" '
-      (.workspaces // []) as $workspaces
-      | select(any($workspaces[]?; .id == $id))
-      | ($workspaces | length)
-    ' 2>/dev/null) || continue
-    printf '%s %s' "$wid" "$count"
-    return 0
-  done < <(printf '%s' "$wins" | jq -r '.[]? | .id' 2>/dev/null)
+    wss=$(fm_backend_cmux_cli workspace list --json --id-format uuids --window "$wid" 2>/dev/null) || return 1
+    count=$(printf '%s' "$wss" | jq -r --arg id "$wsid" '
+      if (.workspaces | type) == "array"
+      then .workspaces as $workspaces
+        | if any($workspaces[]?; .id == $id) then ($workspaces | length) else empty end
+      else error("invalid workspace list")
+      end
+    ' 2>/dev/null) || return 1
+    if [ -n "$count" ]; then
+      printf '%s %s' "$wid" "$count"
+      return 0
+    fi
+  done <<< "$window_ids"
 }
 
 fm_backend_cmux_workspace_lookup_all_windows() {  # <field> <value> <result-field>
@@ -650,13 +660,13 @@ fm_backend_cmux_teardown_target_ready() {  # <target> <expected-label>
   local expected_title title wsid sfid
   fm_backend_cmux_parse_target "$1" || return 1
   expected_title=$(fm_backend_cmux_scoped_title "$2")
-  title=$(fm_backend_cmux_workspace_lookup_all_windows id "$FM_BACKEND_CMUX_WORKSPACE" title) || return 1
+  title=$(fm_backend_cmux_workspace_lookup_all_windows id "$FM_BACKEND_CMUX_WORKSPACE" title) || return 2
   if [ "$title" = "$expected_title" ]; then
     wsid=$FM_BACKEND_CMUX_WORKSPACE
   elif [ -n "$title" ]; then
     return 1
   else
-    wsid=$(fm_backend_cmux_workspace_lookup_all_windows title "$expected_title" id) || return 1
+    wsid=$(fm_backend_cmux_workspace_lookup_all_windows title "$expected_title" id) || return 2
     [ -n "$wsid" ] || return 1
     case "$wsid" in
       *$'\n'*) return 1 ;;
@@ -668,8 +678,7 @@ fm_backend_cmux_teardown_target_ready() {  # <target> <expected-label>
   FM_BACKEND_CMUX_SURFACE=$sfid
 }
 
-# fm_backend_cmux_kill: remove the task's whole workspace, best-effort (mirrors
-# every other backend's `kill` `|| true` contract). A cmux task owns one
+# fm_backend_cmux_kill: remove the task's whole workspace. A cmux task owns one
 # workspace, so teardown reclaims that workspace and all of its surfaces.
 #
 # The selected-workspace teardown bug (docs/cmux-backend.md "Closing the last
@@ -685,18 +694,25 @@ fm_backend_cmux_teardown_target_ready() {  # <target> <expected-label>
 # leaving that window a fresh default workspace (never an fm-<home>- title, so
 # recovery/list_live ignore it) - cmux's own "closed the last tab" outcome.
 fm_backend_cmux_kill() {  # <target> [unused] [expected-label]
-  local expected_label=${3:-} wsid wininfo win count
+  local expected_label=${3:-} ready_rc wsid wininfo win count
   if [ -n "$expected_label" ]; then
-    fm_backend_cmux_teardown_target_ready "$1" "$expected_label" || return 0
+    if fm_backend_cmux_teardown_target_ready "$1" "$expected_label"; then
+      :
+    else
+      ready_rc=$?
+      [ "$ready_rc" -eq 1 ] && return 0
+      return 1
+    fi
   else
     fm_backend_cmux_parse_target "$1" || return 0
   fi
   wsid=$FM_BACKEND_CMUX_WORKSPACE
-  wininfo=$(fm_backend_cmux_window_of_workspace "$wsid")
+  wininfo=$(fm_backend_cmux_window_of_workspace "$wsid") || return 1
+  [ -n "$wininfo" ] || return 0
   win=${wininfo%% *}
   count=${wininfo##* }
   if [ -n "$win" ] && [ "$count" = 1 ]; then
-    fm_backend_cmux_cli new-workspace --window "$win" --focus false --id-format uuids >/dev/null 2>&1 || true
+    fm_backend_cmux_cli new-workspace --window "$win" --focus false --id-format uuids >/dev/null 2>&1 || return 1
   fi
   fm_backend_cmux_cli close-workspace --workspace "$wsid" >/dev/null 2>&1 || true
 }

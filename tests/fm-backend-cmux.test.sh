@@ -881,15 +881,42 @@ test_window_of_workspace_finds_window_and_count() {
 }
 
 test_window_of_workspace_empty_when_not_found() {
-  local dir fb out
+  local dir fb out status
   dir="$TMP_ROOT/win-of-ws-none"; mkdir -p "$dir/responses"
   cmux_windows_response "$dir" 1 "e1111111-0000-0000-0000-000000000000" 1
   cmux_workspace_list_response "$dir" 2 "ffffffff-0000-0000-0000-000000000000" "other"
   fb=$(make_cmux_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_window_of_workspace "aaaaaaaa-0000-0000-0000-000000000000"' "$ROOT" )
+  status=$?
+  expect_code 0 "$status" "window_of_workspace should succeed after a complete not-found scan"
   [ -z "$out" ] || fail "window_of_workspace should echo nothing when the workspace is not found, got '$out'"
   pass "fm_backend_cmux_window_of_workspace: echoes nothing when no window holds the workspace"
+}
+
+test_window_of_workspace_fails_when_window_list_fails() {
+  local dir fb status
+  dir="$TMP_ROOT/win-of-ws-list-failure"; mkdir -p "$dir/responses"
+  printf '1\n' > "$dir/responses/1.exit"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_window_of_workspace "aaaaaaaa-0000-0000-0000-000000000000"' "$ROOT"
+  status=$?
+  [ "$status" -ne 0 ] || fail "window_of_workspace should fail when list-windows fails"
+  pass "fm_backend_cmux_window_of_workspace: fails when window enumeration fails"
+}
+
+test_window_of_workspace_fails_when_workspace_json_is_invalid() {
+  local dir fb status
+  dir="$TMP_ROOT/win-of-ws-invalid-workspaces"; mkdir -p "$dir/responses"
+  cmux_windows_response "$dir" 1 "e1111111-0000-0000-0000-000000000000" 1
+  printf '{"workspaces":null}' > "$dir/responses/2.out"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_window_of_workspace "aaaaaaaa-0000-0000-0000-000000000000"' "$ROOT"
+  status=$?
+  [ "$status" -ne 0 ] || fail "window_of_workspace should fail on malformed workspace JSON"
+  pass "fm_backend_cmux_window_of_workspace: fails on malformed workspace JSON"
 }
 
 # --- kill: close the task workspace, adding a sibling when it is the last one -
@@ -956,6 +983,40 @@ test_kill_is_best_effort_when_close_workspace_fails() {
   assert_not_contains "$(cat "$dir/log")" $'\x1f''close-surface' \
     "kill should not call close-surface"
   pass "fm_backend_cmux_kill: never fails even when close-workspace fails"
+}
+
+test_kill_fails_closed_when_window_scan_fails() {
+  local dir fb status log
+  dir="$TMP_ROOT/kill-window-scan-failure"; mkdir -p "$dir/responses"
+  printf '1\n' > "$dir/responses/1.exit"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111"' "$ROOT"
+  status=$?
+  [ "$status" -ne 0 ] || fail "kill should fail when the containing-window scan fails"
+  log=$(cat "$dir/log")
+  assert_not_contains "$log" $'\x1f''new-workspace' \
+    "kill must not create a sibling after an incomplete containing-window scan"
+  assert_not_contains "$log" $'\x1f''close-workspace' \
+    "kill must not close the workspace after an incomplete containing-window scan"
+  pass "fm_backend_cmux_kill: fails closed when the containing-window scan fails"
+}
+
+test_kill_fails_closed_when_sibling_creation_fails() {
+  local dir fb status log
+  dir="$TMP_ROOT/kill-sibling-failure"; mkdir -p "$dir/responses"
+  cmux_windows_response "$dir" 1 "eeeeeeee-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 2 "aaaaaaaa-0000-0000-0000-000000000000" "the-task"
+  printf '1\n' > "$dir/responses/3.exit"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111"' "$ROOT"
+  status=$?
+  [ "$status" -ne 0 ] || fail "kill should fail when it cannot prepare a last-workspace sibling"
+  log=$(cat "$dir/log")
+  assert_not_contains "$log" $'\x1f''close-workspace' \
+    "kill must not attempt a known no-op last-workspace close after sibling creation fails"
+  pass "fm_backend_cmux_kill: fails closed when last-workspace preparation fails"
 }
 
 test_kill_recovers_stale_target_by_label() {
@@ -1035,7 +1096,7 @@ test_kill_refuses_ambiguous_stale_label_across_windows() {
 }
 
 test_kill_refuses_stale_label_when_a_window_scan_fails() {
-  local dir fb title log
+  local dir fb title log status
   dir="$TMP_ROOT/kill-stale-label-scan-failure"; mkdir -p "$dir/responses"
   title=$(cmux_expected_scoped_title fm-label)
   cmux_windows_response "$dir" 1 \
@@ -1051,6 +1112,8 @@ test_kill_refuses_stale_label_when_a_window_scan_fails() {
   fb=$(make_cmux_fakebin "$dir")
   PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "" fm-label' "$ROOT"
+  status=$?
+  [ "$status" -ne 0 ] || fail "incomplete stale-label recovery should fail so teardown preserves metadata"
   log=$(cat "$dir/log")
   assert_not_contains "$log" $'\x1f''list-panes' \
     "incomplete stale-label recovery must not resolve a surface"
@@ -1151,9 +1214,13 @@ test_send_text_submit_popup_autocomplete_requires_second_enter
 test_send_text_submit_send_failed_when_target_absent
 test_window_of_workspace_finds_window_and_count
 test_window_of_workspace_empty_when_not_found
+test_window_of_workspace_fails_when_window_list_fails
+test_window_of_workspace_fails_when_workspace_json_is_invalid
 test_kill_closes_workspace_directly_when_not_last
 test_kill_adds_sibling_when_last_in_window
 test_kill_is_best_effort_when_close_workspace_fails
+test_kill_fails_closed_when_window_scan_fails
+test_kill_fails_closed_when_sibling_creation_fails
 test_kill_recovers_stale_target_by_label
 test_kill_validates_expected_label_in_another_window
 test_kill_refuses_ambiguous_stale_label_across_windows
