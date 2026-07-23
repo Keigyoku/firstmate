@@ -174,7 +174,7 @@ This section owns the mechanical enforcement layer that closes that gap.
 
 ### Scope and loop guard
 
-Scoping is identical to `bin/fm-turnend-guard.sh`: real primary checkout only (`.fm-secondmate-home` and linked worktrees are inert; `AGENTS.md` + `bin/` + state dir required).
+Unlike `bin/fm-turnend-guard.sh`, the claim guard retains the narrower main-primary Stop scope: `.fm-secondmate-home` and linked worktrees are inert, while `AGENTS.md`, `bin/`, and the state directory are required.
 `stop_hook_active=true` always allows the stop so at most one block fires per turn (shared loop-guard contract with the supervision guard).
 `config/claim-guard` exactly `off` disables only this check; absent or any other value leaves it enabled.
 `FM_CLAIM_GLASS_MAX_AGE` (default 900 seconds) is the freshness window for `fm-state/last-glass-capture`.

@@ -800,7 +800,7 @@ Two further guards prevent the tangle upstream: `fm-spawn` refuses to launch unl
 On every verified primary harness (`claude`, `codex`, `opencode`, `pi`, and `grok`), "no turn ends blind" has a structural backstop beyond the pull-based `fm-guard.sh` banner.
 The shared predicate is `bin/fm-turnend-guard.sh`: when tasks are in flight without a live identity-matched watcher lock and fresh beacon, or with pending queued wakes already delivered, direct-blocking harnesses block the turn end and passive harnesses force one bounded follow-up turn; it guards both the main primary and a secondmate's own primary session; watcher lock paths are compared by physical identity so symlinked spellings of the same home do not false-alarm.
 It shares status fields with `fm-guard.sh` via `bin/fm-supervision-lib.sh`, uses `bin/fm-wake-lib.sh` for live watcher lock health, gives a live fresh newly published watcher lock a bounded one-second identity-field settle window, and never blocks or follows up more than once per turn.
-It is scoped to fire only in the actual primary checkout - never in a crewmate/scout worktree or a secondmate home - and stays silent when supervision is healthy.
+It is scoped to fire only in an actual primary session - the main home or a genuinely marked secondmate home - never in a child crewmate/scout worktree, and stays silent when supervision is healthy.
 See `docs/turnend-guard.md` for the per-harness hook mechanisms, empirical validation, scoping details, documented fail-open tradeoffs, and the composed claim-vs-evidence glass guard (`bin/fm-claim-guard.sh` / `bin/fm-glass.sh`).
 Watcher liveness is harness-aware.
 Do not assume one primary harness can use another harness's foreground or background shape.

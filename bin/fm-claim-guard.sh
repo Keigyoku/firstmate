@@ -6,7 +6,8 @@
 # enforcement layer. docs/turnend-guard.md owns the full contract.
 #
 # Behavior:
-#   - Scope EXACTLY like fm-turnend-guard.sh: real primary checkout only.
+#   - Scope to the main primary checkout; secondmate homes and linked child
+#     worktrees remain inert.
 #   - Read the turn's final assistant text from Stop payload
 #     last_assistant_message (preferred) or transcript_path JSONL (fallback).
 #   - If that text asserts captain-facing app state AND no fresh glass capture
@@ -46,7 +47,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 STOP_HOOK_ACTIVE=$(printf '%s' "$PAYLOAD" | jq -r '.stop_hook_active // false' 2>/dev/null) || exit 0
 [ "$STOP_HOOK_ACTIVE" = "true" ] && exit 0
 
-# --- scope precisely to the PRIMARY checkout (mirror fm-turnend-guard.sh) ---
+# --- scope precisely to the main PRIMARY checkout ---------------------------
 [ -f "$FM_ROOT/.fm-secondmate-home" ] && exit 0
 GIT_DIR=$(git -C "$FM_ROOT" rev-parse --git-dir 2>/dev/null) || exit 0
 GIT_COMMON_DIR=$(git -C "$FM_ROOT" rev-parse --git-common-dir 2>/dev/null) || exit 0
