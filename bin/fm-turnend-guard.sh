@@ -81,14 +81,7 @@ STOP_HOOK_ACTIVE=$(printf '%s' "$PAYLOAD" | jq -r '.stop_hook_active // false' 2
 # bin/fm-primary-scope-lib.sh (one owner with subagent/cd-adjacent scope checks).
 # shellcheck source=bin/fm-primary-scope-lib.sh
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
-if ! fm_root_is_secondmate_home "$FM_ROOT"; then
-  GIT_DIR=$(git -C "$FM_ROOT" rev-parse --git-dir 2>/dev/null) || exit 0
-  GIT_COMMON_DIR=$(git -C "$FM_ROOT" rev-parse --git-common-dir 2>/dev/null) || exit 0
-  [ "$GIT_DIR" = "$GIT_COMMON_DIR" ] || exit 0
-fi
-[ -f "$FM_ROOT/AGENTS.md" ] || exit 0
-[ -d "$FM_ROOT/bin" ] || exit 0
-[ -d "$STATE" ] || exit 0
+fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 
 # --- the actual predicate ----------------------------------------------------
 # shellcheck source=bin/fm-wake-lib.sh
