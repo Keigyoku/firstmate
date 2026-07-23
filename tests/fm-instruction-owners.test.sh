@@ -13,7 +13,8 @@ HARNESS="$ROOT/.agents/skills/harness-adapters/SKILL.md"
 CODING="$ROOT/.agents/skills/firstmate-coding-guidelines/SKILL.md"
 RECOVERY="$ROOT/.agents/skills/stuck-crewmate-recovery/SKILL.md"
 SECONDMATE="$ROOT/.agents/skills/secondmate-provisioning/SKILL.md"
-CONFIG="$ROOT/docs/configuration.md"
+BOOTSTRAP="$ROOT/.agents/skills/bootstrap-diagnostics/SKILL.md"
+DECISION="$ROOT/.agents/skills/decision-hold-lifecycle/SKILL.md"
 AGENTS="$ROOT/AGENTS.md"
 BRIEF="$ROOT/bin/fm-brief.sh"
 
@@ -153,6 +154,24 @@ test_state_startup_and_ordinary_recovery_placement() {
   pass "state, startup, and ordinary recovery have focused owners and triggers"
 }
 
+test_bootstrap_tangle_response_respects_lock_ownership() {
+  assert_grep '`TANGLE: ... restore the primary with: git -C <root> checkout <default> ...`' "$BOOTSTRAP" \
+    "bootstrap diagnostics lost the lock-holder restoration path"
+  assert_grep '`TANGLE: ... read-only session must leave restore work to the session holding the fleet lock`' "$BOOTSTRAP" \
+    "bootstrap diagnostics lost the read-only tangle path"
+  assert_grep "remain read-only, and do not restore it" "$BOOTSTRAP" \
+    "bootstrap diagnostics permits a lock-refused session to restore the checkout"
+  pass "bootstrap tangle responses preserve lock ownership"
+}
+
+test_decision_hold_trigger_covers_all_review_surfaces() {
+  assert_grep "investigation, scout report, structured review, or visual review as complete" "$AGENTS" \
+    "AGENTS.md lost a decision-hold completion trigger"
+  assert_grep "investigation, scout report, structured review, or Lavish review as complete" "$DECISION" \
+    "decision-hold owner lost a required review surface"
+  pass "decision-hold trigger covers investigation and review completion surfaces"
+}
+
 test_compressed_agents_owner_map() {
   assert_grep '`docs/configuration.md` is the single owner of the top-level operational-home layout' "$AGENTS" \
     "AGENTS.md lost the state-layout owner pointer"
@@ -212,5 +231,7 @@ test_generic_effort_fallback_respects_precedence
 test_shared_authoring_requirements_are_owned
 test_secondmate_registry_contract_stays_concise
 test_state_startup_and_ordinary_recovery_placement
+test_bootstrap_tangle_response_respects_lock_ownership
+test_decision_hold_trigger_covers_all_review_surfaces
 test_compressed_agents_owner_map
 test_compressed_agents_retains_authority_and_supervision_safety

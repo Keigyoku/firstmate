@@ -142,6 +142,8 @@ test_classifier_primitives() {
   [ "$(window_to_task "default:w1:p2" "$state")" = "herdr-task" ] || fail "window_to_task did not resolve opaque backend target through metadata"
   FM_CAPTAIN_RE='custom-verb:' status_is_captain_relevant "custom-verb: x" || fail "FM_CAPTAIN_RE override not honored"
   FM_CAPTAIN_RE='custom-verb:' status_is_captain_relevant "done: x" && fail "FM_CAPTAIN_RE override did not replace the default verb set"
+  FM_CAPTAIN_RE='working:' status_is_captain_relevant "working: x" || fail "FM_CAPTAIN_RE override did not permit an explicitly configured working verb"
+  FM_CAPTAIN_RE='paused:' status_is_captain_relevant "paused: x" || fail "FM_CAPTAIN_RE override did not permit an explicitly configured paused verb"
   pass "classifier primitives: last line, captain-relevance, window->task, FM_CAPTAIN_RE override"
 }
 

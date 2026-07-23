@@ -23,9 +23,11 @@ The inline rules in `AGENTS.md` section 3 still bind: detect, then consent, then
   For `orca`, this also covers an executable named `orca` whose `orca --help` output does not expose the expected Orca developer CLI commands (`status`, `repo`, `worktree`, and `terminal`).
   For `jq`, bootstrap requires it because dispatch-profile validation, watchdog config validation, X-mode clients, watchdog metrics parsing, and JSON-speaking backends use it.
 - `NEEDS_GH_AUTH` - ask the captain to run `! gh auth login` (interactive; you cannot run it for them).
-- `TANGLE: <remediation>` - the primary checkout is stranded on a feature branch instead of its default branch; `AGENTS.md` section 8 explains why this guard exists and what it protects.
-  The work is safe on that branch ref; restore the primary to its default branch with the printed `git -C <root> checkout <default>`, then re-validate that branch in a proper worktree.
+- `TANGLE: ... restore the primary with: git -C <root> checkout <default> ...` - the lock-holding session found the primary checkout stranded on a feature branch instead of its default branch; `AGENTS.md` section 8 explains why this guard exists and what it protects.
+  The work is safe on that branch ref; restore the primary with the printed command, then re-validate that branch in a proper worktree.
   This is the only sanctioned firstmate-initiated git write to the primary, and it is a non-destructive branch switch that strands nothing.
+- `TANGLE: ... read-only session must leave restore work to the session holding the fleet lock` - report the stranded primary checkout, remain read-only, and do not restore it.
+  The lock-holding session owns checkout restoration.
 - `CREW_HARNESS_OVERRIDE: <name>` - record and use the override silently; surface a harness fact only if it actually blocks work or the captain asks.
 - `CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>` - the optional dispatch profile file exists but failed low-cost bootstrap validation; continue with the normal fallback chain, resolve and pass the chosen fallback harness explicitly while the file remains present, fix the malformed schema, unverified harness name, unknown selector, or invalid harness/effort pair when convenient, and do not select a bad profile.
 - `CREW_DISPATCH: active config/crew-dispatch.json` - bootstrap validated the optional dispatch profile file and printed its active rules and `default:` when present.

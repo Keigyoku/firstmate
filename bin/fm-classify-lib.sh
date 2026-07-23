@@ -258,6 +258,10 @@ status_is_terminal_verb() {
 status_is_captain_relevant() {
   local line=$1 verb
   [ -n "$line" ] || return 1
+  if [ -n "${FM_CAPTAIN_RE+x}" ]; then
+    printf '%s' "$line" | grep -qiE "$FM_CAPTAIN_RE"
+    return
+  fi
   status_is_paused "$line" && return 1
   verb=$(status_line_verb "$line")
   case "$verb" in
@@ -265,14 +269,10 @@ status_is_captain_relevant() {
       return 1
       ;;
   esac
-  if [ -z "${FM_CAPTAIN_RE+x}" ]; then
-    case "$verb" in
-      done|needs-decision|blocked|failed) return 0 ;;
-    esac
-    printf '%s' "$line" | grep -qiE "$FM_CLASSIFY_CAPTAIN_RE_DEFAULT"
-  else
-    printf '%s' "$line" | grep -qiE "$FM_CAPTAIN_RE"
-  fi
+  case "$verb" in
+    done|needs-decision|blocked|failed) return 0 ;;
+  esac
+  printf '%s' "$line" | grep -qiE "$FM_CLASSIFY_CAPTAIN_RE_DEFAULT"
 }
 
 # 0 if a status line's leading verb is the pause verb (paused: <reason>). A pure
