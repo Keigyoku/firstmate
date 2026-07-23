@@ -92,7 +92,7 @@ The supported launch-profile flags below were verified locally on 2026-06-30 wit
 |---|---|---|---|
 | claude | `--model <model>` | `--effort <low\|medium\|high\|xhigh\|max>` | Verified on Claude Code 2.1.196. |
 | codex | `--model <model>` | `-c 'model_reasoning_effort="<low\|medium\|high\|xhigh>"'` | Verified on codex-cli 0.142.1. The installed binary schema contains `model_reasoning_effort`, the active config uses it, and the bundled model catalog advertises only low/medium/high/xhigh. `max` is omitted. |
-| grok | `--model <model>` | `--reasoning-effort <low\|medium\|high>` | Re-verified on grok 0.2.111 (2026-07-22). `--effort` is an alias. Docs list `xhigh`/`max` as canonical tiers when a model advertises them; active `grok-4.5` rejects both with `unknown effort level ... use one of: high, medium, low`, so firstmate passes only low/medium/high and omits `xhigh`/`max` (meta still records the request). |
+| grok | `--model <model>` | `--reasoning-effort <low\|medium\|high>` | Re-verified on grok 0.2.111 (2026-07-22). `--effort` is an alias. Docs list `xhigh`/`max` as canonical tiers when a model advertises them; active `grok-4.5` rejects both with `unknown effort level ... use one of: high, medium, low`, so firstmate passes only low/medium/high and omits `xhigh`/`max`. |
 | pi | `--model <model>` | `--thinking <low\|medium\|high\|xhigh>` | Verified on pi 0.80.2. `max` prints an invalid-thinking warning, so firstmate omits Pi effort when the requested effort is `max`. |
 | opencode | `--model <provider/model>` | none for firstmate's interactive launch | Verified on opencode 1.17.6. `opencode run` has `--variant`, but firstmate launches the interactive `opencode --prompt` path, which has no verified effort flag. |
 | cursor | `--model <model>` | folded into the model string as a bracket parameter (e.g. `--model 'model[effort=high]'`) | Verified on cursor-agent 2026.07.01 (2026-07-05). cursor has no standalone effort flag; `model_flag_for_harness` folds a valid effort (low/medium/high/xhigh/max) into the model bracket. When effort is set but no model is, there is nothing to attach it to, so it is omitted and left recorded in meta. A model without bracket support ignores the parameter on cursor's side. |
@@ -234,7 +234,7 @@ Launch with a positional prompt: `grok --always-approve "$(cat <brief>)"`.
 **MCP (0.2.111):** Grok has a full native MCP surface (`grok mcp add|list|remove|doctor`, stdio/HTTP/SSE) and Claude-compat loading of `~/.claude.json` mcpServers, skills, and hooks.
 Treat grok as MCP-capable for fleet crews; do not write "grok has no MCP" fallback language in briefs or skills.
 Pi remains without a verified MCP surface.
-Role-identity skills still need worktree injection via `fm-spawn --role` (they only resolve when CWD is the firstmate repo otherwise).
+Project-worktree role-skill delivery is owned by `fm-spawn.sh --help`.
 
 | Fact | Value |
 |---|---|
