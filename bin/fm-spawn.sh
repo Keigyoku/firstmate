@@ -1103,12 +1103,47 @@ exclude_path() {
   grep -qxF "$rel" "$EXCL" 2>/dev/null \
     || { echo "error: could not verify git exclusion for $rel in $WT" >&2; return 1; }
 }
+verify_excluded_path() {
+  local rel=$1
+  exclude_path "$rel" || return 1
+  git -C "$WT" check-ignore --no-index --quiet -- "$rel" \
+    || { echo "error: git exclusion is not effective for $rel in $WT" >&2; return 1; }
+}
+validate_role_parent() {
+  local parent=$1 wt_real=$2 parent_real
+  [ ! -L "$parent" ] \
+    || { echo "error: role skill parent must not be a symlink: $parent" >&2; return 1; }
+  if [ -e "$parent" ]; then
+    [ -d "$parent" ] \
+      || { echo "error: role skill parent must be a directory: $parent" >&2; return 1; }
+    parent_real=$(cd "$parent" 2>/dev/null && pwd -P) \
+      || { echo "error: could not resolve role skill parent: $parent" >&2; return 1; }
+    case "$parent_real" in
+      "$wt_real"|"$wt_real"/*) ;;
+      *) echo "error: role skill parent escapes worktree: $parent" >&2; return 1 ;;
+    esac
+  fi
+}
+rollback_role_skill_links() {
+  local created_dest=$1 dest=$2 src=$3 created_claude=$4 claude_dest=$5 claude_target=$6
+  if [ "$created_claude" -eq 1 ] && [ -L "$claude_dest" ] \
+    && [ "$(readlink "$claude_dest" 2>/dev/null)" = "$claude_target" ]; then
+    rm -f -- "$claude_dest" \
+      || echo "error: could not roll back role skill link at $claude_dest" >&2
+  fi
+  if [ "$created_dest" -eq 1 ] && [ -L "$dest" ] \
+    && [ "$(readlink "$dest" 2>/dev/null)" = "$src" ]; then
+    rm -f -- "$dest" \
+      || echo "error: could not roll back role skill link at $dest" >&2
+  fi
+}
 # Role-identity skill delivery (C3 Option 2): symlink the named firstmate role
 # skill into the crew worktree so Claude/Grok project-skill discovery can resolve
 # it outside the firstmate repo. Paths are git-excluded so they never enter a
 # product PR. Symlinks die with the worktree; no teardown change required.
 inject_role_skill() {
-  local role=$1 src dest claude_skills claude_dest claude_layout parent
+  local role=$1 src dest claude_skills claude_dest claude_layout parent wt_real
+  local claude_rel claude_target claude_link_path created_dest=0 created_claude=0
   [ -n "$role" ] || return 0
   [ "$KIND" != secondmate ] || return 0
   src="$FM_ROOT/.agents/skills/$role"
@@ -1117,16 +1152,19 @@ inject_role_skill() {
   claude_skills="$WT/.claude/skills"
   claude_dest="$claude_skills/$role"
   claude_layout=mirror
+  claude_rel=.claude/skills
+  claude_target=../.agents/skills
+  claude_link_path=$claude_skills
+  wt_real=$(cd "$WT" 2>/dev/null && pwd -P) \
+    || { echo "error: could not resolve role skill worktree: $WT" >&2; return 1; }
 
   for parent in "$WT/.agents" "$WT/.agents/skills" "$WT/.claude"; do
-    [ ! -L "$parent" ] \
-      || { echo "error: role skill parent must not be a symlink: $parent" >&2; return 1; }
+    validate_role_parent "$parent" "$wt_real" || return 1
   done
   mkdir -p "$WT/.agents/skills" \
     || { echo "error: could not create role skill directory in $WT" >&2; return 1; }
   for parent in "$WT/.agents" "$WT/.agents/skills"; do
-    [ ! -L "$parent" ] \
-      || { echo "error: role skill parent must not be a symlink: $parent" >&2; return 1; }
+    validate_role_parent "$parent" "$wt_real" || return 1
   done
 
   if [ -e "$dest" ] || [ -L "$dest" ]; then
@@ -1140,45 +1178,82 @@ inject_role_skill() {
   elif [ -e "$claude_skills" ]; then
     [ -d "$claude_skills" ] \
       || { echo "error: Claude skills destination collision: $claude_skills" >&2; return 1; }
+    validate_role_parent "$claude_skills" "$wt_real" || return 1
     claude_layout=directory
+    claude_rel=.claude/skills/$role
+    claude_target=$src
+    claude_link_path=$claude_dest
     if [ -e "$claude_dest" ] || [ -L "$claude_dest" ]; then
       [ -L "$claude_dest" ] && [ "$(readlink "$claude_dest" 2>/dev/null)" = "$src" ] \
         || { echo "error: role skill destination collision: $claude_dest" >&2; return 1; }
     fi
   fi
 
-  exclude_path ".agents/skills/$role" || return 1
+  verify_excluded_path ".agents/skills/$role" || return 1
+  verify_excluded_path "$claude_rel" || return 1
   if [ ! -L "$dest" ]; then
     ln -s "$src" "$dest" \
       || { echo "error: could not link role skill at $dest" >&2; return 1; }
+    created_dest=1
   fi
   [ -L "$dest" ] && [ "$(readlink "$dest" 2>/dev/null)" = "$src" ] \
-    || { echo "error: could not verify role skill link at $dest" >&2; return 1; }
+    || {
+      echo "error: could not verify role skill link at $dest" >&2
+      rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_dest" "$claude_target"
+      return 1
+    }
 
   case "$claude_layout" in
     linked) ;;
     mirror)
       mkdir -p "$WT/.claude" \
-        || { echo "error: could not create Claude skill directory in $WT" >&2; return 1; }
-      [ ! -L "$WT/.claude" ] \
-        || { echo "error: role skill parent must not be a symlink: $WT/.claude" >&2; return 1; }
-      exclude_path ".claude/skills" || return 1
+        || {
+          echo "error: could not create Claude skill directory in $WT" >&2
+          rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_skills" "$claude_target"
+          return 1
+        }
+      if ! validate_role_parent "$WT/.claude" "$wt_real"; then
+        rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_skills" "$claude_target"
+        return 1
+      fi
       ln -s "../.agents/skills" "$claude_skills" \
-        || { echo "error: could not create Claude skills mirror at $claude_skills" >&2; return 1; }
+        || {
+          echo "error: could not create Claude skills mirror at $claude_skills" >&2
+          rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_skills" "$claude_target"
+          return 1
+        }
+      created_claude=1
       [ -L "$claude_skills" ] \
         && [ "$(real_path_or_raw "$claude_skills")" = "$(real_path_or_raw "$WT/.agents/skills")" ] \
-        || { echo "error: could not verify Claude skills mirror at $claude_skills" >&2; return 1; }
+        || {
+          echo "error: could not verify Claude skills mirror at $claude_skills" >&2
+          rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_skills" "$claude_target"
+          return 1
+        }
       ;;
     directory)
-      exclude_path ".claude/skills/$role" || return 1
       if [ ! -L "$claude_dest" ]; then
         ln -s "$src" "$claude_dest" \
-          || { echo "error: could not link Claude role skill at $claude_dest" >&2; return 1; }
+          || {
+            echo "error: could not link Claude role skill at $claude_dest" >&2
+            rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_dest" "$claude_target"
+            return 1
+          }
+        created_claude=1
       fi
       [ -L "$claude_dest" ] && [ "$(readlink "$claude_dest" 2>/dev/null)" = "$src" ] \
-        || { echo "error: could not verify Claude role skill link at $claude_dest" >&2; return 1; }
+        || {
+          echo "error: could not verify Claude role skill link at $claude_dest" >&2
+          rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_dest" "$claude_target"
+          return 1
+        }
       ;;
   esac
+  if ! verify_excluded_path ".agents/skills/$role" || ! verify_excluded_path "$claude_rel"; then
+    rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" \
+      "$claude_link_path" "$claude_target"
+    return 1
+  fi
 }
 TURNEND_BACKUP_DIR=
 adopt_hook_backup() {

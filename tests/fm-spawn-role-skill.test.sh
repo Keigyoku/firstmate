@@ -14,9 +14,10 @@ SPAWN="$ROOT/bin/fm-spawn.sh"
 TMP_ROOT=$(fm_test_tmproot fm-spawn-role-skill)
 
 make_spawn_fakebin() {
-  local dir=$1 fakebin real_git
+  local dir=$1 fakebin real_git real_ln
   fakebin=$(fm_fakebin "$dir")
   real_git=$(command -v git)
+  real_ln=$(command -v ln)
   cat > "$fakebin/git" <<SH
 #!/usr/bin/env bash
 set -u
@@ -28,6 +29,17 @@ fi
 exec "$real_git" "\$@"
 SH
   chmod +x "$fakebin/git"
+  cat > "$fakebin/ln" <<SH
+#!/usr/bin/env bash
+set -u
+if [ "\${FM_FAKE_CLAUDE_LINK_FAILURE:-}" = 1 ]; then
+  case "\${*: -1}" in
+    */.claude/skills) exit 17 ;;
+  esac
+fi
+exec "$real_ln" "\$@"
+SH
+  chmod +x "$fakebin/ln"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -72,6 +84,7 @@ run_spawn() {
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
     FM_FAKE_EXCLUDE_FAILURE="${FM_FAKE_EXCLUDE_FAILURE:-}" \
+    FM_FAKE_CLAUDE_LINK_FAILURE="${FM_FAKE_CLAUDE_LINK_FAILURE:-}" \
     GROK_HOME="$home/grok-home" PATH="$fakebin:$PATH" \
     "$SPAWN" "$@" 2>&1
 }
@@ -368,6 +381,130 @@ test_claude_parent_internal_alias_fails_without_target_modification() {
   pass "internal .claude alias fails without target modification"
 }
 
+test_primary_role_negation_fails_without_link_residue() {
+  local rec id out status dest
+  id=role-primary-negation-z14
+  rec=$(make_spawn_case role-primary-negation claude "$id")
+  read_case_record "$rec"
+  printf '!/.agents/skills/review-crew\n' > "$WT_DIR/.gitignore"
+  dest="$WT_DIR/.agents/skills/review-crew"
+
+  status=0
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --role review-crew) || status=$?
+  expect_code 1 "$status" "primary role path negation should fail"
+  assert_contains "$out" "git exclusion is not effective for .agents/skills/review-crew" \
+    "primary role path negation failure should identify the ineffective exclusion"
+  assert_absent "$dest" "primary role negation failure left a role symlink"
+  assert_absent "$WT_DIR/.claude/skills" "primary role negation failure left a Claude mirror"
+  assert_absent "$HOME_DIR/state/$id.meta" "primary role negation failure should not write meta"
+  pass "primary role negation fails without link residue"
+}
+
+test_claude_mirror_negation_fails_without_link_residue() {
+  local rec id out status
+  id=role-mirror-negation-z15
+  rec=$(make_spawn_case role-mirror-negation claude "$id")
+  read_case_record "$rec"
+  printf '!/.claude/skills\n' > "$WT_DIR/.gitignore"
+
+  status=0
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --role review-crew) || status=$?
+  expect_code 1 "$status" "Claude mirror path negation should fail"
+  assert_contains "$out" "git exclusion is not effective for .claude/skills" \
+    "Claude mirror negation failure should identify the ineffective exclusion"
+  assert_absent "$WT_DIR/.agents/skills/review-crew" \
+    "Claude mirror negation failure left a primary role symlink"
+  assert_absent "$WT_DIR/.claude/skills" "Claude mirror negation failure left a mirror symlink"
+  assert_absent "$HOME_DIR/state/$id.meta" "Claude mirror negation failure should not write meta"
+  pass "Claude mirror negation fails without link residue"
+}
+
+test_claude_directory_negation_fails_without_link_residue() {
+  local rec id out status claude_dest
+  id=role-directory-negation-z16
+  rec=$(make_spawn_case role-directory-negation claude "$id")
+  read_case_record "$rec"
+  mkdir -p "$WT_DIR/.claude/skills"
+  printf '!/.claude/skills/review-crew\n' > "$WT_DIR/.gitignore"
+  claude_dest="$WT_DIR/.claude/skills/review-crew"
+
+  status=0
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --role review-crew) || status=$?
+  expect_code 1 "$status" "Claude directory role path negation should fail"
+  assert_contains "$out" "git exclusion is not effective for .claude/skills/review-crew" \
+    "Claude directory negation failure should identify the ineffective exclusion"
+  assert_absent "$WT_DIR/.agents/skills/review-crew" \
+    "Claude directory negation failure left a primary role symlink"
+  assert_absent "$claude_dest" "Claude directory negation failure left a role symlink"
+  assert_present "$WT_DIR/.claude/skills" "Claude directory negation failure removed user directory"
+  assert_absent "$HOME_DIR/state/$id.meta" "Claude directory negation failure should not write meta"
+  pass "Claude directory negation fails without link residue"
+}
+
+test_claude_link_failure_rolls_back_primary_role_link() {
+  local rec id out status
+  id=role-link-rollback-z17
+  rec=$(make_spawn_case role-link-rollback claude "$id")
+  read_case_record "$rec"
+
+  status=0
+  out=$(FM_FAKE_CLAUDE_LINK_FAILURE=1 run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --role review-crew) || status=$?
+  expect_code 1 "$status" "Claude mirror link failure should abort spawn"
+  assert_contains "$out" "could not create Claude skills mirror" \
+    "Claude mirror link failure should be reported explicitly"
+  assert_absent "$WT_DIR/.agents/skills/review-crew" \
+    "Claude mirror link failure left the primary role symlink"
+  assert_absent "$WT_DIR/.claude/skills" "Claude mirror link failure left a mirror symlink"
+  assert_absent "$HOME_DIR/state/$id.meta" "Claude mirror link failure should not write meta"
+  pass "Claude mirror link failure rolls back primary role link"
+}
+
+test_claude_link_failure_preserves_preexisting_primary_role_link() {
+  local rec id out status dest target
+  id=role-link-preserve-z18
+  rec=$(make_spawn_case role-link-preserve claude "$id")
+  read_case_record "$rec"
+  dest="$WT_DIR/.agents/skills/review-crew"
+  target="$ROOT/.agents/skills/review-crew"
+  mkdir -p "$WT_DIR/.agents/skills"
+  ln -s "$target" "$dest"
+
+  status=0
+  out=$(FM_FAKE_CLAUDE_LINK_FAILURE=1 run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --role review-crew) || status=$?
+  expect_code 1 "$status" "Claude mirror link failure should abort with a preexisting primary role link"
+  assert_contains "$out" "could not create Claude skills mirror" \
+    "Claude mirror link failure should be reported with a preexisting primary role link"
+  [ -L "$dest" ] || fail "rollback removed the preexisting primary role symlink"
+  [ "$(readlink "$dest")" = "$target" ] || fail "rollback changed the preexisting primary role symlink"
+  assert_absent "$WT_DIR/.claude/skills" "Claude mirror link failure left a mirror symlink"
+  assert_absent "$HOME_DIR/state/$id.meta" "Claude mirror link failure should not write meta"
+  pass "Claude mirror failure preserves preexisting primary role link"
+}
+
+test_linked_claude_mirror_negation_preserves_preexisting_mirror() {
+  local rec id out status claude_skills
+  id=role-linked-negation-z19
+  rec=$(make_spawn_case role-linked-negation claude "$id")
+  read_case_record "$rec"
+  mkdir -p "$WT_DIR/.claude"
+  claude_skills="$WT_DIR/.claude/skills"
+  ln -s "../.agents/skills" "$claude_skills"
+  printf '!/.claude/skills\n' > "$WT_DIR/.gitignore"
+
+  status=0
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --role review-crew) || status=$?
+  expect_code 1 "$status" "linked Claude mirror negation should fail"
+  assert_contains "$out" "git exclusion is not effective for .claude/skills" \
+    "linked Claude mirror negation should identify the ineffective exclusion"
+  [ -L "$claude_skills" ] || fail "linked-layout failure removed the preexisting Claude mirror"
+  [ "$(readlink "$claude_skills")" = "../.agents/skills" ] \
+    || fail "linked-layout failure changed the preexisting Claude mirror"
+  assert_absent "$WT_DIR/.agents/skills/review-crew" \
+    "linked Claude mirror negation left a primary role symlink"
+  assert_absent "$HOME_DIR/state/$id.meta" "linked Claude mirror negation should not write meta"
+  pass "linked Claude mirror negation preserves the preexisting mirror"
+}
+
 test_role_tagged_spawn_injects_excluded_skill
 test_role_tag_rejects_unknown_role
 test_role_not_inferred_from_task_id
@@ -381,5 +518,11 @@ test_claude_parent_escape_fails_without_outside_modification
 test_agents_parent_internal_alias_fails_without_target_modification
 test_agents_skills_parent_internal_alias_fails_without_target_modification
 test_claude_parent_internal_alias_fails_without_target_modification
+test_primary_role_negation_fails_without_link_residue
+test_claude_mirror_negation_fails_without_link_residue
+test_claude_directory_negation_fails_without_link_residue
+test_claude_link_failure_rolls_back_primary_role_link
+test_claude_link_failure_preserves_preexisting_primary_role_link
+test_linked_claude_mirror_negation_preserves_preexisting_mirror
 
 echo "# all fm-spawn-role-skill tests passed"
