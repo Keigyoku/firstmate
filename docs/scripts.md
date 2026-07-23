@@ -35,6 +35,7 @@ The shared no-mistakes gate refusal used by `fm-spawn.sh`, `fm-send.sh`, and `fm
 | `fm-crew-kill-shim.sh`   | PATH refusal shim installed as `pkill`, `killall`, and `fuser` for crew/scout tasks |
 | `fm-crew-tdd-guard.sh`   | Ship-crew TDD pre-execution guard predicate on the kill-guard rails (docs/crew-tdd-guard.md) |
 | `fm-arm-pretool-check.sh` | Stable PreToolUse transport for the watcher-arm command policy (docs/arm-pretool-check.md) |
+| `fm-subagent-pretool-check.sh` | Primary PreToolUse fence against out-of-fleet delegation tools |
 | `fm-arm-command-policy.mjs` | Semantic owner of the watcher-arm PreToolUse policy (docs/arm-pretool-check.md)   |
 | `fm-supervision-instructions.sh` | Render the session-start primary-harness supervision block or the one-line repair instruction |
 | `fm-home-seed.sh`        | Transactionally provision a secondmate home and maintain `data/secondmates.md`       |
