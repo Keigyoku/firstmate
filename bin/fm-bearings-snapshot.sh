@@ -358,7 +358,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
        | ([.holds[]? | select(.source == "backlog")]) as $backlog_holds
        | . + {
            bearings_captain_holds:$captain_holds,
-           bearings_decisions:($captain_holds + $status_decisions),
+           bearings_decisions:$status_decisions,
            bearings_holds:(if .current.state == "captain_decision" then $backlog_holds else .holds end),
            bearings_state:(
              if .current.state == "captain_decision" then

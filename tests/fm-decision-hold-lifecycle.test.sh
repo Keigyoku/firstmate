@@ -379,8 +379,8 @@ EOF
   pass "resolved findings and decision-like prose do not create false holds"
 }
 
-test_terminal_single_owner_status_decision_does_not_block_empty_inventory() {
-  local home id open secondmate
+test_terminal_status_decision_requires_durable_inventory() {
+  local home id hold open
   home=$(make_home stale-terminal-decision)
   id=sample-terminal-review
   mkdir -p "$home/data/$id"
@@ -392,22 +392,28 @@ test_terminal_single_owner_status_decision_does_not_block_empty_inventory() {
   open=$(bash -c '. "$1"; status_open_decisions "$2"' _ \
     "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
   assert_contains "$open" "default" "fixture must retain the raw stale status decision"
-  run_decisions "$home" complete "$id" --none >/dev/null \
-    || fail "terminal single-owner stale status decision blocked empty inventory completion"
-  run_decisions "$home" verify "$id" >/dev/null \
-    || fail "terminal single-owner stale status decision blocked inventory verification"
-  run_teardown "$home" "$id" >/dev/null 2> "$home/terminal-teardown.err" \
-    || fail "terminal single-owner stale status decision blocked teardown: $(cat "$home/terminal-teardown.err")"
-
-  secondmate=sample-secondmate
-  write_origin_meta "$home" "$secondmate" secondmate
-  printf 'needs-decision [key=route]: choose route A or route B\ndone: heartbeat complete\n' \
-    > "$home/state/$secondmate.status"
-  if run_decisions "$home" complete "$secondmate" --none \
-    > "$home/secondmate-terminal.out" 2> "$home/secondmate-terminal.err"; then
-    fail "secondmate terminal status decision was incorrectly cleared"
+  if run_decisions "$home" complete "$id" --none \
+    > "$home/terminal-complete.out" 2> "$home/terminal-complete.err"; then
+    fail "terminal status decision bypassed empty inventory completion"
   fi
-  pass "terminal single-owner stale status decisions do not block empty inventory"
+  if run_decisions "$home" verify "$id" \
+    > "$home/terminal-verify.out" 2> "$home/terminal-verify.err"; then
+    fail "terminal status decision bypassed inventory verification"
+  fi
+  if run_teardown "$home" "$id" \
+    > "$home/terminal-teardown.out" 2> "$home/terminal-teardown.err"; then
+    fail "terminal status decision bypassed teardown"
+  fi
+
+  hold=$(run_decisions "$home" hold "$id" default \
+    --title "Choose the terminal sample route" --reason "captain route choice pending" --repo sample) \
+    || fail "terminal status decision could not be durably held"
+  [ "$hold" = "$id-decision-default" ] || fail "terminal decision hold identity was not deterministic"
+  run_decisions "$home" complete "$id" default >/dev/null \
+    || fail "captain-held terminal status decision blocked completion"
+  run_decisions "$home" verify "$id" >/dev/null \
+    || fail "captain-held terminal status decision blocked verification"
+  pass "terminal status decisions require durable captain-held inventory"
 }
 
 test_secondmate_hold_stays_in_authoritative_home() {
@@ -448,8 +454,11 @@ EOF
     "firstmate:fm-sample-mate" sample
   json=$(run_bearings "$parent") || fail "parent Bearings could not read secondmate hold"
   printf '%s' "$json" | jq -e --arg hold "$hold" '
-    .decisions_open | any(.owner == "sample-mate" and .verb == "captain-hold" and (.id | endswith($hold)))
-  ' >/dev/null || fail "secondmate captain hold did not surface with authoritative owner: $json"
+    ([.decisions_open[]
+      | select(.owner == "sample-mate" and .verb == "captain-hold" and (.id | endswith($hold)))
+      | select(.summary | contains("captain release choice pending"))]
+      | length) == 1
+  ' >/dev/null || fail "secondmate captain hold did not surface exactly once with its reason: $json"
   assert_no_grep "$hold" "$parent/data/backlog.md" "secondmate hold leaked into the main backlog"
   assert_grep "$hold" "$mate/data/backlog.md" "secondmate hold left its authoritative backlog"
   pass "main-home and secondmate-home captain holds remain correctly routed"
@@ -557,6 +566,6 @@ test_structured_holds_survive_teardown_and_route_resolution
 test_origin_slug_validation_precedes_path_construction
 test_visual_review_uses_shared_completion_owner
 test_none_inventory_and_resolved_prose_do_not_create_holds
-test_terminal_single_owner_status_decision_does_not_block_empty_inventory
+test_terminal_status_decision_requires_durable_inventory
 test_secondmate_hold_stays_in_authoritative_home
 test_resolve_matches_quoted_blocked_by_edges
