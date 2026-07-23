@@ -14,8 +14,20 @@ SPAWN="$ROOT/bin/fm-spawn.sh"
 TMP_ROOT=$(fm_test_tmproot fm-spawn-role-skill)
 
 make_spawn_fakebin() {
-  local dir=$1 fakebin
+  local dir=$1 fakebin real_git
   fakebin=$(fm_fakebin "$dir")
+  real_git=$(command -v git)
+  cat > "$fakebin/git" <<SH
+#!/usr/bin/env bash
+set -u
+if [ "\${FM_FAKE_EXCLUDE_FAILURE:-}" = 1 ]; then
+  case "\$*" in
+    *"rev-parse --git-path info/exclude"*) exit 9 ;;
+  esac
+fi
+exec "$real_git" "\$@"
+SH
+  chmod +x "$fakebin/git"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -59,6 +71,7 @@ run_spawn() {
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
+    FM_FAKE_EXCLUDE_FAILURE="${FM_FAKE_EXCLUDE_FAILURE:-}" \
     GROK_HOME="$home/grok-home" PATH="$fakebin:$PATH" \
     "$SPAWN" "$@" 2>&1
 }
@@ -142,8 +155,73 @@ test_role_not_inferred_from_task_id() {
   pass "role is not inferred from task id"
 }
 
+test_role_skill_directory_collision_fails_closed() {
+  local rec id out status dest
+  id=role-collision-z4
+  rec=$(make_spawn_case role-collision claude "$id")
+  read_case_record "$rec"
+  dest="$WT_DIR/.agents/skills/review-crew"
+  mkdir -p "$dest"
+  printf 'project role skill\n' > "$dest/SKILL.md"
+
+  status=0
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --role review-crew) || status=$?
+  expect_code 1 "$status" "real role skill destination collision should fail"
+  assert_contains "$out" "role skill destination collision: $dest" \
+    "role skill collision error should identify the canonical destination"
+  [ ! -L "$dest" ] || fail "real role skill directory was replaced by a symlink"
+  assert_grep "project role skill" "$dest/SKILL.md" "project role skill was modified"
+  assert_absent "$dest/review-crew" "role link was nested inside the colliding directory"
+  assert_absent "$HOME_DIR/state/$id.meta" "failed collision spawn should not write meta"
+  pass "role skill directory collision fails closed"
+}
+
+test_unrelated_claude_skills_symlink_fails_closed() {
+  local rec id out status claude_skills
+  id=role-claude-collision-z5
+  rec=$(make_spawn_case role-claude-collision claude "$id")
+  read_case_record "$rec"
+  mkdir -p "$WT_DIR/.claude" "$WT_DIR/other-skills"
+  claude_skills="$WT_DIR/.claude/skills"
+  ln -s "../other-skills" "$claude_skills"
+
+  status=0
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --role review-crew) || status=$?
+  expect_code 1 "$status" "unrelated .claude/skills symlink should fail"
+  assert_contains "$out" "$claude_skills symlink must resolve to $WT_DIR/.agents/skills" \
+    "Claude skills collision error should identify the required target"
+  [ "$(readlink "$claude_skills")" = "../other-skills" ] \
+    || fail "unrelated .claude/skills symlink was replaced"
+  assert_absent "$WT_DIR/.agents/skills/review-crew" \
+    "Claude layout collision should fail before role injection"
+  assert_absent "$HOME_DIR/state/$id.meta" "failed Claude layout spawn should not write meta"
+  pass "unrelated .claude/skills symlink fails closed"
+}
+
+test_role_exclusion_failure_stops_before_linking() {
+  local rec id out status
+  id=role-exclude-failure-z6
+  rec=$(make_spawn_case role-exclude-failure claude "$id")
+  read_case_record "$rec"
+
+  status=0
+  out=$(FM_FAKE_EXCLUDE_FAILURE=1 run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" --role review-crew) || status=$?
+  expect_code 1 "$status" "role exclusion failure should abort spawn"
+  assert_contains "$out" "could not resolve git exclude file" \
+    "role exclusion failure should be reported explicitly"
+  assert_absent "$WT_DIR/.agents/skills/review-crew" \
+    "role link must not be created when its exclusion fails"
+  assert_absent "$WT_DIR/.claude/skills" \
+    "Claude skills mirror must not be created after exclusion failure"
+  assert_absent "$HOME_DIR/state/$id.meta" "failed exclusion spawn should not write meta"
+  pass "role exclusion failure stops before linking"
+}
+
 test_role_tagged_spawn_injects_excluded_skill
 test_role_tag_rejects_unknown_role
 test_role_not_inferred_from_task_id
+test_role_skill_directory_collision_fails_closed
+test_unrelated_claude_skills_symlink_fails_closed
+test_role_exclusion_failure_stops_before_linking
 
 echo "# all fm-spawn-role-skill tests passed"
