@@ -1168,8 +1168,10 @@ inject_role_skill() {
   done
 
   if [ -e "$dest" ] || [ -L "$dest" ]; then
-    [ -L "$dest" ] && [ "$(readlink "$dest" 2>/dev/null)" = "$src" ] \
-      || { echo "error: role skill destination collision: $dest" >&2; return 1; }
+    if ! { [ -L "$dest" ] && [ "$(readlink "$dest" 2>/dev/null)" = "$src" ]; }; then
+      echo "error: role skill destination collision: $dest" >&2
+      return 1
+    fi
   fi
   if [ -L "$claude_skills" ]; then
     [ "$(real_path_or_raw "$claude_skills")" = "$(real_path_or_raw "$WT/.agents/skills")" ] \
@@ -1184,8 +1186,10 @@ inject_role_skill() {
     claude_target=$src
     claude_link_path=$claude_dest
     if [ -e "$claude_dest" ] || [ -L "$claude_dest" ]; then
-      [ -L "$claude_dest" ] && [ "$(readlink "$claude_dest" 2>/dev/null)" = "$src" ] \
-        || { echo "error: role skill destination collision: $claude_dest" >&2; return 1; }
+      if ! { [ -L "$claude_dest" ] && [ "$(readlink "$claude_dest" 2>/dev/null)" = "$src" ]; }; then
+        echo "error: role skill destination collision: $claude_dest" >&2
+        return 1
+      fi
     fi
   fi
 
@@ -1196,12 +1200,11 @@ inject_role_skill() {
       || { echo "error: could not link role skill at $dest" >&2; return 1; }
     created_dest=1
   fi
-  [ -L "$dest" ] && [ "$(readlink "$dest" 2>/dev/null)" = "$src" ] \
-    || {
-      echo "error: could not verify role skill link at $dest" >&2
-      rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_dest" "$claude_target"
-      return 1
-    }
+  if ! { [ -L "$dest" ] && [ "$(readlink "$dest" 2>/dev/null)" = "$src" ]; }; then
+    echo "error: could not verify role skill link at $dest" >&2
+    rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_dest" "$claude_target"
+    return 1
+  fi
 
   case "$claude_layout" in
     linked) ;;
@@ -1223,13 +1226,12 @@ inject_role_skill() {
           return 1
         }
       created_claude=1
-      [ -L "$claude_skills" ] \
-        && [ "$(real_path_or_raw "$claude_skills")" = "$(real_path_or_raw "$WT/.agents/skills")" ] \
-        || {
-          echo "error: could not verify Claude skills mirror at $claude_skills" >&2
-          rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_skills" "$claude_target"
-          return 1
-        }
+      if ! { [ -L "$claude_skills" ] \
+        && [ "$(real_path_or_raw "$claude_skills")" = "$(real_path_or_raw "$WT/.agents/skills")" ]; }; then
+        echo "error: could not verify Claude skills mirror at $claude_skills" >&2
+        rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_skills" "$claude_target"
+        return 1
+      fi
       ;;
     directory)
       if [ ! -L "$claude_dest" ]; then
@@ -1241,12 +1243,11 @@ inject_role_skill() {
           }
         created_claude=1
       fi
-      [ -L "$claude_dest" ] && [ "$(readlink "$claude_dest" 2>/dev/null)" = "$src" ] \
-        || {
-          echo "error: could not verify Claude role skill link at $claude_dest" >&2
-          rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_dest" "$claude_target"
-          return 1
-        }
+      if ! { [ -L "$claude_dest" ] && [ "$(readlink "$claude_dest" 2>/dev/null)" = "$src" ]; }; then
+        echo "error: could not verify Claude role skill link at $claude_dest" >&2
+        rollback_role_skill_links "$created_dest" "$dest" "$src" "$created_claude" "$claude_dest" "$claude_target"
+        return 1
+      fi
       ;;
   esac
   if ! verify_excluded_path ".agents/skills/$role" || ! verify_excluded_path "$claude_rel"; then
