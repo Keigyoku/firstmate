@@ -4,9 +4,19 @@
 // This parser is deliberately narrow.
 // It recognizes executed command positions without evaluating, expanding,
 // sourcing, or running any byte of the submitted command.
+//
+// This file is the sole owner of firstmate's shell command classification.
+// The tokenizer and command-position analysis (Lexer, splitProgram,
+// commandPosition) are exported so the sibling cd-guard policy
+// (bin/fm-cd-command-policy.mjs) reuses the same proven parser instead of
+// duplicating shell lexing; see docs/cd-guard.md. The watcher-arm decision
+// procedure below stays private to this file. The CLI entry point at the bottom
+// runs only when this module is invoked directly, never on import.
 
 import path from "node:path";
 import fs from "node:fs";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const REASONS = {
   "watcher-background": "a protected watcher command cannot run in an asynchronous shell list or through nohup/disown",
@@ -168,7 +178,7 @@ function decodeAnsiCQuoted(source, start) {
   return null;
 }
 
-class Lexer {
+export class Lexer {
   constructor(source) {
     this.source = source;
     this.index = 0;
@@ -423,7 +433,7 @@ class Lexer {
   }
 }
 
-function splitProgram(tokens) {
+export function splitProgram(tokens) {
   const nodes = [];
   const separators = [];
   let current = [];
@@ -533,7 +543,7 @@ function consumeWrapperOptions(name, words, index) {
   return { index: next, unresolved: false, embeddedPayloads };
 }
 
-function commandPosition(tokens) {
+export function commandPosition(tokens) {
   const words = wordsInNode(tokens);
   let index = 0;
   while (index < words.length && isAssignment(words[index].value)) index += 1;
@@ -949,7 +959,21 @@ function deny(code) {
   return { decision: "deny", code, reason: REASONS[code] };
 }
 
-try {
+// Run the CLI only when invoked directly (node fm-arm-command-policy.mjs ...),
+// never when imported by a sibling policy such as bin/fm-cd-command-policy.mjs.
+function invokedDirectly() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  const self = fileURLToPath(import.meta.url);
+  try {
+    return realpathSync(entry) === realpathSync(self);
+  } catch {
+    return entry === self;
+  }
+}
+
+if (invokedDirectly()) {
+  try {
   const args = parseArguments(process.argv.slice(2));
   if (!args.root || !args.home) throw new Error("--root and --home are required");
   if (!args.command) {
@@ -965,4 +989,5 @@ try {
 } catch (error) {
   process.stderr.write(`${error.message}\n`);
   process.exitCode = 1;
+}
 }

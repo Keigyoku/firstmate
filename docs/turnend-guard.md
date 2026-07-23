@@ -5,6 +5,7 @@ The shared predicate lives in `bin/fm-turnend-guard.sh`.
 Harness-specific tracked hook files only adapt each verified harness's real turn-end mechanism to that shared predicate.
 A related but separate guard, the pre-arm PreToolUse seatbelt (`bin/fm-arm-pretool-check.sh`, `docs/arm-pretool-check.md`), denies a bad watcher-arm command shape before it runs rather than detecting a blind turn end afterward.
 A separate PreToolUse fence (`bin/fm-subagent-pretool-check.sh`, `docs/subagent-guard.md`) blocks primary-session delegation tools that would create unsupervised work outside the fleet.
+A related Bash PreToolUse seatbelt (`bin/fm-cd-pretool-check.sh`, `docs/cd-guard.md`) denies persistent top-level shell directory changes in the primary.
 
 ## Gap Closed
 
@@ -17,10 +18,12 @@ When tasks are in flight and there is no live identity-matched watcher with a fr
 
 ## Shared Predicate
 
-The guard first scopes itself to the real primary checkout.
+The guard first scopes itself to a real primary checkout.
 When `CLAUDE_PROJECT_DIR` is empty, it falls back to the hook process's physical working directory only after verifying that directory contains `AGENTS.md` and `bin/fm-turnend-guard.sh`.
-It is inert in secondmate homes because `.fm-secondmate-home` exists there.
-It is inert in crewmate and scout worktrees because firstmate provisions them as linked git worktrees, where `git rev-parse --git-dir` differs from `git rev-parse --git-common-dir`.
+A secondmate home runs its own primary firstmate session, so a genuine `.fm-secondmate-home` marker force-includes it whether treehouse leased it as a linked worktree or it is a git-cloned plain checkout.
+The marker must be a regular non-symlink file whose first line, after all whitespace is removed, contains a non-empty identifier made only of letters, digits, dots, underscores, and dashes (validated under C collation via `bin/fm-primary-scope-lib.sh`).
+An unmarked checkout, or one with an invalid marker, falls through to the git-dir check.
+That check keeps crewmate and scout worktrees inert because firstmate provisions them as linked git worktrees, where `git rev-parse --git-dir` differs from `git rev-parse --git-common-dir`.
 It also requires `AGENTS.md`, `bin/`, and the effective state directory to exist.
 
 For an in-scope primary checkout, it counts in-flight work from `state/*.meta`.
@@ -140,6 +143,13 @@ If Grok declines to load project hooks, this primary guard fails open and `fm-gu
 **2026-07-09 update:** grok 0.2.93 broke the `.grok/hooks/fm-primary-turnend-guard.json` Stop hook with `hook not executed: required env var(s) not set: ${root}`, because grok's own `${VAR}` expansion over the raw `command` string does not tolerate a bare local variable assigned earlier in the same `bash -lc` script.
 The hook command was fixed to reference `${GROK_WORKSPACE_ROOT:-}` directly everywhere instead of assigning it to `$root` first, and re-validated against grok 0.2.93 to fire and complete cleanly.
 See `docs/arm-pretool-check.md`'s "Harness wiring" section for the same Grok expansion requirement; that document's Grok hook shares the same fix.
+
+### Secondmate-home enablement (upstream #505)
+
+A genuinely marked secondmate home is force-included as a guarded primary.
+Only unmarked child worktrees fall through to the linked-worktree exemption.
+Hermetic coverage lives in `tests/fm-turnend-guard.test.sh` (`test_hook_blocks_in_secondmate_own_home`, `test_hook_blocks_in_treehouse_leased_secondmate_home`, idle/loop/recovery and marker anti-spoof cases).
+Physical-identity matching and the settled healthy predicate remain the fork's private turnend evolution and must not regress when this scope widens.
 
 ## Tests
 

@@ -19,6 +19,8 @@ bash_cmds=$(jq -r '
 ' "$SETTINGS")
 assert_contains "$bash_cmds" 'fm-arm-pretool-check.sh' \
   'Bash PreToolUse must still include arm-pretool seatbelt'
+assert_contains "$bash_cmds" 'fm-cd-pretool-check.sh' \
+  'Bash PreToolUse must compose cd-guard with arm-pretool'
 
 # Subagent guard uses matcher ".*" so it sees every tool name
 star_cmds=$(jq -r '

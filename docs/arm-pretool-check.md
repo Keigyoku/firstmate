@@ -5,6 +5,8 @@ This document is the authoritative human-readable contract for the watcher arm P
 `bin/fm-arm-pretool-check.sh` is only the stable harness transport and output renderer.
 The tracked harness adapters forward command text without classifying it.
 
+A related but separate primary Bash PreToolUse seatbelt, the cd-guard (`bin/fm-cd-pretool-check.sh`, `docs/cd-guard.md`), reuses this file's exported shell classifier and denies persistent top-level `cd`/`pushd`/`popd`.
+
 ## Purpose and boundary
 
 A firstmate primary must arm `bin/fm-watch-arm.sh` or run `bin/fm-watch-checkpoint.sh` through an observable harness call.
