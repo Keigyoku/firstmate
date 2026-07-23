@@ -394,10 +394,10 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         state: .current_state.state,
         doing: ((.current_state.detail // "") as $d
                 | (if $d != "" then $d else (.hints.last_event_text // "") end) | trunc(90))
-      } ]
+     } ]
      + [ $secondmate_views[]
-         | select((.active_children | length) > 0)
-         | {id,kind:"secondmate",state:"active_child_work",
+         | select(.bearings_state == "active_child_work")
+         | {id,kind:"secondmate",state:.bearings_state,
             doing:([.active_children[] | .id + ": " + (.doing // .state)] | join("; ") | trunc(90))} ]) as $in_flight_all
   | ([ .tasks[]
          | select(.kind != "secondmate")

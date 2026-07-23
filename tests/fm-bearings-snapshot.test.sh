@@ -582,7 +582,8 @@ EOF
     FM_SNAPSHOT_SECONDMATE_DECISIONS=1 run "$home" "$fakebin" --json \
       --all-in-flight --all-decisions --all-queued --all-unhealthy)
   printf '%s' "$expanded" | jq -e '
-    (.in_flight[] | select(.id == "mate-caps") | .doing | contains("active-one") and contains("active-two"))
+    ([.secondmates[] | select(.id == "mate-caps" and .state == "captain_decision")] | length) == 1
+      and (.in_flight | any(.[]; .id == "mate-caps") | not)
       and ([.decisions_open[] | select(.owner == "mate-caps")] | length) == 2
       and ([.gates[] | select(.owner == "mate-caps")] | length) == 2
       and ([.unhealthy_endpoints[] | select(.id == "mate-caps/dead-one" or .id == "mate-caps/dead-two")] | length) == 2
