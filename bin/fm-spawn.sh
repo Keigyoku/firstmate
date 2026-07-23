@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout] [--dry-run] [--adopt-worktree [--adopt-worktree-path <path>] [--mode <mode>] [--yolo <on|off>]]
+# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--role <review-crew|smoke-crew|marketing-crew>] [--scout] [--dry-run] [--adopt-worktree [--adopt-worktree-path <path>] [--mode <mode>] [--yolo <on|off>]]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--dry-run] --secondmate
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
@@ -9,6 +9,12 @@
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
 #   from that harness's launch rather than guessed.
+#   --role <review-crew|smoke-crew|marketing-crew> is an explicit role-identity tag
+#   for crewmate/scout spawns only (never inferred from the task id). It injects a
+#   symlink of that firstmate role skill into the worktree under .agents/skills/
+#   (and a .claude/skills -> .agents/skills layout mirror when needed) so Claude and
+#   Grok project-skill discovery can resolve it in a product worktree, git-excludes
+#   the injected paths, and records role= in meta. Secondmate spawns reject --role.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   spawn. Without it, the script resolves FM_BACKEND, then config/backend, then
 #   runtime auto-detection (the runtime firstmate itself is executing inside -
@@ -100,7 +106,7 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-  sed -n '2,78p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,103p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in
@@ -130,6 +136,7 @@ HARNESS_ARG=
 MODEL=
 EFFORT=
 BACKEND_ARG=
+ROLE=
 ADOPT_WORKTREE=0
 ADOPT_WORKTREE_PATH=
 DRY_RUN=0
@@ -139,6 +146,7 @@ HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
 BACKEND_SET=0
+ROLE_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -151,6 +159,7 @@ for a in "$@"; do
       model) MODEL=$a; MODEL_SET=1 ;;
       effort) EFFORT=$a; EFFORT_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
+      role) ROLE=$a; ROLE_SET=1 ;;
       adopt-worktree-path) ADOPT_WORKTREE_PATH=$a ;;
       mode) MODE_OVERRIDE=$a ;;
       yolo) YOLO_OVERRIDE=$a ;;
@@ -172,6 +181,8 @@ for a in "$@"; do
     --effort=*) EFFORT=${a#--effort=}; EFFORT_SET=1 ;;
     --backend) want_value=backend ;;
     --backend=*) BACKEND_ARG=${a#--backend=}; BACKEND_SET=1 ;;
+    --role) want_value=role ;;
+    --role=*) ROLE=${a#--role=}; ROLE_SET=1 ;;
     --adopt-worktree-path) want_value=adopt-worktree-path ;;
     --adopt-worktree-path=*) ADOPT_WORKTREE_PATH=${a#--adopt-worktree-path=} ;;
     --mode) want_value=mode ;;
@@ -186,6 +197,15 @@ done
 [ "$MODEL_SET" -eq 0 ] || [ -n "$MODEL" ] || { echo "error: --model requires a non-empty value" >&2; exit 1; }
 [ "$EFFORT_SET" -eq 0 ] || [ -n "$EFFORT" ] || { echo "error: --effort requires a non-empty value" >&2; exit 1; }
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || { echo "error: --backend requires a non-empty value" >&2; exit 1; }
+[ "$ROLE_SET" -eq 0 ] || [ -n "$ROLE" ] || { echo "error: --role requires a non-empty value" >&2; exit 1; }
+case "$ROLE" in
+  ''|review-crew|smoke-crew|marketing-crew) ;;
+  *) echo "error: --role must be one of review-crew, smoke-crew, marketing-crew" >&2; exit 1 ;;
+esac
+if [ -n "$ROLE" ] && [ "$KIND" = secondmate ]; then
+  echo "error: --role applies only to crewmate ship or scout spawns, not --secondmate" >&2
+  exit 1
+fi
 [ -z "$ADOPT_WORKTREE_PATH" ] || [ "$ADOPT_WORKTREE" -eq 1 ] || { echo "error: --adopt-worktree-path requires --adopt-worktree" >&2; exit 1; }
 [ -z "$MODE_OVERRIDE" ] || [ "$ADOPT_WORKTREE" -eq 1 ] || { echo "error: --mode override requires --adopt-worktree" >&2; exit 1; }
 [ -z "$YOLO_OVERRIDE" ] || [ "$ADOPT_WORKTREE" -eq 1 ] || { echo "error: --yolo override requires --adopt-worktree" >&2; exit 1; }
@@ -294,6 +314,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
+  [ -z "$ROLE" ] || shared_args+=(--role "$ROLE")
   [ "$DRY_RUN" -eq 0 ] || shared_args+=(--dry-run)
   for pair in "${POS[@]}"; do
     case "$pair" in
@@ -545,10 +566,12 @@ effort_flag_for_harness() {
       ;;
     grok)
       # grok exposes both --effort and --reasoning-effort; firstmate's profile
-      # axis is the reasoning knob, and --reasoning-effort rejects max, so pass
-      # only its accepted shared vocabulary subset.
+      # axis is the reasoning knob. Docs list low|medium|high|xhigh|max as
+      # canonical tiers, but the active model (verified grok 0.2.111 / grok-4.5)
+      # only accepts high|medium|low at runtime - xhigh and max fail with
+      # "unknown effort level". Pass only the model-advertised subset.
       case "$effort" in
-        low|medium|high|xhigh) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
+        low|medium|high) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
       esac
       ;;
     pi)
@@ -1072,6 +1095,32 @@ exclude_path() {
   mkdir -p "$(dirname "$EXCL")"
   grep -qxF "$rel" "$EXCL" 2>/dev/null || echo "$rel" >> "$EXCL"
 }
+# Role-identity skill delivery (C3 Option 2): symlink the named firstmate role
+# skill into the crew worktree so Claude/Grok project-skill discovery can resolve
+# it outside the firstmate repo. Paths are git-excluded so they never enter a
+# product PR. Symlinks die with the worktree; no teardown change required.
+inject_role_skill() {
+  local role=$1 src dest claude_skills
+  [ -n "$role" ] || return 0
+  [ "$KIND" != secondmate ] || return 0
+  src="$FM_ROOT/.agents/skills/$role"
+  [ -d "$src" ] || { echo "error: role skill directory not found: $src" >&2; return 1; }
+  mkdir -p "$WT/.agents/skills"
+  dest="$WT/.agents/skills/$role"
+  ln -sfn "$src" "$dest"
+  exclude_path ".agents/skills/$role"
+  claude_skills="$WT/.claude/skills"
+  if [ ! -e "$claude_skills" ]; then
+    mkdir -p "$WT/.claude"
+    # Mirror firstmate's own layout: .claude/skills -> ../.agents/skills
+    ln -sfn "../.agents/skills" "$claude_skills"
+    exclude_path ".claude/skills"
+  elif [ -d "$claude_skills" ] && [ ! -L "$claude_skills" ]; then
+    # Project already has a real .claude/skills dir; place the role link inside.
+    ln -sfn "$src" "$claude_skills/$role"
+    exclude_path ".claude/skills/$role"
+  fi
+}
 TURNEND_BACKUP_DIR=
 adopt_hook_backup() {
   local rel=$1 target backup
@@ -1095,6 +1144,10 @@ adopt_hook_backup() {
     printf 'absent\t%s\n' "$rel" >> "$TURNEND_BACKUP_DIR/manifest"
   fi
 }
+if [ -n "$ROLE" ]; then
+  inject_role_skill "$ROLE" || exit 1
+fi
+
 if [ "$KIND" != secondmate ]; then
   case "$HARNESS" in
     claude*)
@@ -1384,6 +1437,7 @@ META_WINDOW=$T
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
+  [ -z "$ROLE" ] || echo "role=$ROLE"
   # backend= is written only for a non-default (non-tmux) backend, so the
   # default path's meta stays byte-identical (absent backend= means tmux;
   # data/fm-backend-design-d7's P1 compatibility contract).
