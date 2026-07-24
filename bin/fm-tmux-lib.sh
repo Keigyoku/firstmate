@@ -47,12 +47,13 @@
 . "$(dirname -- "${BASH_SOURCE[0]}")/fm-composer-lib.sh"
 
 # Busy footers per harness (mirror fm-watch.sh). claude/codex: "esc to
-# interrupt"; opencode: "esc interrupt"; pi: "Working..."; grok: "Ctrl+c:cancel"
-# (grok's mid-turn cancel hint, shown iff a turn is running - verified grok 0.2.73);
-# cursor: "ctrl+c to stop" (footer while a turn runs - verified cursor-agent
-# 2026.07.01); hermes: "Ctrl+C cancel" (the mid-turn cancel hint in its input bar -
-# verified Hermes Agent v0.18.0). Matched case-insensitively (grep -qiE).
-FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|ctrl\+c to stop|Ctrl\+C cancel'
+# interrupt"; opencode: "esc interrupt"; pi: "Working..."; grok: "Esc:cancel"
+# (mid-turn keybind bar, shown iff a turn is running - re-verified grok 0.2.111
+# on 2026-07-23; keep Ctrl+c:cancel for older grok panes); cursor: "ctrl+c to
+# stop" (footer while a turn runs - verified cursor-agent 2026.07.01); hermes:
+# "Ctrl+C cancel" (the mid-turn cancel hint in its input bar - verified Hermes
+# Agent v0.18.0). Matched case-insensitively (grep -qiE).
+FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|Esc:cancel|ctrl\+c to stop|Ctrl\+C cancel'
 
 # fm_tmux_strip_ghost: thin adapter over the shared, fleet-wide ghost extractor
 # fm_composer_strip_ghost (bin/fm-composer-lib.sh). It drops de-emphasised
@@ -146,11 +147,11 @@ fm_pane_is_busy() {  # <target>
 #   - fm-send fails only on "pending" (lenient: a positively-confirmed swallow),
 #     so an unreadable pane never turns a normal steer into a false error.
 # Optional 6th arg push_queued=1: after a verified non-pending submit, send one
-# extra Enter. Cursor mid-turn steers need this: the first Enter only queues the
-# follow-up (composer clears, so submit looks landed) and a second Enter pushes
-# it for immediate delivery (harness-adapters cursor section; scoped by fm-send
-# when harness=cursor and the pane is busy). Idle composers and other harnesses
-# leave this unset/0.
+# extra Enter. Cursor and grok mid-turn steers need this: the first Enter only
+# queues the follow-up (composer clears, so submit looks landed) and a second
+# Enter pushes it for immediate delivery (harness-adapters cursor/grok sections;
+# scoped by fm-send when harness=cursor|grok and the pane is busy). Idle
+# composers and other harnesses leave this unset/0.
 fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep>
   local target=$1 retries=$2 sleep_s=$3 i=0 state
   while :; do

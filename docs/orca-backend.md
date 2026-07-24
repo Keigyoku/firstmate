@@ -80,7 +80,7 @@ Operation routing:
 - `fm-peek.sh` captures with `orca terminal read`.
 - `fm-send.sh` types text with `orca terminal send --text ...`, submits with Enter, and verifies the composer row cleared before returning; when Orca reports a limited page, the verifier follows `oldestCursor` and preserves the current tail so older text cannot hide still-pending composer input.
   A slash-command popup that closes by filling an argument-hint placeholder still reads as pending, so the retry loop sends the required second Enter rather than treating the first Enter as a submission.
-  When `fm-send.sh` has already scoped a target as cursor-agent mid-turn, the Orca adapter accepts the same optional queue-push flag as the other submit-verifying backends and sends one additional Enter after the verified clear.
+  When `fm-send.sh` has already scoped a target as cursor-agent or grok mid-turn, the Orca adapter accepts the same optional queue-push flag as the other submit-verifying backends and sends one additional Enter after the verified clear.
   The bordered row is classified through the shared composer classifier; a bare shell prompt has no genuine composer row and reads `unknown`, not confirmed empty.
 - `fm-send.sh --key Enter` and `--key C-c` are supported.
 - `fm-watch.sh` treats Orca as a pull backend with no native busy-state primitive, so it falls back to the same terminal-tail busy regex used for tmux, zellij, and cmux.

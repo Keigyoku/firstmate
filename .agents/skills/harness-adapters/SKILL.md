@@ -136,6 +136,7 @@ Natural language is acceptable if uncertain.
   Verified 2026-07-05: cursor discovers the user-level `no-mistakes` skill and surfaces it in the `/` slash-autocomplete popup.
   Same popup submit-hazard as claude/grok - a too-fast Enter selects the popup entry instead of sending - but the shared submit retry handles it by verifying the composer cleared.
   Re-verified 2026-07-13: cursor mid-turn steers need one extra post-submit Enter to push the follow-up queue, and `fm-send` scopes that push to recorded `harness=cursor` targets that were already busy before typing.
+  Grok has the same mid-turn queue class (re-verified 2026-07-23 on grok 0.2.111); `fm-send` scopes the same push to `harness=grok` + busy (see grok section).
 - hermes: no verified slash form for `no-mistakes` - hermes has its own separate skills ecosystem (`hermes skills`, 68 skills preloadable via `--skills`), and `no-mistakes` is not among them. Its built-in slash commands are session controls (`/exit`, `/help`, `/queue`, `/bg`, `/steer`, `/rollback`). Use natural language to trigger validation.
 
 ## claude (VERIFIED)
@@ -247,7 +248,7 @@ The model arms through `fm_watch_arm_pi`, never a foreground bash arm; the watch
 `bin/fm-session-start.sh` reports when the live Pi session has not loaded both the turn-end guard and watcher extensions, and points at plain `pi` after project trust as the fix, with `-e` as a trust-free fallback.
 When a secondmate is launched on Pi, `fm-spawn.sh --secondmate` launches Pi with both `-e .pi/extensions/fm-primary-turnend-guard.ts` and `-e .pi/extensions/fm-primary-pi-watch.ts`, both already present in the secondmate home's git worktree.
 
-## grok (VERIFIED 2026-06-29, grok 0.2.73; slash-submit re-verified 2026-07-03, grok 0.2.82; MCP + effort re-verified 2026-07-22, grok 0.2.111)
+## grok (VERIFIED 2026-06-29, grok 0.2.73; slash-submit re-verified 2026-07-03, grok 0.2.82; MCP + effort re-verified 2026-07-22, grok 0.2.111; mid-turn queue re-verified 2026-07-23, grok 0.2.111)
 
 Grok Build TUI (`grok`), a Claude-Code-compatible CLI from xAI.
 Launch with a positional prompt: `grok --always-approve "$(cat <brief>)"`.
@@ -259,13 +260,22 @@ Project-worktree role-skill delivery is owned by `fm-spawn.sh --help`.
 
 | Fact | Value |
 |---|---|
-| Busy-pane signature | `Ctrl+c:cancel` (the mid-turn cancel hint in grok's keybind bar, shown iff a turn is running; the spinner line is a braille glyph + `<status>… N.Ns` + `[stop]`, e.g. `⠹ Thinking… 1.1s … [stop]`). Idle keybind bar shows only `Shift+Tab:mode │ Ctrl+.:shortcuts`. The ASCII `Ctrl+c:cancel` is the busy regex (avoids locale fragility of matching braille). |
+| Busy-pane signature | `Esc:cancel` (mid-turn keybind bar on grok 0.2.111, shown iff a turn is running; spinner line is a braille glyph + `<status>… N.Ns` + `[stop]`, e.g. `⠹ Responding… 5.6s … [stop]`). Idle keybind bar shows only `Shift+Tab:mode │ Ctrl+x:shortcuts` (no cancel token). Busy regex matches `Esc:cancel` and keeps legacy `Ctrl+c:cancel` for older panes. |
 | Exit command | `Ctrl+Q` double-press within 1000ms (it is a confirmed destructive action). Prints `Resume this session with: grok --resume <session-id>`. `Ctrl+D` is the quit key in VS Code family terminals. NOT `/exit` and NOT `Ctrl+C`. |
-| Interrupt | single `Ctrl+C` (cancels the current turn; the footer shows `Ctrl+c:cancel` mid-turn). `Esc` only moves focus to the scrollback, it does NOT interrupt. |
+| Interrupt | single `Ctrl+C` still cancels the current turn on verified builds; mid-turn keybind bar on 0.2.111 shows `Esc:cancel` (cancel token present only while busy). Do not treat bare `Esc` as the primary interrupt without re-verification of focus/scrollback side effects. |
 | Skill invocation | `/<skill>` (e.g. `/no-mistakes`), same as claude. Opens a slash-autocomplete popup, so a too-fast Enter selects the popup entry instead of sending. For an argument-taking command that first Enter does not submit at all - it expands the selection into an argument-hint placeholder in the composer (e.g. `/compact` -> `/compact compaction instructions`, live-verified), leaving real text still sitting there unsubmitted; a genuine second Enter is required. `fm-send`'s retried Enter lands it on BOTH backends, but only because each backend's own submit-verification correctly recognizes that placeholder-filled text as still-pending - see the incident below. |
 | Autonomy | `--always-approve` (footer shows `· always-approve`); auto-approves every tool execution, verified to run fully unattended. `--permission-mode bypassPermissions` is the stronger equivalent. |
 | Env marker | `GROK_AGENT=1`, set for child/tool processes. grok does NOT set `CLAUDECODE` despite Claude compatibility, so the marker is unambiguous. |
 | Resume | `grok --resume <session-id>` (id printed on exit) or `grok -c` / `--continue` (most recent for the cwd); `--fork-session` branches a new session id. |
+
+**Mid-turn follow-up queue (verified 2026-07-23, grok 0.2.111 / tmux 3.6b; also forced manually on a live fleet grok pane the same day):**
+While a turn runs, typing a steer and pressing Enter only queues it.
+Queue UI: `#1 <text>` above the composer, `Queued · Enter to send now`, and keybind `Enter:send now` (while typing mid-turn the bar shows `Enter:queue` and `Ctrl+Enter:send now`).
+A second Enter pushes the queued item for immediate delivery and preempts the in-flight turn (output stops mid-stream; the model starts a new response on the follow-up).
+Without the push, the queue stays until the current turn ends on its own.
+`fm-send` scopes a post-submit extra Enter when meta harness is `grok` AND the pane was busy before typing (same cursor-class pattern as the cursor section below).
+Owners: `bin/fm-send.sh` (scoping), `bin/fm-tmux-lib.sh` `fm_tmux_submit_core`, each submit-verifying backend adapter's optional `push_queued` handling; busy signature also updated in `bin/fm-watch.sh` / `FM_TMUX_BUSY_REGEX_DEFAULT`.
+Evidence: `docs/tmux-backend.md` "Grok mid-turn queue push (2026-07-23)".
 
 **Incident (2026-07-03, herdr backend only, grok 0.2.82):** two grok/herdr crewmates were sent `/no-mistakes` via `fm-send`; both left it fully typed but unsubmitted in the composer for minutes (footer still `Enter:send`), and `fm-send` exited 0 with no error.
 Reproduced live: the herdr adapter's submit-verification at the time treated ANY pane-content change after Enter as "submitted", and the popup-close-with-placeholder-fill described above IS a visible content change even though nothing was actually sent.

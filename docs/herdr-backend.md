@@ -226,7 +226,7 @@ This does not mask a genuinely human-blocked agent (a permission dialog, not mid
 Typing `/mem` into a live `claude` composer inside a herdr pane and reading the pane back within 0.1 seconds already shows the full autocomplete popup.
 This confirms the same hazard tmux already mitigates: submitting immediately after a `/`- or `$`-prefixed send risks Enter landing on a popup selection instead of the literal typed command.
 `fm_backend_herdr_send_text_submit` takes the same settle-before-first-Enter parameter tmux's submit core does; the settle-duration DECISION itself lives in `fm-send.sh` (harness-aware, backend-independent), so neither adapter needs its own settle policy.
-It also accepts `push_queued=1` from `fm-send.sh` after that script has scoped a target as cursor-agent mid-turn, causing one extra Enter after a verified submit to push cursor's follow-up queue immediately.
+It also accepts `push_queued=1` from `fm-send.sh` after that script has scoped a target as cursor-agent or grok mid-turn, causing one extra Enter after a verified submit to push that harness's follow-up queue immediately.
 
 `escape` was verified to dismiss the popup while leaving the typed text in the composer, not a full clear.
 
@@ -523,7 +523,7 @@ When that baseline is legibly idle or done, it confirms a submit by polling herd
 Composer content (`fm_backend_herdr_composer_state`) is still used for the pre-injection empty-box guard (`bin/fm-supervise-daemon.sh`'s `inject_msg`, which reads `fm_backend_composer_state` directly and requires an affirmatively-`empty` verdict; see "Composer-emptiness safety" below).
 It is also the conservative fallback for submit attempts whose pre-Enter baseline is already submit-active or unreadable, because a preexisting `working`/`blocked` status cannot prove that this Enter landed.
 This makes the normal idle-baseline confirmation path cross-agent: it no longer depends on what a harness's idle composer happens to display.
-The cursor mid-turn queue-push path is the deliberate exception: when `fm-send.sh` passes `push_queued=1`, herdr confirms the first Enter through composer state, then sends one additional Enter to push the queued follow-up instead of treating the preexisting or missing native transition as proof of delivery.
+The cursor/grok mid-turn queue-push path is the deliberate exception: when `fm-send.sh` passes `push_queued=1`, herdr confirms the first Enter through composer state, then sends one additional Enter to push the queued follow-up instead of treating the preexisting or missing native transition as proof of delivery.
 
 This originally fixed the practical submit-confirmation effect of the Codex idle-tip gap left open by the 2026-07-07 incident above.
 The 2026-07-08 follow-up fixed the pre-injection composer guard itself by using herdr's ANSI capture to ignore faint Codex ghost suggestions.
@@ -568,7 +568,7 @@ Additional scenarios verified directly against the real binaries:
 - **Confirmation correctly reports `pending` for a genuinely swallowed Enter.** With `fm_backend_herdr_send_key` overridden to a no-op (simulating a dropped keystroke), `fm_backend_herdr_send_text_submit` against a real claude pane reported `pending` after exhausting its retries, and the typed text was confirmed still sitting, unsubmitted, in the real composer afterward - no duplicate, no false confirmation.
 - **Confirmation correctly reports `unknown` for a target that cannot be read**, and does not retry past it: with `fm_backend_herdr_agent_status_raw` overridden to always fail, a real send against a real claude pane reported `unknown` after exactly one Enter attempt (no further retries).
 - **Submitting to an already submit-active target is not confirmed by preexisting agent-state alone.** A pre-Enter `working` or `blocked` status now falls back to composer-clear confirmation, so a swallowed Enter that leaves the typed message visible reports `pending` instead of falsely accepting the already-active status as proof.
-  If `fm-send.sh` scoped the target as cursor-agent mid-turn, the adapter sends the optional queue-push Enter after that clear; otherwise it reports `empty` without assuming additional real-harness queue behavior.
+  If `fm-send.sh` scoped the target as cursor-agent or grok mid-turn, the adapter sends the optional queue-push Enter after that clear; otherwise it reports `empty` without assuming additional real-harness queue behavior.
 
 ### Regression coverage
 
