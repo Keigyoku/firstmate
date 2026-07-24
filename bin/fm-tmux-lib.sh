@@ -169,8 +169,8 @@ fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle> [pus
   tmux send-keys -t "$target" -l "$text" 2>/dev/null || { printf 'send-failed'; return 0; }
   sleep "$settle"
   state=$(fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s")
-  # Mid-turn cursor queue push: composer already empty after the verified submit,
-  # so the Enter-retry loop will not send this on its own. One more Enter only.
+  # Mid-turn cursor/grok queue push: composer already empty after the verified
+  # submit, so the Enter-retry loop will not send this on its own. One more Enter.
   if [ "$push_queued" = 1 ] && [ "$state" != pending ] && [ "$state" != send-failed ]; then
     tmux send-keys -t "$target" Enter 2>/dev/null || true
     sleep "$sleep_s"

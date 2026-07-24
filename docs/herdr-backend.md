@@ -265,7 +265,7 @@ That classifier is still the away-mode daemon's affirmative-empty pre-injection 
 Normal idle-baseline submit confirmation now uses herdr's native agent-state instead; see "Native agent-state submit confirmation" for the current submit path.
 A dedicated composer-state or cursor-row/style primitive is still a candidate upstream Herdr feature request; it would let the guard/fallback classifier eventually reach tmux's cursor-row precision instead of relying on a structural approximation over captured tail rows and ANSI style.
 
-All implemented backends expose the identical caller-facing verdict vocabulary (`empty`, `pending`, `unknown`, `send-failed`), and the optional cursor queue push is threaded through the same backend-neutral submit argument, so `fm-send.sh` needs no backend-specific submit-verdict branching at all.
+All implemented backends expose the identical caller-facing verdict vocabulary (`empty`, `pending`, `unknown`, `send-failed`), and the optional cursor/grok queue push is threaded through the same backend-neutral submit argument, so `fm-send.sh` needs no backend-specific submit-verdict branching at all.
 
 ## Session targeting: the `--session` flag, not `HERDR_SESSION` alone
 
@@ -375,7 +375,7 @@ A new `FM_SUPERVISOR_BACKEND` override (`tmux`|`herdr`) resolves independently, 
 Other runtime backends, including zellij, orca, and cmux, are not yet supported as supervisor backends - the daemon refuses loudly at startup (`FM_SUPERVISOR_SUPPORTED_BACKENDS="tmux herdr"`) rather than misapplying tmux primitives to a pane that isn't a tmux pane.
 
 **Injection dispatch.** `inject_msg`'s pane-exists probe, busy-guard (`pane_is_busy`), composer-guard (a direct `fm_backend_composer_state` read; see the composer-safety note below), and verified submit all take an optional `<backend>` argument (defaulting to `tmux` when omitted, so every pre-existing caller/test is unaffected) and route through the generic dispatchers instead of calling `tmux` directly.
-For `backend=tmux` every dispatch resolves to the same underlying submit core as before (`fm_backend_capture`'s tmux arm runs the identical `tmux capture-pane -p -t <target> -S -40`; `fm_backend_tmux_send_text_submit` calls `fm_tmux_submit_core` with the optional cursor queue-push flag unset), so the supervisor-injection tmux behavior is unchanged.
+For `backend=tmux` every dispatch resolves to the same underlying submit core as before (`fm_backend_capture`'s tmux arm runs the identical `tmux capture-pane -p -t <target> -S -40`; `fm_backend_tmux_send_text_submit` calls `fm_tmux_submit_core` with the optional cursor/grok queue-push flag unset), so the supervisor-injection tmux behavior is unchanged.
 For `backend=herdr`, busy detection tries the native `agent.get`-backed `fm_backend_herdr_busy_state` first, trusts only `busy` outright, and corroborates every non-`busy` verdict with the shared regex-over-capture reader before treating the supervisor pane as not busy.
 This mirrors the per-task stale-pane busy check `bin/fm-supervise-daemon.sh`'s `stale_window_is_busy` already used; composer/pending detection and the verified submit route through `fm_backend_herdr_composer_state`/`fm_backend_herdr_send_text_submit`.
 The wedge alarm's supervisor-client status-line flash (`tmux display-message ...`) is tmux-only cosmetic UI with no herdr equivalent, so it is skipped for non-tmux backends.
