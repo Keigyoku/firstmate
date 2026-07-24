@@ -499,7 +499,7 @@ fm_backend_zellij_capture() {  # <target> <lines> [expected-label]
 # target never shows a change, so it correctly reports pending/unknown rather
 # than a false "sent". Echoes empty|pending|unknown|send-failed, the SAME
 # vocabulary fm-send.sh already branches on for tmux and herdr. Optional
-# push_queued sends one extra Enter after a verified submit for cursor's
+# push_queued sends one extra Enter after a verified submit for cursor/grok
 # mid-turn follow-up queue, scoped by fm-send before this adapter is called.
 fm_backend_zellij_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [expected-label] [push_queued]
   local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-} push_queued=${7:-0} typed after i=0

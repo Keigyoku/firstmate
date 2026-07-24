@@ -51,7 +51,7 @@ fm_backend_tmux_send_key() {  # <target> <key>
 # clears. Delegates to fm_tmux_submit_core (bin/fm-tmux-lib.sh); see that file
 # for the composer-verification contract and echoed verdicts. Optional
 # expected-label (6th) is ignored on tmux; optional push_queued (7th) requests
-# the mid-turn cursor follow-up queue push after a verified submit.
+# the mid-turn cursor/grok follow-up queue push after a verified submit.
 fm_backend_tmux_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [expected-label] [push_queued]
   fm_tmux_submit_core "$1" "$2" "$3" "$4" "$5" "${7:-0}"
 }

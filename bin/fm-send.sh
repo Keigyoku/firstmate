@@ -20,8 +20,8 @@
 # Tune with FM_SEND_RETRIES (default 3) / FM_SEND_SLEEP (0.4).
 # Slash commands, and codex `$...` skill invocations resolved through harness
 # meta, get a longer pre-Enter settle so completion popups do not swallow Enter.
-# Cursor mid-turn steers need a post-submit extra Enter (composer queue push);
-# see the TARGET_HARNESS=cursor busy path below and harness-adapters.
+# Cursor and grok mid-turn steers need a post-submit extra Enter (composer queue
+# push); see the TARGET_HARNESS=cursor|grok busy path below and harness-adapters.
 #
 # From-firstmate marker: when the resolved target is a task selector whose meta
 # records kind=secondmate, the text is prefixed with the from-firstmate marker
@@ -194,10 +194,10 @@ if [ -n "$TARGET_SELECTOR" ] && [ -n "$TARGET_META" ] && grep -q '^kind=secondma
 fi
 
 # Resolve the target's harness from its meta (recorded by fm-spawn), used to
-# scope the codex `$<skill>` popup-settle and the cursor mid-turn queue-push
+# scope the codex `$<skill>` popup-settle and the cursor/grok mid-turn queue-push
 # below. A task selector carries meta; an explicit backend-target escape hatch
-# has none, so its harness is unknown and treated as non-codex / non-cursor
-# (the safe default that keeps the fast single-Enter path).
+# has none, so its harness is unknown and treated as non-codex / non-cursor /
+# non-grok (the safe default that keeps the fast single-Enter path).
 # The target's BACKEND comes from selector meta, from matching an explicit target
 # back to recorded meta, or from strict explicit-target shape validation.
 # Do not add a separate passive liveness preflight here. Active send paths own
@@ -209,8 +209,8 @@ fi
 # fm_send_target_is_busy: 0 if the target pane shows a mid-turn busy signature.
 # Prefers a backend's native busy-state (herdr); falls back to the shared tmux
 # pane-regex reader for tmux (and for native-unknown backends). Used only to
-# scope the cursor mid-turn queue-push Enter - snapshot BEFORE typing so an idle
-# composer that becomes busy after a normal submit is not double-Entered.
+# scope the cursor/grok mid-turn queue-push Enter - snapshot BEFORE typing so an
+# idle composer that becomes busy after a normal submit is not double-Entered.
 fm_send_target_is_busy() {
   local bs tail40
   bs=$(fm_backend_busy_state "$TARGET_BACKEND" "$T" 2>/dev/null || printf 'unknown')
@@ -246,16 +246,21 @@ else
   esac
   retries=${FM_SEND_RETRIES:-3}
   sleep_s=${FM_SEND_SLEEP:-0.4}
-  # Cursor mid-turn queue push (verified cursor-agent 2026.07.09 on tmux,
-  # 2026-07-13): while a turn runs, the first Enter only queues the follow-up
-  # (composer clears, submit looks landed) and a second Enter pushes it for
-  # immediate delivery. Snapshot busy BEFORE typing; scope to recorded
-  # harness=cursor only - idle cursor, other harnesses, and explicit
-  # session:window targets with no meta stay on a single Enter.
+  # Cursor/grok mid-turn queue push (cursor-agent 2026.07.09 on tmux, 2026-07-13;
+  # grok 0.2.111 on tmux, 2026-07-23, also confirmed on a live fleet pane):
+  # while a turn runs, the first Enter only queues the follow-up (composer
+  # clears, submit looks landed) and a second Enter pushes it for immediate
+  # delivery, preempting the in-flight turn. Snapshot busy BEFORE typing;
+  # scope to recorded harness=cursor|grok only - idle targets, other harnesses,
+  # and explicit session:window targets with no meta stay on a single Enter.
   push_queued=0
-  if [ "$TARGET_HARNESS" = cursor ] && fm_send_target_is_busy; then
-    push_queued=1
-  fi
+  case "$TARGET_HARNESS" in
+    cursor|grok)
+      if fm_send_target_is_busy; then
+        push_queued=1
+      fi
+      ;;
+  esac
   # Type once, submit, verify. Lenient: only a positively-confirmed swallow
   # (text still in the composer) is an error; an unreadable pane is assumed sent.
   # Trailing push_queued is honored by submit-verifying backend adapters.

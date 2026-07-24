@@ -514,7 +514,7 @@ fm_backend_send_key() {  # <backend> <target> <key> [expected-label]
 # (empty|pending|unknown|send-failed for submit-verifying adapters).
 # Optional expected-label (7th after backend) is backend-specific; optional
 # push_queued (8th after backend) asks submit-verifying adapters to send one
-# extra Enter after a verified submit (cursor mid-turn follow-up queue; see
+# extra Enter after a verified submit (cursor/grok mid-turn follow-up queue; see
 # fm-send.sh).
 fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sleep> <settle> [expected-label] [push_queued]
   local backend=$1

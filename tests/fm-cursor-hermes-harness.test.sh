@@ -197,6 +197,12 @@ test_busy_signatures_match() {
     || fail "cursor busy footer 'ctrl+c to stop' not matched"
   printf '%s\n' '⚕ ❯ msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel' | grep -qiE "$re" \
     || fail "hermes busy footer 'Ctrl+C cancel' not matched"
+  # grok 0.2.111 mid-turn keybind bar (re-verified 2026-07-23); keep older
+  # Ctrl+c:cancel for pre-0.2.111 panes still in the default regex.
+  printf '%s\n' ' Shift+Tab:mode  │  Esc:cancel  │  Ctrl+x:shortcuts' | grep -qiE "$re" \
+    || fail "grok busy keybind 'Esc:cancel' not matched"
+  printf '%s\n' ' Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+x:shortcuts' | grep -qiE "$re" \
+    || fail "legacy grok busy keybind 'Ctrl+c:cancel' not matched"
   # Idle footers must not read as busy.
   if printf '%s\n' '  → Add a follow-up' | grep -qiE "$re"; then
     fail "cursor idle footer wrongly matched busy"
@@ -204,7 +210,10 @@ test_busy_signatures_match() {
   if printf '%s\n' '❯' | grep -qiE "$re"; then
     fail "hermes idle prompt wrongly matched busy"
   fi
-  pass "cursor/hermes busy signatures registered in the default busy regex"
+  if printf '%s\n' ' Shift+Tab:mode  │  Ctrl+x:shortcuts' | grep -qiE "$re"; then
+    fail "grok idle keybind wrongly matched busy"
+  fi
+  pass "cursor/hermes/grok busy signatures registered in the default busy regex"
 }
 
 # --- lock live-holder recognition -------------------------------------------

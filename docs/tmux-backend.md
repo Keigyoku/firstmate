@@ -74,8 +74,39 @@ You should see a `fm-<id>` window for the task, live and updating as the crewmat
 It captures only the cursor row with ANSI styling, strips dim/faint ghost or placeholder text, strips known composer borders, and then decides whether real unsubmitted text remains.
 An idle Codex composer whose row is a bold `›` prompt followed by dim suggestion text therefore reads as empty, while the same `›` prompt followed by normal-intensity typed text still reads as pending.
 Submit verification types the message once and retries Enter only until the composer clears, preserving the swallowed-Enter protection without duplicating text.
-When `fm-send.sh` has already scoped a target as cursor-agent mid-turn, the submit core can send one additional Enter after that verified clear to push cursor's follow-up queue immediately.
-Idle cursor panes, non-cursor harnesses, and explicit tmux targets without task metadata still use the normal single-submit path.
+When `fm-send.sh` has already scoped a target as cursor-agent or grok mid-turn, the submit core can send one additional Enter after that verified clear to push that harness's follow-up queue immediately.
+Idle cursor/grok panes, other harnesses, and explicit tmux targets without task metadata still use the normal single-submit path.
+
+### Grok mid-turn queue push (2026-07-23)
+
+Verified on grok 0.2.111 (`94172f2aa4`) [stable] under tmux 3.6b in an isolated scratch session (not a live fleet pane), and confirmed the same day by manually forcing a queued steer through on a real fleet grok pane.
+
+Commands (scratch):
+
+```sh
+# scratch git dir + detached tmux session, then:
+grok --always-approve '<long no-tools prompt>'
+# once spinner shows Esc:cancel / [stop]:
+tmux send-keys -t <session> -l 'MIDTURN_PROBE_ONE: ... ACK_PROBE_1'
+tmux send-keys -t <session> Enter   # queues
+# pane shows: #1 MIDTURN_PROBE_ONE... / Queued · Enter to send now / Enter:send now
+tmux send-keys -t <session> Enter   # pushes
+# in-flight output stops; model answers ACK_PROBE_1 immediately
+```
+
+Observed semantics:
+
+| Step | Result |
+|---|---|
+| Type mid-turn | Text sits in composer; keybind bar `Enter:queue` · `Ctrl+Enter:send now` · `Esc:cancel` |
+| First Enter | Composer clears; queue UI `#1 <text>` + `Queued · Enter to send now`; submit looks landed |
+| Second Enter | Queue clears; previous turn preempted mid-stream; follow-up becomes the active turn |
+| First Enter only | Message stays queued for the remainder of the original turn |
+
+Busy signature on 0.2.111 is `Esc:cancel` in the keybind bar (idle bar has no cancel token).
+Legacy `Ctrl+c:cancel` remains in the default busy regex for older panes.
+`fm-send` scopes `push_queued=1` to meta `harness=grok` with a pre-type busy pane, matching the cursor path.
+Regression: `tests/fm-send-grok-queue.test.sh`.
 
 ## Agent liveness probe
 
