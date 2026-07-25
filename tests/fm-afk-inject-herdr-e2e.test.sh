@@ -68,6 +68,8 @@ trap cleanup_all EXIT
 fm_herdr_lab_prepare "$SESSION" || fail "could not prepare isolated Herdr lab session"
 
 # --- source the daemon (for afk_enter/afk_exit/FM_INJECT_MARK) + the backend -
+export FM_WEDGE_ALARM_EXEC=discard
+export FM_WEDGE_ALARM_TEST_MODE=1
 # shellcheck source=bin/fm-supervise-daemon.sh
 . "$DAEMON"
 fm_backend_source herdr || fail "fm_backend_source herdr failed"
@@ -248,6 +250,7 @@ start_daemon() {
   FM_STATE_OVERRIDE="$STATE_DIR" \
   FM_SUPERVISOR_BACKEND=herdr \
   FM_SUPERVISOR_TARGET="$SUPERVISOR_TARGET" \
+  FM_INJECT_SELF_TEST=off \
   FM_ESCALATE_BATCH_SECS=0 \
   FM_HOUSEKEEPING_TICK=1 \
   FM_POLL=1 \
@@ -468,6 +471,7 @@ test_scenario_d_max_defer() {
   FM_STATE_OVERRIDE="$STATE_DIR" \
   FM_SUPERVISOR_BACKEND=herdr \
   FM_SUPERVISOR_TARGET="$SUPERVISOR_TARGET" \
+  FM_INJECT_SELF_TEST=off \
   FM_ESCALATE_BATCH_SECS=99999 \
   FM_HOUSEKEEPING_TICK=1 \
   FM_POLL=1 \

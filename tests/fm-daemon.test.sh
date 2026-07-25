@@ -23,6 +23,11 @@ fi
 
 TMP_ROOT=$(fm_test_tmproot fm-daemon-tests)
 
+daemon_fixture_identity() {
+  FM_STATE_OVERRIDE="$1" bash -c '. "$1"; fm_pid_identity "$2"' \
+    _ "$ROOT/bin/fm-wake-lib.sh" "$2"
+}
+
 test_afk_start_refuses_when_flag_cannot_be_written() {
   local dir state fakebin out status
   dir=$(make_supercase afk-start-flag-unwritable)
@@ -89,6 +94,178 @@ test_afk_start_does_not_set_flag_when_startup_preflight_fails() {
   assert_absent "$state/.afk" "fm-afk-start.sh set .afk even though daemon startup preflight failed"
   assert_absent "$state/.supervise-daemon.log" "fm-afk-start.sh started the daemon after startup preflight failed"
   pass "fm-afk-start.sh leaves afk off when daemon startup preflight fails"
+}
+
+test_afk_start_live_daemon_probes_without_injecting() {
+  local dir state fakebin capture sent lock holder identity out status
+  dir=$(make_supercase afk-start-live-probe)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  capture="$dir/composer"; sent="$dir/sent.log"; lock="$state/.supervise-daemon.lock"
+  printf '│ > │\n' > "$capture"
+  : > "$sent"
+  mkdir -p "$lock"
+  bash -c 'sleep 30; :' fm-supervise-daemon.sh &
+  holder=$!
+  printf '%s\n' "$holder" > "$lock/pid"
+  identity=$(daemon_fixture_identity "$state" "$holder") || fail "could not identify live daemon fixture"
+  printf '%s\n' "$identity" > "$lock/pid-identity"
+  : > "$state/.supervise-daemon.ready"
+
+  out=$(PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" \
+    FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET=fakepane \
+    FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_SENT="$sent" \
+    "$AFK_START" 2>&1)
+  status=$?
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+
+  [ "$status" -eq 0 ] || fail "fm-afk-start.sh rejected an empty live-daemon composer: $out"
+  assert_contains "$out" "inject channel probe OK" "live-daemon refresh did not report a successful read-only probe"
+  [ ! -s "$sent" ] || fail "live-daemon refresh injected from a second process: $(cat "$sent")"
+  pass "fm-afk-start.sh probes a live daemon without injecting"
+}
+
+test_afk_start_live_probe_clears_inherited_discard_for_alarm() {
+  local dir state fakebin capture sent lock holder identity alarm alarm_log out status
+  dir=$(make_supercase afk-start-live-probe-alarm)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  capture="$dir/composer"; sent="$dir/sent.log"; lock="$state/.supervise-daemon.lock"
+  alarm="$dir/alarm"; alarm_log="$dir/alarm.log"
+  printf '│ > captain draft │\n' > "$capture"
+  : > "$sent"
+  cat > "$alarm" <<'SH'
+#!/usr/bin/env bash
+printf 'fired\n' > "${FM_TEST_ALARM_LOG:?}"
+SH
+  chmod +x "$alarm"
+  mkdir -p "$lock"
+  bash -c 'sleep 30; :' fm-supervise-daemon.sh &
+  holder=$!
+  printf '%s\n' "$holder" > "$lock/pid"
+  identity=$(daemon_fixture_identity "$state" "$holder") || fail "could not identify live daemon fixture"
+  printf '%s\n' "$identity" > "$lock/pid-identity"
+  : > "$state/.supervise-daemon.ready"
+
+  out=$(PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" \
+    FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET=fakepane \
+    FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_SENT="$sent" \
+    FM_WEDGE_ALARM_EXEC=discard FM_WEDGE_ALARM_CHANNEL="command:$alarm" \
+    FM_TEST_ALARM_LOG="$alarm_log" "$AFK_START" 2>&1)
+  status=$?
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+
+  [ "$status" -ne 0 ] || fail "fm-afk-start.sh accepted a pending live-daemon composer"
+  assert_contains "$out" "inject channel probe FAILED" "live-daemon probe failure was not surfaced"
+  [ -s "$state/.subsuper-inject-wedged" ] || fail "live-daemon probe failure did not write the wedge marker"
+  [ -s "$alarm_log" ] || fail "production launcher inherited the test-only discard suppressor"
+  [ ! -s "$sent" ] || fail "failed live-daemon probe typed into the pending composer"
+  assert_absent "$state/.afk" "failed live-daemon probe enabled away mode"
+  pass "fm-afk-start.sh rolls back a new away flag when a live probe fails"
+}
+
+test_daemon_ready_marker_follows_startup_and_shutdown() {
+  local dir state fakebin capture sent pid i published_pid
+  dir=$(make_supercase daemon-ready-marker)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  capture="$dir/composer"; sent="$dir/sent.log"
+  printf '│ > │\n' > "$capture"
+  : > "$sent"
+  afk_enter "$state"
+
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" \
+    FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET=fakepane \
+    FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_SENT="$sent" \
+    FM_INJECT_SELF_TEST=probe FM_POLL=1 "$DAEMON" >/dev/null 2>&1 &
+  pid=$!
+  i=0
+  while [ "$i" -lt 50 ] && [ ! -e "$state/.supervise-daemon.pid" ]; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.01
+    i=$((i + 1))
+  done
+  assert_present "$state/.supervise-daemon.pid" "daemon did not publish its pid file"
+  assert_present "$state/.supervise-daemon.lock/pid-identity" "daemon published its pid before its identity"
+  published_pid=$(cat "$state/.supervise-daemon.pid")
+  [ "$published_pid" = "$pid" ] || fail "daemon published pid $published_pid instead of launched pid $pid"
+  i=0
+  while [ "$i" -lt 50 ] && [ ! -e "$state/.supervise-daemon.ready" ]; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  assert_present "$state/.supervise-daemon.ready" "daemon did not publish post-self-test readiness"
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  assert_absent "$state/.supervise-daemon.ready" "daemon shutdown left a stale readiness marker"
+  pass "supervise daemon readiness marker spans only its ready lifetime"
+}
+
+test_afk_start_uses_python_setsid_fallback() {
+  local dir state fakebin pathbin python_log out status tool source_path
+  dir=$(make_supercase afk-start-python-setsid)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  pathbin="$dir/pathbin"
+  python_log="$dir/python.log"
+  mkdir -p "$pathbin"
+
+  for tool in bash dirname mkdir readlink cat date rm sed sleep ps uname od tr; do
+    source_path=$(command -v "$tool") || fail "test prerequisite missing: $tool"
+    ln -s "$source_path" "$pathbin/$tool"
+  done
+  ln -s "$fakebin/tmux" "$pathbin/tmux"
+  cat > "$pathbin/python3" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$FM_FAKE_PYTHON_LOG"
+exit 9
+SH
+  chmod +x "$pathbin/python3"
+
+  out=$(PATH="$pathbin" FM_FAKE_PYTHON_LOG="$python_log" \
+    FM_STATE_OVERRIDE="$state" FM_SUPERVISOR_BACKEND=tmux \
+    FM_SUPERVISOR_TARGET=fakepane "$AFK_START" 2>&1)
+  status=$?
+
+  [ "$status" -ne 0 ] || fail "fm-afk-start.sh unexpectedly accepted the fake fallback daemon"
+  assert_present "$python_log" "no-setsid path did not invoke python3"
+  assert_contains "$(cat "$python_log")" "os.setsid()" "python3 fallback did not create a new session"
+  assert_contains "$out" "daemon exited before writing pid file" "fallback launcher failure was not surfaced"
+  assert_absent "$state/.afk" "fallback launcher failure left away mode enabled"
+  pass "fm-afk-start.sh uses python os.setsid when setsid is unavailable"
+}
+
+test_afk_start_timeout_stops_launched_daemon() {
+  local dir state fakebin tmux_fixture out status orphan_pid
+  dir=$(make_supercase afk-start-timeout-cleanup)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  tmux_fixture="$fakebin/tmux"
+  cat > "$tmux_fixture" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  display-message) printf 'fakepane\n'; exit 0 ;;
+  capture-pane) sleep 30; exit 0 ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$tmux_fixture"
+
+  out=$(PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" \
+    FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET=fakepane \
+    FM_AFK_START_READY_TIMEOUT_SECS=1 FM_AFK_START_SETTLE_SECS=0 \
+    "$AFK_START" 2>&1)
+  status=$?
+  orphan_pid=$(sed -n 's/.*pid_file=\([0-9][0-9]*\).*/\1/p' "$state/.subsuper-inject-wedged" | head -1)
+
+  [ "$status" -ne 0 ] || fail "fm-afk-start.sh accepted a daemon that never became ready"
+  [ -n "$orphan_pid" ] || fail "readiness timeout did not record the launched daemon pid: $out"
+  ! kill -0 "$orphan_pid" 2>/dev/null || fail "readiness timeout left launched daemon pid=$orphan_pid alive"
+  assert_absent "$state/.afk" "readiness timeout left away mode enabled"
+  assert_absent "$state/.supervise-daemon.ready" "readiness timeout left a ready marker"
+  assert_absent "$state/.supervise-daemon.lock" "readiness timeout left the singleton lock held"
+  assert_absent "$state/.supervise-daemon.pid" "readiness timeout left the daemon pid file"
+  pass "fm-afk-start.sh stops and cleans a detached daemon after readiness timeout"
 }
 
 test_daemon_state_root_uses_fm_home() {
@@ -1077,6 +1254,135 @@ test_submit_ack_reports_pending_on_persistent_swallow() {
   pass "submit-ACK reports pending on a persistently swallowed Enter (type-once)"
 }
 
+# --- inject channel self-test (fm-afk-inject-wedge) ---------------------------
+# A permanently-pending composer (app-spawned Claude primary, 2026-07-24) deferred
+# every inject for 33h. Self-test must fail LOUD at activation - write the durable
+# marker, refuse healthy afk - without weakening the composer guard so real
+# escalations still only land on an affirmatively empty composer.
+
+test_inject_channel_self_test_fails_loud_on_pending_composer() {
+  local dir state fakebin sent
+  dir=$(make_bordered_case selftest-pending)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  sent="$dir/sent.log"; : > "$sent"
+  printf '│ > human draft still sitting │\n' > "$dir/composer"
+  afk_enter "$state"
+  export FM_SUPERVISOR_TARGET=fakepane FM_SUPERVISOR_BACKEND=tmux
+  if PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
+      inject_channel_self_test "$state"; then
+    fail "self-test succeeded on a pending composer (must fail loud)"
+  fi
+  [ -s "$state/.subsuper-inject-wedged" ] \
+    || fail "self-test did not write durable inject-wedged marker on pending composer"
+  grep -F 'not confirmed-empty' "$state/.subsuper-inject-wedged" >/dev/null \
+    || fail "wedge marker missing not-confirmed-empty diagnosis: $(cat "$state/.subsuper-inject-wedged")"
+  [ ! -s "$sent" ] || fail "self-test typed into a pending composer"
+  pass "inject_channel_self_test fails loud on pending composer and never types"
+}
+
+test_inject_channel_self_test_succeeds_on_empty_and_delivers() {
+  local dir state fakebin sent
+  dir=$(make_bordered_case selftest-empty-ok)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  sent="$dir/sent.log"; : > "$sent"
+  printf '│ > │\n' > "$dir/composer"
+  afk_enter "$state"
+  export FM_SUPERVISOR_TARGET=fakepane FM_SUPERVISOR_BACKEND=tmux
+  PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
+    FM_INJECT_CONFIRM_SLEEP=0.05 inject_channel_self_test "$state" \
+    || fail "self-test failed on an empty bordered composer"
+  grep -F 'self-test OK' "$sent" >/dev/null \
+    || fail "self-test did not deliver a confirmed inject on empty composer: $(cat "$sent")"
+  [ ! -e "$state/.subsuper-inject-wedged" ] \
+    || fail "successful self-test left an inject-wedged marker"
+  pass "inject_channel_self_test delivers on empty composer and clears wedge marker"
+}
+
+test_inject_channel_self_test_leaves_buffer_for_daemon() {
+  local dir state fakebin sent
+  dir=$(make_bordered_case selftest-buffer-daemon-owned)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  sent="$dir/sent.log"; : > "$sent"
+  printf '│ > │\n' > "$dir/composer"
+  afk_enter "$state"
+  escalate_add "$state" "blocked: production escalation remains undelivered"
+  printf 'old wedge marker\n' > "$state/.subsuper-inject-wedged"
+  export FM_SUPERVISOR_TARGET=fakepane FM_SUPERVISOR_BACKEND=tmux
+  PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
+    FM_INJECT_CONFIRM_SLEEP=0.05 inject_channel_self_test "$state" \
+    || fail "self-test failed while a real escalation remained buffered"
+  grep -F 'production escalation remains undelivered' "$sent" >/dev/null \
+    && fail "self-test raced the daemon by flushing its escalation buffer"
+  [ -s "$state/.subsuper-escalations" ] || fail "self-test mutated the daemon-owned escalation buffer"
+  [ -s "$state/.subsuper-inject-wedged" ] || fail "self-test cleared the wedge marker while an escalation remained buffered"
+  pass "inject_channel_self_test leaves buffered escalations and wedge evidence for the daemon"
+}
+
+test_direct_daemon_clears_discard_unless_test_mode() {
+  local dir state fakebin alarm alarm_log sent out status
+  dir=$(make_bordered_case direct-daemon-production-alert)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  alarm="$dir/alarm"; alarm_log="$dir/alarm.log"; sent="$dir/sent.log"
+  printf '│ > captain draft │\n' > "$dir/composer"
+  : > "$sent"
+  cat > "$alarm" <<'SH'
+#!/usr/bin/env bash
+printf 'fired\n' > "${FM_TEST_ALARM_LOG:?}"
+SH
+  chmod +x "$alarm"
+  afk_enter "$state"
+
+  out=$(PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" \
+    FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET=fakepane \
+    FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
+    FM_WEDGE_ALARM_EXEC=discard FM_WEDGE_ALARM_TEST_MODE=0 \
+    FM_WEDGE_ALARM_CHANNEL="command:$alarm" FM_TEST_ALARM_LOG="$alarm_log" \
+    "$DAEMON" 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "direct daemon accepted a pending startup composer: $out"
+  [ -s "$alarm_log" ] || fail "direct production daemon preserved the inherited discard suppressor"
+
+  dir=$(make_bordered_case direct-daemon-test-alert)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  alarm_log="$dir/alarm.log"; sent="$dir/sent.log"
+  printf '│ > captain draft │\n' > "$dir/composer"
+  : > "$sent"
+  afk_enter "$state"
+
+  out=$(PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" \
+    FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET=fakepane \
+    FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
+    FM_WEDGE_ALARM_EXEC=discard FM_WEDGE_ALARM_TEST_MODE=1 \
+    FM_WEDGE_ALARM_CHANNEL="command:$alarm" FM_TEST_ALARM_LOG="$alarm_log" \
+    "$DAEMON" 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "test-mode daemon accepted a pending startup composer: $out"
+  [ ! -e "$alarm_log" ] || fail "test-mode daemon ignored the explicit discard suppressor"
+  pass "direct daemon clears discard in production and preserves explicit test mode"
+}
+
+# Non-regression: a healthy empty channel still delivers a real escalation after
+# the self-test path exists - away-mode must not get quieter.
+test_escalate_flush_still_delivers_real_escalation_on_empty() {
+  local dir state fakebin sent
+  dir=$(make_bordered_case escalate-still-delivers)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  sent="$dir/sent.log"; : > "$sent"
+  printf '│ > │\n' > "$dir/composer"
+  afk_enter "$state"
+  escalate_add "$state" "done: PR https://example.test/pr/792 checks green"
+  export FM_SUPERVISOR_TARGET=fakepane FM_SUPERVISOR_BACKEND=tmux
+  PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
+    FM_INJECT_CONFIRM_SLEEP=0.05 escalate_flush "$state" \
+    || fail "escalate_flush failed on empty composer after self-test work"
+  grep -F 'Supervisor escalate' "$sent" >/dev/null \
+    || fail "real escalation did not reach the primary: $(cat "$sent")"
+  grep -F 'checks green' "$sent" >/dev/null \
+    || fail "real escalation digest lost its payload: $(cat "$sent")"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "buffer not cleared after successful real flush"
+  pass "real captain-relevant escalation still delivers on empty composer (away-mode not quieter)"
+}
+
 test_max_defer_empty_swallow_types_once_and_alarms() {
   local dir state fakebin sent
   dir=$(make_bordered_case maxdefer-stuck)
@@ -1192,8 +1498,7 @@ test_max_defer_afk_inactive_does_not_flush_or_alarm() {
 #
 # NO test here EVER posts a real notification. Every notifier routes through
 # the FM_WEDGE_ALARM_EXEC seam, which tests/wake-helpers.sh forces to a recorder
-# ($FM_WEDGE_ALARM_LOG logs "<channel>\t<summary>"); the daemon also defaults
-# that seam to "discard" whenever it is sourced. Assertions read the recorder
+# ($FM_WEDGE_ALARM_LOG logs "<channel>\t<summary>"). Assertions read the recorder
 # log, so they verify channel SELECTION and summary propagation; the real
 # osascript/herdr argv is verified once by the bounded manual evidence in
 # docs/wedge-alarm.md, never from a suite.
@@ -1223,16 +1528,21 @@ SH
 }
 
 test_wedge_alarm_library_mode_defaults_to_discard() {
-  # The structural guarantee: sourcing the daemon with NO seam configured defaults
-  # FM_WEDGE_ALARM_EXEC to "discard", so a sourced context (every test) cannot
-  # fire a real notification even if it forgets to stub. Checked in a clean
-  # subshell that first unsets this harness's recorder.
   local out
   # shellcheck disable=SC2016  # $1/$FM_WEDGE_ALARM_EXEC must expand in the child, not here
   out=$(env -u FM_WEDGE_ALARM_EXEC bash -c '. "$1"; printf "%s" "${FM_WEDGE_ALARM_EXEC:-UNSET}"' _ "$DAEMON")
   [ "$out" = discard ] \
-    || fail "sourcing the daemon did not default the notifier seam to discard (got: $out)"
-  pass "library mode: sourcing the daemon defaults FM_WEDGE_ALARM_EXEC to discard (no test can fire a real notification)"
+    || fail "sourcing the daemon did not install the safe notifier default (got: $out)"
+  pass "library mode defaults FM_WEDGE_ALARM_EXEC to discard"
+}
+
+test_wedge_alarm_live_library_mode_leaves_exec_unset() {
+  local out
+  # shellcheck disable=SC2016  # $1/$FM_WEDGE_ALARM_EXEC must expand in the child, not here
+  out=$(env -u FM_WEDGE_ALARM_EXEC bash -c 'FM_WEDGE_ALARM_ALLOW_LIVE=1; . "$1"; printf "%s" "${FM_WEDGE_ALARM_EXEC:-UNSET}"' _ "$DAEMON")
+  [ "$out" = UNSET ] \
+    || fail "live production sourcing installed a notifier override (got: $out)"
+  pass "live library mode leaves FM_WEDGE_ALARM_EXEC unset"
 }
 
 test_wake_helpers_replace_inherited_notifier_override() {
@@ -1755,6 +2065,11 @@ test_afk_start_refuses_when_flag_cannot_be_written
 test_afk_start_ignores_stale_pidfile_without_lock
 test_afk_start_reclaims_stale_daemon_lock_reused_pid
 test_afk_start_does_not_set_flag_when_startup_preflight_fails
+test_afk_start_live_daemon_probes_without_injecting
+test_afk_start_live_probe_clears_inherited_discard_for_alarm
+test_daemon_ready_marker_follows_startup_and_shutdown
+test_afk_start_uses_python_setsid_fallback
+test_afk_start_timeout_stops_launched_daemon
 test_daemon_state_root_uses_fm_home
 test_classify_routine_signal_self
 test_classify_terminal_signal_escalates
@@ -1812,6 +2127,11 @@ test_pane_input_pending_codex_real_text_is_pending
 test_submit_ack_confirms_on_bordered_empty_composer
 test_submit_ack_confirms_on_codex_dim_placeholder_after_submit
 test_submit_ack_reports_pending_on_persistent_swallow
+test_inject_channel_self_test_fails_loud_on_pending_composer
+test_inject_channel_self_test_succeeds_on_empty_and_delivers
+test_inject_channel_self_test_leaves_buffer_for_daemon
+test_direct_daemon_clears_discard_unless_test_mode
+test_escalate_flush_still_delivers_real_escalation_on_empty
 test_max_defer_empty_swallow_types_once_and_alarms
 test_max_defer_flushes_empty_idle_pane
 test_max_defer_pending_composer_alarms_without_typing
@@ -1819,6 +2139,7 @@ test_normal_flush_clears_stale_wedge_marker
 test_below_max_defer_does_nothing
 test_max_defer_afk_inactive_does_not_flush_or_alarm
 test_wedge_alarm_library_mode_defaults_to_discard
+test_wedge_alarm_live_library_mode_leaves_exec_unset
 test_wake_helpers_replace_inherited_notifier_override
 test_wedge_alarm_discard_seam_fires_nothing
 test_wedge_alarm_direct_notifiers_honor_discard_seam

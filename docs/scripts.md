@@ -67,7 +67,7 @@ The shared no-mistakes gate refusal used by `fm-spawn.sh`, `fm-send.sh`, and `fm
 | `fm-rotate-resident.sh`   | Manually rotate the current task resident through the watchdog successor path |
 | `fm-watchdog-lib.sh`     | Shared watchdog config, metrics, session lookup, embargo, and event helpers |
 | `fm-embargo-lift`        | Manually lift one watchdog budget embargo flag |
-| `fm-afk-start.sh`        | Enter away mode and run the sub-supervisor daemon as a tracked foreground process    |
+| `fm-afk-start.sh`        | Start the daemon in a detached session, verify it after the settle window, or run it under the foreground test override |
 | `fm-supervise-daemon.sh` | Presence-gated away-mode sub-supervisor: self-handle routine wakes, escalate batched digests, alert on failed delivery |
 | `fm-crew-state.sh`       | Print one deterministic current-state line for a crew                                |
 | `fm-tangle-lib.sh`       | Shared default-branch resolution and primary-checkout tangle classification          |

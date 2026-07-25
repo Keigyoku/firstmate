@@ -48,6 +48,13 @@
 #     undelivered past FM_MAX_DEFER_SECS, the daemon retries a normal flush and
 #     writes state/.subsuper-inject-wedged and attempts a configurable active
 #     alert if submit still cannot be confirmed.
+#   - Startup inject self-test (inject_channel_self_test): when afk is on at
+#     daemon start, prove the supervisor pane can accept a digest immediately.
+#     Successful startup publishes state/.supervise-daemon.ready only after this
+#     check; shutdown removes it.
+#     A live-daemon /afk refresh uses inject_channel_probe without submitting.
+#     A permanently-pending composer or wrong auto-discovered target fails LOUD
+#     with the durable wedge marker instead of buffering for hours.
 #   - Cheap heartbeat catch-all: every HEARTBEAT_SCAN_SECS the daemon greps all
 #     state/*.status for a captain-relevant line the per-wake classifier might
 #     have missed (e.g. a status verb outside CAPTAIN_RE) and escalates it.
@@ -83,6 +90,11 @@
 #                                   disables. Use sparingly: it overrides the
 #                                   captain-relevant escalation for matching
 #                                   kinds.
+#          FM_INJECT_SELF_TEST      startup channel check while afk is active:
+#                                   full submits a test digest (production
+#                                   default), probe verifies an empty composer
+#                                   without typing, off skips the check (hermetic
+#                                   tests that own the pane sequence only).
 #          FM_STALE_ESCALATE_SECS   idle seconds before a stale pane escalates
 #                                   as a possible wedge (default 240)
 #          FM_PAUSE_RESURFACE_SECS  idle seconds before a deliberate hold
@@ -112,10 +124,12 @@
 #                                   channel routes through this command as
 #                                   `<cmd> <channel> <summary>` instead of
 #                                   invoking its real notifier; "discard" fires
-#                                   nothing. Unset in production. When SOURCED the
-#                                   daemon defaults this to "discard" so no test
-#                                   can post a real notification (wedge_alarm_emit
-#                                   and the library-mode guard at the foot).
+#                                   nothing. Unset in production. Sourced use
+#                                   defaults to "discard" unless
+#                                   FM_WEDGE_ALARM_ALLOW_LIVE=1.
+#          FM_WEDGE_ALARM_TEST_MODE Preserve an explicit "discard" notifier
+#                                   when the daemon is executed by a hermetic
+#                                   test (default 0).
 #          FM_WEDGE_ALARM_TIMEOUT_SECS seconds allowed for each notifier before
 #                                   its watchdog terminates it and continues to the
 #                                   next channel (default 10; invalid/zero uses the
@@ -243,8 +257,9 @@ afk_active() {  # <state>
 }
 
 # afk_enter / afk_exit: write/clear the away-mode flag. Called by the /afk
-# skill (enter) and by firstmate on user return (exit). Durable: a plain file,
-# so recovery (§5) re-enters afk if it is present after a restart.
+# skill (enter) and by firstmate on user return (exit). The flag survives a
+# restart, but session start accepts it only with a live identity-backed daemon;
+# otherwise it clears the flag and records a durable wedge alarm.
 afk_enter() {  # <state>
   mkdir -p "$1"
   date '+%s' > "$1/$AFK_FLAG_NAME"
@@ -952,6 +967,83 @@ inject_wedge_alarm() {  # <state> <age-seconds>
   fi
 }
 
+# Write (or force-refresh) the durable inject-wedged marker with a diagnosis, log
+# ERROR, print LOUD on stderr, and fire the active alert. Unlike inject_wedge_alarm
+# this is NOT rate-limited: a startup self-test or a first detection must never
+# stay quiet because a prior marker was "too recent". Does not clear escalations.
+inject_channel_fail_loud() {  # <state> <reason>
+  local state=$1 reason=$2 marker target backend
+  marker="$state/.subsuper-inject-wedged"
+  target="${FM_SUPERVISOR_TARGET:-$FM_SUPERVISOR_TARGET_DEFAULT}"
+  backend="${FM_SUPERVISOR_BACKEND:-${FM_SUPERVISOR_BACKEND_DEFAULT:-tmux}}"
+  {
+    printf 'fm away-mode inject WEDGED as of %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')"
+    printf 'reason: %s\n' "$reason"
+    printf 'target: %s  backend: %s\n' "$target" "$backend"
+    if [ -s "$state/.subsuper-escalations" ]; then
+      printf 'Buffered escalations still undelivered:\n'
+      cat "$state/.subsuper-escalations" 2>/dev/null
+    fi
+  } 2>/dev/null > "$marker" || true
+  log "ERROR: away-mode inject channel failed: $reason (marker $marker)"
+  printf 'error: AFK inject channel WEDGED: %s\n' "$reason" >&2
+  printf 'error: see durable marker %s - away-mode will buffer escalations that never reach the primary until this is fixed\n' "$marker" >&2
+  if [ "$backend" = tmux ]; then
+    tmux display-message -t "$target" "fm: AFK inject WEDGED — see $marker" 2>/dev/null || true
+  fi
+  wedge_alarm_notify "AFK inject channel WEDGED: $reason - see $marker" "$marker" || true
+  return 1
+}
+
+inject_channel_probe() {  # <state> <label>
+  local state=$1 label=${2:-self-test} target backend composer
+  target="${FM_SUPERVISOR_TARGET:-$FM_SUPERVISOR_TARGET_DEFAULT}"
+  backend="${FM_SUPERVISOR_BACKEND:-tmux}"
+  if ! afk_active "$state"; then
+    inject_channel_fail_loud "$state" "$label requires state/.afk (afk inactive)"
+    return 1
+  fi
+  if ! fm_backend_target_exists "$backend" "$target"; then
+    inject_channel_fail_loud "$state" "supervisor target '$target' does not resolve on backend=$backend"
+    return 1
+  fi
+  if pane_is_busy "$target" "$backend"; then
+    inject_channel_fail_loud "$state" "supervisor pane busy (agent mid-turn) at $label; refuse silent afk"
+    return 1
+  fi
+  composer=$(fm_backend_composer_state "$backend" "$target" 2>/dev/null || true)
+  if [ "$composer" != empty ]; then
+    inject_channel_fail_loud "$state" "supervisor composer not confirmed-empty at $label (state=${composer:-unknown}: pending input, dead-shell prompt, unreadable pane, or wrong target auto-discovery)"
+    return 1
+  fi
+  return 0
+}
+
+# Startup /afk self-test of the inject channel.
+# Returns 0 only after a real self-test injection confirms submit.
+# On failure it writes the durable wedge marker, fires the active alert, prints
+# loudly on stderr, and returns 1.
+# Does NOT weaken the composer guard: a non-empty/unknown/busy target fails the
+# test instead of being force-injected. Requires afk active (inject_msg presence
+# gate) and FM_SUPERVISOR_TARGET / FM_SUPERVISOR_BACKEND already resolved.
+inject_channel_self_test() {  # <state>
+  local state=$1 target backend
+  state=${1:-$(_state_root)}
+  target="${FM_SUPERVISOR_TARGET:-$FM_SUPERVISOR_TARGET_DEFAULT}"
+  backend="${FM_SUPERVISOR_BACKEND:-tmux}"
+  inject_channel_probe "$state" self-test || return 1
+  # Real inject: proves submit + confirmation, not only the composer probe.
+  if ! inject_msg "AFK inject channel self-test OK (ignore this digest; channel healthy)" "$state"; then
+    inject_channel_fail_loud "$state" "self-test inject could not confirm submit (composer empty probe passed but Enter/submit failed)"
+    return 1
+  fi
+  if [ ! -s "$state/.subsuper-escalations" ]; then
+    rm -f "$state/.subsuper-inject-wedged"
+  fi
+  log "inject channel self-test OK (target=$target backend=$backend)"
+  return 0
+}
+
 _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first arrived (sidecar epoch)
   local f=$1 since
   [ -s "$f" ] || { echo 999999; return; }
@@ -1319,6 +1411,7 @@ fm_super_main() {
   local WATCH_ERR="$STATE/.supervise-daemon.watcher.err"
   local LOCK="$STATE/.supervise-daemon.lock"
   local PIDFILE="$STATE/.supervise-daemon.pid"
+  local READYFILE="$STATE/.supervise-daemon.ready"
   local INJECT_FAIL_SLEEP=${FM_INJECT_FAIL_SLEEP:-$INJECT_FAIL_SLEEP_DEFAULT}
   local CRASH_THRESHOLD=${FM_CRASH_THRESHOLD:-$CRASH_THRESHOLD_DEFAULT}
   local CRASH_WINDOW=${FM_CRASH_WINDOW:-$CRASH_WINDOW_DEFAULT}
@@ -1336,8 +1429,18 @@ fm_super_main() {
     fi
     exit 1
   fi
-  echo "$$" > "$PIDFILE"
-  fm_pid_identity "${BASHPID:-$$}" > "$LOCK/pid-identity" 2>/dev/null || true
+  rm -f "$READYFILE" "$PIDFILE"
+  if ! fm_pid_identity "${BASHPID:-$$}" > "$LOCK/pid-identity" 2>/dev/null; then
+    echo "error: cannot publish supervise daemon pid identity" >&2
+    fm_lock_release "$LOCK" 2>/dev/null || true
+    exit 1
+  fi
+  if ! printf '%s\n' "$$" > "$PIDFILE"; then
+    echo "error: cannot publish supervise daemon pid file: $PIDFILE" >&2
+    rm -f "$PIDFILE" 2>/dev/null || true
+    fm_lock_release "$LOCK" 2>/dev/null || true
+    exit 1
+  fi
 
   # --- auto-discover the supervisor BACKEND (tmux vs herdr) first -----------
   # Priority: FM_SUPERVISOR_BACKEND override > $TMUX_PANE (tmux) > $HERDR_ENV=1
@@ -1418,10 +1521,36 @@ fm_super_main() {
   log "daemon starting (pid $$); target=$TARGET; target_source=$target_source; backend=$BACKEND; backend_source=$backend_source; afk=$afk_status; inject_skip='${FM_INJECT_SKIP:-$INJECT_SKIP_DEFAULT}'; stale_escalate=${FM_STALE_ESCALATE_SECS:-$STALE_ESCALATE_SECS_DEFAULT}s; batch=${FM_ESCALATE_BATCH_SECS:-$ESCALATE_BATCH_SECS_DEFAULT}s"
   migrate_watcher_pause_markers "$STATE"
 
+  # Verify the injection channel immediately when /afk has already set its flag.
+  # Skip the presence-gated check when the daemon starts outside away mode.
+  if afk_active "$STATE"; then
+    local inject_self_test=${FM_INJECT_SELF_TEST:-full}
+    local inject_self_test_ok=0
+    case "$inject_self_test" in
+      full) inject_channel_self_test "$STATE" || inject_self_test_ok=$? ;;
+      probe) inject_channel_probe "$STATE" startup-probe || inject_self_test_ok=$? ;;
+      off) ;;
+      *)
+        echo "error: invalid FM_INJECT_SELF_TEST='$inject_self_test' (expected full, probe, or off)" >&2
+        inject_self_test_ok=1
+        ;;
+    esac
+    if [ "$inject_self_test_ok" -ne 0 ]; then
+      log "startup failed: inject channel self-test WEDGED (target=$TARGET backend=$BACKEND source=$target_source)"
+      echo "error: AFK inject channel self-test FAILED - refusing to run silent away-mode (target=$TARGET backend=$BACKEND source=$target_source); fix the supervisor pane or set FM_SUPERVISOR_TARGET, then re-run /afk" >&2
+      rm -f "$STATE/.afk" 2>/dev/null || true
+      fm_lock_release "$LOCK" 2>/dev/null || true
+      rm -f "$PIDFILE" 2>/dev/null || true
+      exit 1
+    fi
+  fi
+
   # --- shutdown: flush buffered escalations, reap child, release lock -------
   local WATCHER_PID="" CUR_TMP=""
   cleanup() {
-    trap - TERM INT
+    local status=$?
+    trap - TERM INT EXIT
+    rm -f "$READYFILE" 2>/dev/null || true
     wedge_alarm_stop_active_notifier
     escalate_flush "$STATE" 2>/dev/null || true
     if [ -n "${WATCHER_PID:-}" ]; then
@@ -1434,9 +1563,18 @@ fm_super_main() {
     fm_lock_release "$LOCK" 2>/dev/null || true
     rm -f "$PIDFILE" 2>/dev/null || true
     log "daemon shutting down"
-    exit 0
+    exit "$status"
   }
-  trap cleanup TERM INT
+  trap cleanup TERM INT EXIT
+
+  if ! : > "$READYFILE"; then
+    echo "error: cannot publish supervise daemon readiness: $READYFILE" >&2
+    log "startup failed: cannot publish post-self-test readiness"
+    rm -f "$STATE/.afk" 2>/dev/null || true
+    fm_lock_release "$LOCK" 2>/dev/null || true
+    rm -f "$PIDFILE" 2>/dev/null || true
+    exit 1
+  fi
 
   # --- crash-loop guard -----------------------------------------------------
   local crash_times=() backoff_secs=$CRASH_NORMAL_SLEEP
@@ -1532,15 +1670,11 @@ fm_super_main() {
 
 # Run only when executed, not when sourced (tests source the classifiers).
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  if [ "${FM_WEDGE_ALARM_EXEC:-}" = discard ] && [ "${FM_WEDGE_ALARM_TEST_MODE:-0}" != 1 ]; then
+    unset FM_WEDGE_ALARM_EXEC
+  fi
   fm_super_main "$@"
-else
-  # Library mode: these functions were SOURCED (only tests do this - production
-  # execs the daemon, see bin/fm-afk-start.sh). Make it structurally impossible
-  # for a sourced context to fire a real desktop notification from the wedge
-  # alarm: default the FM_WEDGE_ALARM_EXEC notifier seam to "discard" unless the
-  # embedder already wired one (e.g. a recorder in tests/wake-helpers.sh). It is
-  # exported so a real daemon a test later spawns inherits the safe default too.
-  # The executed branch above never runs this, so production is untouched.
+elif [ "${FM_WEDGE_ALARM_ALLOW_LIVE:-0}" != 1 ]; then
   : "${FM_WEDGE_ALARM_EXEC:=discard}"
   export FM_WEDGE_ALARM_EXEC
 fi

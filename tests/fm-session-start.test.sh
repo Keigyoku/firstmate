@@ -30,6 +30,11 @@ BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
 TMP_ROOT=$(fm_test_tmproot fm-session-start-tests)
 fm_git_identity fmtest fmtest@example.invalid
 
+session_fixture_identity() {
+  FM_STATE_OVERRIDE="$1" bash -c '. "$1"; fm_pid_identity "$2"' \
+    _ "$ROOT/bin/fm-wake-lib.sh" "$2"
+}
+
 # --- world builders ----------------------------------------------------------
 
 # new_world <name>: a real, throwaway git repo on `main` (so the worktree-tangle
@@ -332,7 +337,7 @@ EOF
 # --- lock refusal: read-only path --------------------------------------------
 
 test_lock_refusal_read_only_path() {
-  local rec root home fakebin holder_pid out status
+  local rec root home fakebin holder_pid out status marker_before
   rec=$(new_world lock-refusal)
   IFS='|' read -r root home fakebin <<EOF
 $rec
@@ -349,6 +354,9 @@ EOF
   fm_write_secondmate_meta "$home/state/sm-x.meta" "$home/other-secondmate" "firstmate:fm-sm-x" alpha
   append_wake "$home/state" signal sm-x "done: surfaced before refusal" || fail "seed wake failed"
   git -C "$root" checkout -q -B fm/read-only-tangle
+  : > "$home/state/.afk"
+  printf 'existing lock-holder wedge marker\n' > "$home/state/.subsuper-inject-wedged"
+  marker_before=$(cat "$home/state/.subsuper-inject-wedged")
 
   sleep 300 &
   holder_pid=$!
@@ -373,6 +381,12 @@ EOF
   assert_not_contains "$out" "After draining queued wakes" "read-only guard printed a drain-then-rearm instruction"
   assert_not_contains "$out" "run bin/fm-watch-arm.sh" "read-only guard printed a mutating watcher-arm instruction"
   assert_not_contains "$out" "git -C $root checkout main" "read-only bootstrap printed a state-changing checkout remediation"
+  assert_contains "$out" "AFK_DAEMON_DEAD" "read-only session did not report the dead AFK daemon"
+  assert_contains "$out" "INJECT_WEDGED_SUSPECTED" "read-only session did not report the suspected inject wedge"
+  assert_contains "$out" "left state/.afk and wedge state unchanged" "read-only AFK report did not preserve lock-holder ownership"
+  assert_present "$home/state/.afk" "read-only session removed the lock holder's .afk flag"
+  [ "$(cat "$home/state/.subsuper-inject-wedged")" = "$marker_before" ] \
+    || fail "read-only session overwrote the lock holder's wedge marker"
 
   # Detect-only bootstrap diagnostics still ran (the fakebin's PATH excludes
   # tasks-axi, so bootstrap's own read-only tool-detection line fires
@@ -711,7 +725,7 @@ EOF
 }
 
 test_next_step_afk_delegates_to_daemon() {
-  local rec root home fakebin out
+  local rec root home fakebin out identity lock
   rec=$(new_world next-step-afk)
   IFS='|' read -r root home fakebin <<EOF
 $rec
@@ -719,6 +733,25 @@ EOF
   make_fake_toolchain "$fakebin"
   make_fake_ps_claude "$fakebin"
   : > "$home/state/.afk"
+  # Healthy afk requires a live supervise-daemon pid, not the flag alone.
+  # Keep the script path in ps command= (do not exec away from bash).
+  cat > "$home/fm-supervise-daemon.sh" <<'SH'
+#!/usr/bin/env bash
+# fake live supervise daemon for session-start afk_daemon_is_live
+while true; do sleep 60; done
+SH
+  chmod +x "$home/fm-supervise-daemon.sh"
+  "$home/fm-supervise-daemon.sh" &
+  _fake_daemon_pid=$!
+  printf '%s\n' "$_fake_daemon_pid" > "$home/state/.supervise-daemon.pid"
+  lock="$home/state/.supervise-daemon.lock"
+  mkdir -p "$lock"
+  printf '%s\n' "$_fake_daemon_pid" > "$lock/pid"
+  identity=$(session_fixture_identity "$home/state" "$_fake_daemon_pid") || fail "could not identify healthy AFK daemon fixture"
+  printf '%s\n' "$identity" > "$lock/pid-identity"
+  : > "$home/state/.supervise-daemon.ready"
+  # shellcheck disable=SC2064
+  trap "kill $_fake_daemon_pid 2>/dev/null || true" RETURN
 
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
@@ -727,8 +760,119 @@ EOF
   assert_contains "$out" "daemon owns the watcher" "next step did not delegate watcher ownership to the daemon"
   assert_contains "$out" "- Away mode: active" "supervision block did not include active AFK state"
   assert_not_contains "$out" "  bin/fm-watch-arm.sh" "AFK next step still told the agent to arm the watcher directly"
+  assert_not_contains "$out" "AFK_DAEMON_DEAD" "healthy live daemon misclassified as dead"
 
   pass "next step delegates watcher ownership to the AFK daemon"
+}
+
+test_session_start_rejects_live_daemon_without_readiness() {
+  local rec root home fakebin out daemon_pid identity lock
+  rec=$(new_world afk-daemon-not-ready)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  : > "$home/state/.afk"
+  cat > "$home/fm-supervise-daemon.sh" <<'SH'
+#!/usr/bin/env bash
+while true; do sleep 60; done
+SH
+  chmod +x "$home/fm-supervise-daemon.sh"
+  "$home/fm-supervise-daemon.sh" &
+  daemon_pid=$!
+  printf '%s\n' "$daemon_pid" > "$home/state/.supervise-daemon.pid"
+  lock="$home/state/.supervise-daemon.lock"
+  mkdir -p "$lock"
+  printf '%s\n' "$daemon_pid" > "$lock/pid"
+  identity=$(session_fixture_identity "$home/state" "$daemon_pid") || fail "could not identify unready AFK daemon fixture"
+  printf '%s\n' "$identity" > "$lock/pid-identity"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  kill "$daemon_pid" 2>/dev/null || true
+  wait "$daemon_pid" 2>/dev/null || true
+
+  assert_contains "$out" "AFK_DAEMON_DEAD" "live daemon without readiness was treated as healthy"
+  assert_absent "$home/state/.afk" "session-start left .afk set without daemon readiness"
+  assert_not_contains "$out" "Away mode is active" "unready daemon received away-mode instructions"
+
+  pass "session start rejects a live daemon without readiness"
+}
+
+test_session_start_rejects_stale_daemon_identity() {
+  local rec root home fakebin out daemon_pid lock
+  rec=$(new_world afk-daemon-stale-identity)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  : > "$home/state/.afk"
+  sleep 60 &
+  daemon_pid=$!
+  printf '%s\n' "$daemon_pid" > "$home/state/.supervise-daemon.pid"
+  lock="$home/state/.supervise-daemon.lock"
+  mkdir -p "$lock"
+  printf '%s\n' "$daemon_pid" > "$lock/pid"
+  printf '%s\n' "stale daemon identity" > "$lock/pid-identity"
+  : > "$home/state/.supervise-daemon.ready"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  kill "$daemon_pid" 2>/dev/null || true
+  wait "$daemon_pid" 2>/dev/null || true
+
+  assert_contains "$out" "AFK_DAEMON_DEAD" "stale daemon lock identity was treated as healthy"
+  assert_absent "$home/state/.afk" "session-start left .afk set with a stale daemon identity"
+  assert_not_contains "$out" "Away mode is active" "stale daemon identity received away-mode instructions"
+
+  pass "session start rejects stale daemon lock identities"
+}
+
+# Automatic wedge surface (fm-afk-inject-wedge): a durable inject-wedged marker
+# must appear in the session-start digest so recovery never depends on the human
+# habit of checking state/.subsuper-inject-wedged first.
+test_session_start_surfaces_inject_wedged_marker() {
+  local rec root home fakebin out
+  rec=$(new_world inject-wedged-surface)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  printf 'fm away-mode inject WEDGED as of 2026-07-24\nreason: composer not confirmed-empty (state=pending)\n' \
+    > "$home/state/.subsuper-inject-wedged"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "INJECT_WEDGED:" "session-start did not surface inject-wedged marker"
+  assert_contains "$out" "composer not confirmed-empty" "session-start did not print wedge diagnosis"
+  assert_contains "$out" "fix the supervisor pane" "session-start did not instruct remediation"
+
+  pass "session-start surfaces durable inject-wedged marker automatically"
+}
+
+# Flag-on-daemon-dead: .afk set with no live supervise daemon must not look like
+# healthy away-mode (2026-07-25 silent hole after harness reaped the daemon).
+test_session_start_detects_afk_daemon_dead() {
+  local rec root home fakebin out
+  rec=$(new_world afk-daemon-dead)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  : > "$home/state/.afk"
+  # Stale pid file pointing at this shell is NOT fm-supervise-daemon.sh.
+  printf '%s\n' "$$" > "$home/state/.supervise-daemon.pid"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "AFK_DAEMON_DEAD" "session-start did not surface flag-on-daemon-dead"
+  assert_absent "$home/state/.afk" "session-start left .afk set with dead daemon"
+  assert_contains "$out" "INJECT_WEDGED:" "session-start did not write/surface durable wedge after daemon-dead"
+  assert_not_contains "$out" "Away mode is active" "next step still treated flag-on-daemon-dead as healthy afk"
+
+  pass "session-start detects flag-on-daemon-dead, clears .afk, surfaces wedge"
 }
 
 test_supervision_block_exactly_one_and_pi_diagnostic() {
@@ -876,6 +1020,10 @@ test_backlog_compact_tasks_axi_unavailable_uses_manual_fallback
 test_fleet_digest_empty_fleet
 test_next_step_sources_x_mode_cadence
 test_next_step_afk_delegates_to_daemon
+test_session_start_rejects_live_daemon_without_readiness
+test_session_start_rejects_stale_daemon_identity
+test_session_start_surfaces_inject_wedged_marker
+test_session_start_detects_afk_daemon_dead
 test_supervision_block_exactly_one_and_pi_diagnostic
 test_pi_diagnostic_rejects_stale_loaded_marker
 test_pi_diagnostic_accepts_prelock_loaded_marker

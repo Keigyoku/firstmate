@@ -235,6 +235,102 @@ test_crew_absorb_class_classifier() {
   pass "crew_absorb_class: working/paused/held/none share one read, and held markers clear on resume"
 }
 
+# Tonight's gap (fm-watcher-paused-absorb): a crew that declared paused: while its
+# no-mistakes run still reads terminal/done (ci-monitor checks-green) was classed
+# none because run-step done outranked the status-log pause. Absorb must honor the
+# declared pause so the watcher does not thrash stale wakes; an ACTIVE working
+# run-step still wins so a resumed crew is never mis-absorbed as paused; blocked
+# and non-declaring idle crews still surface.
+test_crew_absorb_class_declared_pause_outranks_terminal_run() {
+  local dir fakebin state
+  dir=$(make_case absorb-pause-outranks); fakebin="$dir/fakebin"; state="$dir/state"
+  export FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh"
+  export FM_STATE_OVERRIDE="$state"
+  export FM_FAKE_CREW_STATE
+
+  # Declared pause + terminal run-step (the ci-monitor checks-green case).
+  printf 'paused: PR 792 green, awaiting smoke r4 verdict\n' > "$state/a.status"
+  FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review (still monitoring for merge/close)'
+  [ "$(crew_absorb_class a)" = paused ] \
+    || fail "declared pause under terminal run-step not classed paused: $(crew_absorb_class a)"
+  crew_is_paused a || fail "crew_is_paused missed declared pause under terminal run-step"
+  ! crew_is_provably_working a || fail "paused-under-done classed as provably working"
+
+  # Same terminal run without a declared pause still surfaces (wedged/finished).
+  printf 'working: implementing fix\n' > "$state/a.status"
+  [ "$(crew_absorb_class a)" = none ] \
+    || fail "terminal run without declared pause was absorbed: $(crew_absorb_class a)"
+
+  # Empty/non-declaring status under terminal run still surfaces.
+  : > "$state/a.status"
+  [ "$(crew_absorb_class a)" = none ] \
+    || fail "terminal run with empty status was absorbed"
+
+  # Active working run-step outranks a stale paused: line (crew resumed).
+  printf 'paused: holding for upstream\n' > "$state/a.status"
+  FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
+  [ "$(crew_absorb_class a)" = working ] \
+    || fail "active run-step did not outrank stale paused status: $(crew_absorb_class a)"
+
+  # blocked: is never a pause absorb, even under a terminal run-step.
+  printf 'blocked: needs credentials\n' > "$state/a.status"
+  FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review'
+  [ "$(crew_absorb_class a)" = none ] \
+    || fail "blocked status under terminal run was classed paused: $(crew_absorb_class a)"
+
+  # Captain lock: paused: must NOT mask a FAILED (or cancelled→failed) run-step.
+  # A stale paused: written before the run failed would otherwise swallow the
+  # failure under the radar — same severity as blocked: escalate-immediately.
+  printf 'paused: awaiting smoke r4 verdict\n' > "$state/a.status"
+  FM_FAKE_CREW_STATE='state: failed · source: run-step · run failed'
+  [ "$(crew_absorb_class a)" = none ] \
+    || fail "declared pause under FAILED run-step was absorbed: $(crew_absorb_class a)"
+  ! crew_is_paused a || fail "crew_is_paused true under failed run-step with paused status"
+
+  FM_FAKE_CREW_STATE='state: parked · source: run-step · parked at review'
+  [ "$(crew_absorb_class a)" = none ] \
+    || fail "declared pause under unheld parked run-step was absorbed: $(crew_absorb_class a)"
+
+  FM_FAKE_CREW_STATE='state: unknown · source: run-step · outcome: mystery'
+  [ "$(crew_absorb_class a)" = none ] \
+    || fail "declared pause under unknown run-step was absorbed: $(crew_absorb_class a)"
+
+  unset FM_STATE_OVERRIDE
+  unset FM_FAKE_CREW_STATE
+  pass "crew_absorb_class: declared pause absorbs only terminal done run-step"
+}
+
+# Captain-ordered restriction of paused-masks-failed-run: last status paused: +
+# authoritative FAILED run-step must surface (none), not absorb as paused.
+test_crew_absorb_class_failed_run_not_masked_by_paused_status() {
+  local dir fakebin state
+  dir=$(make_case absorb-failed-not-paused); fakebin="$dir/fakebin"; state="$dir/state"
+  export FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh"
+  export FM_STATE_OVERRIDE="$state"
+  export FM_FAKE_CREW_STATE
+
+  printf 'paused: holding for upstream release\n' > "$state/a.status"
+  FM_FAKE_CREW_STATE='state: failed · source: run-step · run failed'
+  [ "$(crew_absorb_class a)" = none ] \
+    || fail "failed run under paused: status was classed $(crew_absorb_class a), want none"
+  ! crew_is_paused a || fail "crew_is_paused recognized pause over failed run"
+  ! crew_is_provably_working a || fail "failed+paused classed as working"
+
+  # Cancelled maps to failed in crew-state; same non-absorb.
+  FM_FAKE_CREW_STATE='state: failed · source: run-step · run cancelled'
+  [ "$(crew_absorb_class a)" = none ] \
+    || fail "cancelled/failed run under paused: was absorbed: $(crew_absorb_class a)"
+
+  # done/checks-green under paused: still absorbs (the case the captain hit).
+  FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review (still monitoring for merge/close)'
+  [ "$(crew_absorb_class a)" = paused ] \
+    || fail "done/checks-green under paused: not absorbed: $(crew_absorb_class a)"
+
+  unset FM_STATE_OVERRIDE
+  unset FM_FAKE_CREW_STATE
+  pass "crew_absorb_class: failed/cancelled run-step escalates despite paused: status; done still absorbs"
+}
+
 # signal_crew_provably_working: a no-verb "signal:" wake is benign ONLY when EVERY
 # task it references is provably working; if any crew has stopped, or no task can be
 # resolved, it surfaces. Files map to ids by stripping .status / .turn-ended.
@@ -607,6 +703,78 @@ test_nonterminal_stale_paused_absorbed_then_resurfaced() {
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the paused re-surface failed"
   grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "paused re-surface was not queued"
   pass "a declared pause is absorbed on first sight, then re-surfaced as a recheck past the threshold, never wedge-escalated"
+}
+
+# Integration form of tonight's gap: crew_absorb_class's fake returns terminal
+# run-step done (ci-monitor checks-green) while the status file declares paused:.
+# Watcher must absorb on the pause cadence, not surface immediate stale thrash.
+test_nonterminal_stale_paused_under_terminal_run_absorbed() {
+  local dir state fakebin out capture_file window key pane_hash sig pid statusf
+  dir=$(make_case nonterminal-stale-paused-under-done); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  window="test:fm-pause-done"
+  printf 'idle, awaiting smoke verdict' > "$capture_file"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/pause-done.meta"
+  statusf="$state/pause-done.status"
+  printf 'paused: PR 792 green, awaiting smoke r4 verdict then review round then captain merge word\n' > "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-pause-done_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle, awaiting smoke verdict")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  # The bug: authoritative state is done/ci-monitor, not state: paused.
+  export FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review (still monitoring for merge/close)'
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "watcher exited for paused under terminal run (should absorb): $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || { reap "$pid"; fail "paused under terminal run printed a wake: $(cat "$out")"; }
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "paused under terminal run enqueued a wake"; }
+  [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "paused under terminal run did not enter pause tracking"; }
+  [ ! -e "$state/.stale-since-$key" ] || { reap "$pid"; fail "paused under terminal run started a wedge timer"; }
+  reap "$pid"
+  pass "declared pause under terminal run-step is absorbed (no stale thrash)"
+}
+
+# Anti-regression for the pause-absorb fix: blocked: is a stuck crew, never a
+# declared wait. Even under a terminal run-step and a high pause re-surface
+# window, an idle blocked crew must surface immediately and must NOT enter
+# pause tracking (absorbed-is-not-forgotten must not expand to hide blockers).
+test_blocked_stale_surfaces_immediately_never_pause_absorbed() {
+  local dir state fakebin out drain_out capture_file window key pane_hash sig pid
+  dir=$(make_case blocked-stale-never-pause); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
+  window="test:fm-blocked"
+  printf 'idle, stuck waiting for help' > "$capture_file"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/blocked.meta"
+  printf 'blocked: needs credentials for the registry\n' > "$state/blocked.status"
+  sig=$(seen_sig "$state/blocked.status"); printf '%s' "$sig" > "$state/.seen-blocked_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle, stuck waiting for help")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  # Same terminal-run backdrop as the pause-absorb fix; blocked must still surface.
+  export FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review (still monitoring for merge/close)'
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_PAUSE_RESURFACE_SECS=999 FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "watcher did not surface a blocked: crew immediately: $(cat "$out")"
+  grep -Fx "stale: $window" "$out" >/dev/null || fail "blocked: stale did not print an immediate stale wake: $(cat "$out")"
+  grep -F "possible wedge" "$out" >/dev/null && fail "blocked: was mislabeled a possible wedge"
+  grep -F "awaiting external" "$out" >/dev/null && fail "blocked: was mislabeled a paused external-wait recheck"
+  [ ! -e "$state/.paused-$key" ] || fail "blocked: entered pause tracking (would hide a stuck crew)"
+  [ ! -e "$state/.paused-resurfaced-$key" ] || fail "blocked: recorded a pause re-surface marker"
+  [ ! -e "$state/.stale-since-$key" ] || fail "blocked: started a wedge/pause timer instead of immediate surface"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after blocked: stale failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "blocked: stale was not queued"
+  pass "blocked: idle under terminal run surfaces immediately and never enters pause absorb"
 }
 
 # A captain-owed ask-user gate is a deliberate hold only after firstmate marked
@@ -1218,6 +1386,8 @@ test_classifier_primitives
 test_crew_is_provably_working_classifier
 test_status_is_paused_classifier
 test_crew_absorb_class_classifier
+test_crew_absorb_class_declared_pause_outranks_terminal_run
+test_crew_absorb_class_failed_run_not_masked_by_paused_status
 test_signal_crew_provably_working_classifier
 test_provably_working_signal_absorbed
 test_turn_ended_provably_working_absorbed
@@ -1231,6 +1401,8 @@ test_wedge_escalation_marks_demand_deep_inspection_after_threshold
 test_wedge_escalation_resets_when_pane_becomes_active
 test_nonterminal_stale_not_working_surfaced
 test_nonterminal_stale_paused_absorbed_then_resurfaced
+test_nonterminal_stale_paused_under_terminal_run_absorbed
+test_blocked_stale_surfaces_immediately_never_pause_absorbed
 test_nonterminal_stale_held_gate_absorbed_then_resurfaced
 test_unmarked_parked_gate_still_surfaces
 test_held_gate_marker_clears_before_stale

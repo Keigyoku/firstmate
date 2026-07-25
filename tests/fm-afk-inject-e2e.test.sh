@@ -69,6 +69,8 @@ LOG_FILE="$STATE_DIR/submitted.log"
 : > "$LOG_FILE"
 
 # Source the daemon to get FM_INJECT_MARK, afk_enter, afk_exit.
+export FM_WEDGE_ALARM_EXEC=discard
+export FM_WEDGE_ALARM_TEST_MODE=1
 # shellcheck source=bin/fm-supervise-daemon.sh
 . "$DAEMON"
 
@@ -160,6 +162,7 @@ start_daemon() {
   FM_STATE_OVERRIDE="$STATE_DIR" \
   FM_SUPERVISOR_TARGET="$SUPERVISOR_PANE" \
   FM_SUPERVISOR_BACKEND=tmux \
+  FM_INJECT_SELF_TEST=off \
   FM_ESCALATE_BATCH_SECS=0 \
   FM_HOUSEKEEPING_TICK=1 \
   FM_POLL=1 \

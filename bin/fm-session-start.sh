@@ -99,6 +99,8 @@ PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
+# shellcheck source=bin/fm-wake-lib.sh
+. "$SCRIPT_DIR/fm-wake-lib.sh"
 
 STATUS_TAIL=${FM_SESSION_START_STATUS_TAIL:-5}
 case "$STATUS_TAIL" in ''|*[!0-9]*) STATUS_TAIL=5 ;; esac
@@ -299,8 +301,36 @@ else
 fi
 
 # --- 4. supervision operating instructions ----------------------------------
+# Away-mode is healthy only when state/.afk, a ready marker, and a live supervise
+# daemon exist. The lock holder clears unhealthy away-mode and records the wedge.
+afk_daemon_is_live() {
+  local pid lock_pid
+  [ -e "$STATE/.supervise-daemon.ready" ] || return 1
+  [ -e "$STATE/.supervise-daemon.pid" ] || return 1
+  pid=$(cat "$STATE/.supervise-daemon.pid" 2>/dev/null || true)
+  lock_pid=$(fm_lock_identity_pid "$STATE/.supervise-daemon.lock" 2>/dev/null || true)
+  [ -n "$lock_pid" ] && [ "$lock_pid" = "$pid" ]
+}
 AFK_PRESENT=0
-[ -e "$STATE/.afk" ] && AFK_PRESENT=1
+AFK_DAEMON_DEAD=0
+AFK_DAEMON_DEAD_MUTATED=0
+if [ -e "$STATE/.afk" ]; then
+  if afk_daemon_is_live; then
+    AFK_PRESENT=1
+  else
+    AFK_DAEMON_DEAD=1
+    if [ "$READ_ONLY" -eq 0 ]; then
+      {
+        printf 'fm away-mode inject WEDGED as of %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')"
+        printf 'reason: AFK_DAEMON_DEAD detected at session-start (flag on, daemon not ready/live)\n'
+        printf 'Cleared state/.afk so away-mode does not look healthy without a ready supervisor.\n'
+        printf 'Re-run /afk (bin/fm-afk-start.sh) after fixing the launch path.\n'
+      } > "$STATE/.subsuper-inject-wedged" 2>/dev/null || true
+      rm -f "$STATE/.afk" 2>/dev/null || true
+      AFK_DAEMON_DEAD_MUTATED=1
+    fi
+  fi
+fi
 X_MODE_PRESENT=0
 [ -f "$CONFIG/x-mode.env" ] && X_MODE_PRESENT=1
 
@@ -378,10 +408,24 @@ done
 [ "$ORPHAN_STATUS_FOUND" -eq 1 ] || printf '(none)\n'
 
 subsection "AFK"
-if [ -e "$STATE/.afk" ]; then
-  printf 'present - away-mode supervision is active; the daemon owns the watcher.\n'
+if [ "${AFK_DAEMON_DEAD:-0}" -eq 1 ]; then
+  printf 'AFK_DAEMON_DEAD: state/.afk was set but the supervise daemon was NOT ready/live.\n'
+  if [ "${AFK_DAEMON_DEAD_MUTATED:-0}" -eq 1 ]; then
+    printf 'Cleared state/.afk (flag-on-daemon-dead is a silent hole). Re-run /afk to restart detached.\n'
+  else
+    printf 'INJECT_WEDGED_SUSPECTED: read-only session left state/.afk and wedge state unchanged for the fleet-lock holder.\n'
+  fi
+elif [ -e "$STATE/.afk" ]; then
+  printf 'present - away-mode supervision is active; the daemon owns the watcher (ready, pid live).\n'
 else
   printf 'absent\n'
+fi
+# Surface a durable injection failure automatically during session recovery.
+if [ -e "$STATE/.subsuper-inject-wedged" ]; then
+  printf '\nINJECT_WEDGED: away-mode inject channel is or was blocked - escalations may not have reached the primary.\n'
+  printf 'Marker: %s\n' "$STATE/.subsuper-inject-wedged"
+  sed -n '1,20p' "$STATE/.subsuper-inject-wedged" 2>/dev/null || true
+  printf 'Act: fix the supervisor pane / FM_SUPERVISOR_TARGET, drain buffered escalations, clear the marker only after delivery is proven.\n'
 fi
 
 # --- 7. closing reminder -----------------------------------------------

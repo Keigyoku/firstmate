@@ -185,6 +185,28 @@ fm_lock_link_owner() {
   esac
 }
 
+fm_lock_owner_path() {
+  local lockdir=$1
+  if [ -L "$lockdir" ]; then
+    fm_lock_link_owner "$lockdir"
+    return
+  fi
+  [ -d "$lockdir" ] || return 1
+  printf '%s\n' "$lockdir"
+}
+
+fm_lock_identity_pid() {
+  local lockdir=$1 owner pid identity current
+  owner=$(fm_lock_owner_path "$lockdir") || return 1
+  pid=$(cat "$owner/pid" 2>/dev/null || true)
+  fm_pid_alive "$pid" || return 1
+  identity=$(cat "$owner/pid-identity" 2>/dev/null || true)
+  [ -n "$identity" ] || return 1
+  current=$(fm_pid_identity "$pid") || return 1
+  [ "$current" = "$identity" ] || return 1
+  printf '%s\n' "$pid"
+}
+
 fm_lock_points_to_owner() {
   local lockdir=$1 ownerdir=$2 actual
   actual=$(readlink "$lockdir" 2>/dev/null) || return 1

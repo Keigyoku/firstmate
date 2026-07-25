@@ -1,7 +1,8 @@
 # Away-mode injection wedge alarm - active alert channels
 
-The away-mode sub-supervisor (`bin/fm-supervise-daemon.sh`) buffers escalations and injects them into firstmate's own pane.
-When injection cannot confirm a submit past `FM_MAX_DEFER_SECS` (the pane is genuinely busy or wedged, or its Enter is swallowed), `inject_wedge_alarm` raises a loud, rate-limited alarm so the stall never stays invisible.
+The away-mode sub-supervisor (`bin/fm-supervise-daemon.sh`) verifies its injection channel at activation, then buffers escalations and injects them into firstmate's own pane.
+An activation failure raises the alarm immediately and refuses silent away mode.
+When later injection cannot confirm a submit past `FM_MAX_DEFER_SECS` (the pane is genuinely busy or wedged, or its Enter is swallowed), `inject_wedge_alarm` raises the same alarm on a rate-limited cadence so the stall never stays invisible.
 
 ## Why an active channel beyond the status-line flash
 
@@ -40,9 +41,9 @@ See `docs/examples/wedge-alarm` for a copyable starting config.
 Every notifier channel (`osascript`, `herdr`, and `command:`) routes through a single seam, `FM_WEDGE_ALARM_EXEC`: when it is set, the daemon hands the fixed channel category and summary to that command instead of the real notifier (`wedge_alarm_emit` in `bin/fm-supervise-daemon.sh`).
 This makes it structurally impossible for a test to post a real desktop notification, and impossible for a future test author to forget to stub:
 
-- The daemon is only ever sourced (not executed) by tests - production `bin/fm-afk-start.sh` execs it.
-  Whenever the daemon is sourced, its library-mode guard defaults `FM_WEDGE_ALARM_EXEC` to `discard`, which fires nothing.
-  A real daemon a test later spawns inherits that default through the environment.
+- Tests that source the daemon use its library-mode guard, which defaults `FM_WEDGE_ALARM_EXEC` to `discard` and fires nothing.
+- Production `bin/fm-afk-start.sh` sources the daemon library with live alerts explicitly enabled, then starts a fresh daemon in a detached session and verifies it after the settle window.
+- A hermetic test that executes the daemon preserves `discard` only when it sets `FM_WEDGE_ALARM_TEST_MODE=1`.
 - `tests/wake-helpers.sh` upgrades the default to an on-disk recorder that logs `<channel>\t<summary>` to `$FM_WEDGE_ALARM_LOG`, so the daemon and wake suites can assert channel selection without any real notifier.
 - Production leaves `FM_WEDGE_ALARM_EXEC` unset, so the real channels fire.
 

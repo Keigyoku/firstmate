@@ -416,7 +416,7 @@ If `fm-guard.sh` surfaces `WATCHDOG HALTED - SUCCESSOR SPAWN FAILED`, inspect th
 The watcher classifies every wake in bash and absorbs the benign majority without waking you, but it never absorbs an unmarked crewmate that has stopped.
 The no-verb signal path is absorbed ONLY while that crewmate shows positive evidence it is still working: its no-mistakes run for its branch is in an actively-running step, or its pane shows the harness busy signature.
 For a fresh `stale` pane, the watcher checks the same positive evidence before trusting the status log.
-A crewmate that declares a deliberate external wait with a `paused:` status is the one other absorb case: its idle pane is expected, so the watcher absorbs it like a working crew but rechecks it only on the long `FM_PAUSE_RESURFACE_SECS` cadence (default 3600s).
+A crewmate that explicitly declares a deliberate external wait with `paused:` is the one other absorb case: its expected idle pane is absorbed and rechecked on the long pause cadence, with current-state precedence documented in [`docs/architecture.md`](docs/architecture.md#event-driven-supervision).
 A `heartbeat` with no captain-relevant change is likewise absorbed.
 Only an actionable wake is written to the durable queue at `state/.wake-queue` and ends the current supervision wait.
 The classifier lives in `bin/fm-classify-lib.sh` and is shared with the away-mode daemon.
