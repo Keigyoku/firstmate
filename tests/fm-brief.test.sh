@@ -403,8 +403,9 @@ test_role_rejected_for_secondmate_and_unknown() {
 # prose said to stack on an existing PR branch. Crews that obeyed the scaffold
 # opened task-named branches with no PR (e.g. #835 body-fix), and a later task-named
 # local branch could misdirect delivery after work started on the target branch
-# (composer-fix #836). The create-branch string must be ABSENT and the local branch
-# name must equal the target at setup and delivery.
+# (composer-fix #836). These assertions cover those branch-name failure classes,
+# not unrelated delivery failures: the create-branch string must be ABSENT and the
+# local branch name must equal the target at setup and delivery.
 test_fresh_branch_setup_creates_task_branch() {
   local home id brief
   home="$TMP_ROOT/fresh-branch-home"
