@@ -70,6 +70,7 @@ LOG_FILE="$STATE_DIR/submitted.log"
 
 # Source the daemon to get FM_INJECT_MARK, afk_enter, afk_exit.
 export FM_WEDGE_ALARM_EXEC=discard
+export FM_WEDGE_ALARM_TEST_MODE=1
 # shellcheck source=bin/fm-supervise-daemon.sh
 . "$DAEMON"
 

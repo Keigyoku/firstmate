@@ -1202,6 +1202,49 @@ test_inject_channel_self_test_leaves_buffer_for_daemon() {
   pass "inject_channel_self_test leaves buffered escalations and wedge evidence for the daemon"
 }
 
+test_direct_daemon_clears_discard_unless_test_mode() {
+  local dir state fakebin alarm alarm_log sent out status
+  dir=$(make_bordered_case direct-daemon-production-alert)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  alarm="$dir/alarm"; alarm_log="$dir/alarm.log"; sent="$dir/sent.log"
+  printf '│ > captain draft │\n' > "$dir/composer"
+  : > "$sent"
+  cat > "$alarm" <<'SH'
+#!/usr/bin/env bash
+printf 'fired\n' > "${FM_TEST_ALARM_LOG:?}"
+SH
+  chmod +x "$alarm"
+  afk_enter "$state"
+
+  out=$(PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" \
+    FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET=fakepane \
+    FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
+    FM_WEDGE_ALARM_EXEC=discard FM_WEDGE_ALARM_TEST_MODE=0 \
+    FM_WEDGE_ALARM_CHANNEL="command:$alarm" FM_TEST_ALARM_LOG="$alarm_log" \
+    "$DAEMON" 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "direct daemon accepted a pending startup composer: $out"
+  [ -s "$alarm_log" ] || fail "direct production daemon preserved the inherited discard suppressor"
+
+  dir=$(make_bordered_case direct-daemon-test-alert)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  alarm_log="$dir/alarm.log"; sent="$dir/sent.log"
+  printf '│ > captain draft │\n' > "$dir/composer"
+  : > "$sent"
+  afk_enter "$state"
+
+  out=$(PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" \
+    FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET=fakepane \
+    FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
+    FM_WEDGE_ALARM_EXEC=discard FM_WEDGE_ALARM_TEST_MODE=1 \
+    FM_WEDGE_ALARM_CHANNEL="command:$alarm" FM_TEST_ALARM_LOG="$alarm_log" \
+    "$DAEMON" 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "test-mode daemon accepted a pending startup composer: $out"
+  [ ! -e "$alarm_log" ] || fail "test-mode daemon ignored the explicit discard suppressor"
+  pass "direct daemon clears discard in production and preserves explicit test mode"
+}
+
 # Non-regression: a healthy empty channel still delivers a real escalation after
 # the self-test path exists - away-mode must not get quieter.
 test_escalate_flush_still_delivers_real_escalation_on_empty() {
@@ -1968,6 +2011,7 @@ test_submit_ack_reports_pending_on_persistent_swallow
 test_inject_channel_self_test_fails_loud_on_pending_composer
 test_inject_channel_self_test_succeeds_on_empty_and_delivers
 test_inject_channel_self_test_leaves_buffer_for_daemon
+test_direct_daemon_clears_discard_unless_test_mode
 test_escalate_flush_still_delivers_real_escalation_on_empty
 test_max_defer_empty_swallow_types_once_and_alarms
 test_max_defer_flushes_empty_idle_pane

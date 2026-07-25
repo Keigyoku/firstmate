@@ -120,6 +120,9 @@
 #                                   nothing. Unset in production. Sourced use
 #                                   defaults to "discard" unless
 #                                   FM_WEDGE_ALARM_ALLOW_LIVE=1.
+#          FM_WEDGE_ALARM_TEST_MODE Preserve an explicit "discard" notifier
+#                                   when the daemon is executed by a hermetic
+#                                   test (default 0).
 #          FM_WEDGE_ALARM_TIMEOUT_SECS seconds allowed for each notifier before
 #                                   its watchdog terminates it and continues to the
 #                                   next channel (default 10; invalid/zero uses the
@@ -1632,6 +1635,9 @@ fm_super_main() {
 
 # Run only when executed, not when sourced (tests source the classifiers).
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  if [ "${FM_WEDGE_ALARM_EXEC:-}" = discard ] && [ "${FM_WEDGE_ALARM_TEST_MODE:-0}" != 1 ]; then
+    unset FM_WEDGE_ALARM_EXEC
+  fi
   fm_super_main "$@"
 elif [ "${FM_WEDGE_ALARM_ALLOW_LIVE:-0}" != 1 ]; then
   : "${FM_WEDGE_ALARM_EXEC:=discard}"

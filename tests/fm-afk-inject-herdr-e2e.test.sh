@@ -69,6 +69,7 @@ fm_herdr_lab_prepare "$SESSION" || fail "could not prepare isolated Herdr lab se
 
 # --- source the daemon (for afk_enter/afk_exit/FM_INJECT_MARK) + the backend -
 export FM_WEDGE_ALARM_EXEC=discard
+export FM_WEDGE_ALARM_TEST_MODE=1
 # shellcheck source=bin/fm-supervise-daemon.sh
 . "$DAEMON"
 fm_backend_source herdr || fail "fm_backend_source herdr failed"
