@@ -91,6 +91,67 @@ test_afk_start_does_not_set_flag_when_startup_preflight_fails() {
   pass "fm-afk-start.sh leaves afk off when daemon startup preflight fails"
 }
 
+test_afk_start_live_daemon_probes_without_injecting() {
+  local dir state fakebin capture sent lock holder out status
+  dir=$(make_supercase afk-start-live-probe)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  capture="$dir/composer"; sent="$dir/sent.log"; lock="$state/.supervise-daemon.lock"
+  printf '│ > │\n' > "$capture"
+  : > "$sent"
+  mkdir -p "$lock"
+  bash -c 'sleep 30; :' fm-supervise-daemon.sh &
+  holder=$!
+  printf '%s\n' "$holder" > "$lock/pid"
+
+  out=$(PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" \
+    FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET=fakepane \
+    FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_SENT="$sent" \
+    "$AFK_START" 2>&1)
+  status=$?
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+
+  [ "$status" -eq 0 ] || fail "fm-afk-start.sh rejected an empty live-daemon composer: $out"
+  assert_contains "$out" "inject channel probe OK" "live-daemon refresh did not report a successful read-only probe"
+  [ ! -s "$sent" ] || fail "live-daemon refresh injected from a second process: $(cat "$sent")"
+  pass "fm-afk-start.sh probes a live daemon without injecting"
+}
+
+test_afk_start_live_probe_clears_inherited_discard_for_alarm() {
+  local dir state fakebin capture sent lock holder alarm alarm_log out status
+  dir=$(make_supercase afk-start-live-probe-alarm)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  capture="$dir/composer"; sent="$dir/sent.log"; lock="$state/.supervise-daemon.lock"
+  alarm="$dir/alarm"; alarm_log="$dir/alarm.log"
+  printf '│ > captain draft │\n' > "$capture"
+  : > "$sent"
+  cat > "$alarm" <<'SH'
+#!/usr/bin/env bash
+printf 'fired\n' > "${FM_TEST_ALARM_LOG:?}"
+SH
+  chmod +x "$alarm"
+  mkdir -p "$lock"
+  bash -c 'sleep 30; :' fm-supervise-daemon.sh &
+  holder=$!
+  printf '%s\n' "$holder" > "$lock/pid"
+
+  out=$(PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" \
+    FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET=fakepane \
+    FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_SENT="$sent" \
+    FM_WEDGE_ALARM_EXEC=discard FM_WEDGE_ALARM_CHANNEL="command:$alarm" \
+    FM_TEST_ALARM_LOG="$alarm_log" "$AFK_START" 2>&1)
+  status=$?
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+
+  [ "$status" -ne 0 ] || fail "fm-afk-start.sh accepted a pending live-daemon composer"
+  assert_contains "$out" "inject channel probe FAILED" "live-daemon probe failure was not surfaced"
+  [ -s "$state/.subsuper-inject-wedged" ] || fail "live-daemon probe failure did not write the wedge marker"
+  [ -s "$alarm_log" ] || fail "production launcher inherited the test-only discard suppressor"
+  [ ! -s "$sent" ] || fail "failed live-daemon probe typed into the pending composer"
+  pass "fm-afk-start.sh clears inherited discard and alarms on a failed live probe"
+}
+
 test_daemon_state_root_uses_fm_home() {
   local dir home override out
   dir=$(make_supercase daemon-fm-home)
@@ -1845,6 +1906,8 @@ test_afk_start_refuses_when_flag_cannot_be_written
 test_afk_start_ignores_stale_pidfile_without_lock
 test_afk_start_reclaims_stale_daemon_lock_reused_pid
 test_afk_start_does_not_set_flag_when_startup_preflight_fails
+test_afk_start_live_daemon_probes_without_injecting
+test_afk_start_live_probe_clears_inherited_discard_for_alarm
 test_daemon_state_root_uses_fm_home
 test_classify_routine_signal_self
 test_classify_terminal_signal_escalates

@@ -49,10 +49,10 @@
 #     writes state/.subsuper-inject-wedged and attempts a configurable active
 #     alert if submit still cannot be confirmed.
 #   - Startup inject self-test (inject_channel_self_test): when afk is on at
-#     daemon start (and on /afk refresh of a live daemon), prove the supervisor
-#     pane can accept a digest immediately. A permanently-pending composer or
-#     wrong auto-discovered target fails LOUD with the durable wedge marker
-#     instead of buffering for hours (2026-07-24 app-spawned Claude incident).
+#     daemon start, prove the supervisor pane can accept a digest immediately.
+#     A live-daemon /afk refresh uses inject_channel_probe without submitting.
+#     A permanently-pending composer or wrong auto-discovered target fails LOUD
+#     with the durable wedge marker instead of buffering for hours.
 #   - Cheap heartbeat catch-all: every HEARTBEAT_SCAN_SECS the daemon greps all
 #     state/*.status for a captain-relevant line the per-wake classifier might
 #     have missed (e.g. a status verb outside CAPTAIN_RE) and escalates it.
@@ -984,6 +984,30 @@ inject_channel_fail_loud() {  # <state> <reason>
   return 1
 }
 
+inject_channel_probe() {  # <state> <label>
+  local state=$1 label=${2:-self-test} target backend composer
+  target="${FM_SUPERVISOR_TARGET:-$FM_SUPERVISOR_TARGET_DEFAULT}"
+  backend="${FM_SUPERVISOR_BACKEND:-tmux}"
+  if ! afk_active "$state"; then
+    inject_channel_fail_loud "$state" "$label requires state/.afk (afk inactive)"
+    return 1
+  fi
+  if ! fm_backend_target_exists "$backend" "$target"; then
+    inject_channel_fail_loud "$state" "supervisor target '$target' does not resolve on backend=$backend"
+    return 1
+  fi
+  if pane_is_busy "$target" "$backend"; then
+    inject_channel_fail_loud "$state" "supervisor pane busy (agent mid-turn) at $label; refuse silent afk"
+    return 1
+  fi
+  composer=$(fm_backend_composer_state "$backend" "$target" 2>/dev/null || true)
+  if [ "$composer" != empty ]; then
+    inject_channel_fail_loud "$state" "supervisor composer not confirmed-empty at $label (state=${composer:-unknown}: pending input, dead-shell prompt, unreadable pane, or wrong target auto-discovery)"
+    return 1
+  fi
+  return 0
+}
+
 # Startup /afk self-test of the inject channel (task fm-afk-inject-wedge).
 # Proves the supervisor pane can accept a digest RIGHT NOW - the 2026-07-24
 # app-spawned Claude incident sat 33h with composer permanently "pending" and
@@ -994,27 +1018,11 @@ inject_channel_fail_loud() {  # <state> <reason>
 # test instead of being force-injected. Requires afk active (inject_msg presence
 # gate) and FM_SUPERVISOR_TARGET / FM_SUPERVISOR_BACKEND already resolved.
 inject_channel_self_test() {  # <state>
-  local state=$1 target backend composer
+  local state=$1 target backend
   state=${1:-$(_state_root)}
   target="${FM_SUPERVISOR_TARGET:-$FM_SUPERVISOR_TARGET_DEFAULT}"
   backend="${FM_SUPERVISOR_BACKEND:-tmux}"
-  if ! afk_active "$state"; then
-    inject_channel_fail_loud "$state" "self-test requires state/.afk (afk inactive)"
-    return 1
-  fi
-  if ! fm_backend_target_exists "$backend" "$target"; then
-    inject_channel_fail_loud "$state" "supervisor target '$target' does not resolve on backend=$backend"
-    return 1
-  fi
-  if pane_is_busy "$target" "$backend"; then
-    inject_channel_fail_loud "$state" "supervisor pane busy (agent mid-turn) at self-test; refuse silent afk"
-    return 1
-  fi
-  composer=$(fm_backend_composer_state "$backend" "$target" 2>/dev/null || true)
-  if [ "$composer" != empty ]; then
-    inject_channel_fail_loud "$state" "supervisor composer not confirmed-empty at self-test (state=${composer:-unknown}: pending input, dead-shell prompt, unreadable pane, or wrong target auto-discovery)"
-    return 1
-  fi
+  inject_channel_probe "$state" self-test || return 1
   # Real inject: proves submit + confirmation, not only the composer probe.
   if ! inject_msg "AFK inject channel self-test OK (ignore this digest; channel healthy)" "$state"; then
     inject_channel_fail_loud "$state" "self-test inject could not confirm submit (composer empty probe passed but Enter/submit failed)"

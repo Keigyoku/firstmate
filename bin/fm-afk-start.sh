@@ -35,6 +35,9 @@ mkdir -p "$STATE"
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+if [ "${FM_WEDGE_ALARM_EXEC:-}" = discard ]; then
+  unset FM_WEDGE_ALARM_EXEC
+fi
 # shellcheck source=bin/fm-supervise-daemon.sh
 load_daemon_library() {
   local FM_WEDGE_ALARM_ALLOW_LIVE=1
@@ -107,15 +110,14 @@ export FM_SUPERVISOR_TARGET
 
 pid=$(daemon_lock_pid 2>/dev/null || true)
 if daemon_lock_held_by_live_daemon; then
-  # Refresh afk, then re-prove the inject channel. A live daemon whose composer
-  # is permanently pending (the 2026-07-24 app-spawned Claude wedge) must not
-  # look healthy just because the process is still running.
+  # Refresh afk, then probe channel availability without writing from this
+  # process. The running daemon remains the sole injector.
   date '+%s' > "$STATE/.afk"
-  if ! inject_channel_self_test "$STATE"; then
-    echo "error: AFK inject channel self-test FAILED while daemon pid=$pid is live - do not trust away-mode until the channel is fixed (see state/.subsuper-inject-wedged)" >&2
+  if ! inject_channel_probe "$STATE" "live-daemon probe"; then
+    echo "error: AFK inject channel probe FAILED while daemon pid=$pid is live - do not trust away-mode until the channel is fixed (see state/.subsuper-inject-wedged)" >&2
     exit 1
   fi
-  echo "afk: daemon already running pid=$pid; inject channel self-test OK"
+  echo "afk: daemon already running pid=$pid; inject channel probe OK"
   exit 0
 fi
 
