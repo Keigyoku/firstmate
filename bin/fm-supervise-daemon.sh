@@ -88,6 +88,11 @@
 #                                   disables. Use sparingly: it overrides the
 #                                   captain-relevant escalation for matching
 #                                   kinds.
+#          FM_INJECT_SELF_TEST      startup channel check while afk is active:
+#                                   full submits a test digest (production
+#                                   default), probe verifies an empty composer
+#                                   without typing, off skips the check (hermetic
+#                                   tests that own the pane sequence only).
 #          FM_STALE_ESCALATE_SECS   idle seconds before a stale pane escalates
 #                                   as a possible wedge (default 240)
 #          FM_PAUSE_RESURFACE_SECS  idle seconds before a deliberate hold
@@ -1511,7 +1516,18 @@ fm_super_main() {
   # (daemon started without the flag), skip - inject_msg is presence-gated and
   # there is no captain-consented away mode to protect yet.
   if afk_active "$STATE"; then
-    if ! inject_channel_self_test "$STATE"; then
+    local inject_self_test=${FM_INJECT_SELF_TEST:-full}
+    local inject_self_test_ok=0
+    case "$inject_self_test" in
+      full) inject_channel_self_test "$STATE" || inject_self_test_ok=$? ;;
+      probe) inject_channel_probe "$STATE" startup-probe || inject_self_test_ok=$? ;;
+      off) ;;
+      *)
+        echo "error: invalid FM_INJECT_SELF_TEST='$inject_self_test' (expected full, probe, or off)" >&2
+        inject_self_test_ok=1
+        ;;
+    esac
+    if [ "$inject_self_test_ok" -ne 0 ]; then
       log "startup failed: inject channel self-test WEDGED (target=$TARGET backend=$BACKEND source=$target_source)"
       echo "error: AFK inject channel self-test FAILED - refusing to run silent away-mode (target=$TARGET backend=$BACKEND source=$target_source); fix the supervisor pane or set FM_SUPERVISOR_TARGET, then re-run /afk" >&2
       rm -f "$STATE/.afk" 2>/dev/null || true
