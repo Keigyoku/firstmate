@@ -497,8 +497,11 @@ test_on_branch_shell_quotes_command_values() {
   home="$TMP_ROOT/on-branch-quoting-home"
   mkdir -p "$home/data"
   id="brief-on-branch-q1"
+  # shellcheck disable=SC2016 # Literal expansion syntax is the injection payload.
   branch='fm/review-$x;`touch-pwn`'
+  # shellcheck disable=SC2016 # Literal expansion syntax is the injection payload.
   pr_url='https://example.invalid/pull/42?x=$y;`touch-pwn`'
+  # shellcheck disable=SC2016 # Literal expansion syntax is the injection payload.
   expect_head='abc123$z;`touch-pwn`'
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj \
     --on-branch "$branch" --pr "$pr_url" --expect-head "$expect_head" >/dev/null 2>&1
