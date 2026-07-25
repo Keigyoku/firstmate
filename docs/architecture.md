@@ -27,11 +27,11 @@ After raw queue consumption commits, the drain also prints bounded best-effort a
 Routine watcher polling, supervision no-ops, elapsed waiting time, and absorbed benign wakes stay silent.
 Each deliberate hold trades that silence for one bounded recheck per pause window, so a forgotten wait or decision cannot remain invisible indefinitely.
 Crew status files are append-only wake-event logs, not current-state fields.
-`bin/fm-crew-state.sh <id>` is the cheap current-state read for an actionable heartbeat review: it attributes the matching no-mistakes run, active or terminal, to the crew's own branch and keeps that run-step authoritative even if the pane has closed.
+`bin/fm-crew-state.sh <id>` is the cheap current-state read for an actionable heartbeat review: it attributes the matching no-mistakes run to the crew's own branch and keeps an active working or parked run-step authoritative even if the pane has closed.
 During no-mistakes' `ci` monitor phase, it also reads the ci step log tail because `axi status` reports both "still waiting on checks" and "checks green, waiting on merge" as `ci,running`.
 The most recent recognized ci log marker wins, so checks-green monitoring reports done while a later re-arm, failed-check, or issue marker returns the crew to working.
 Only when no matching run exists does it fall back to the pane busy-signature and then the status log; a dead pane without a run reports unknown instead of trusting a stale log.
-In that status-log fallback, a declared external wait reports the distinct `paused` state with its reason.
+An explicit last-line `paused:` declaration also overrides a terminal run-step and reports the distinct `paused` state with its reason.
 For herdr, that pane fallback trusts a native `busy` verdict outright, but corroborates native `idle` or unknown verdicts against the rendered busy signature before deciding the crew is not working.
 For whole-fleet read-only review, `bin/fm-fleet-snapshot.sh --json` emits schema `fm-fleet-snapshot.v1` from the backlog, task metadata, current crew state, endpoint probes, PR/report pointers, scout reports, and secondmate return-channel guidance.
 `bin/fm-fleet-view.sh` renders that snapshot as Markdown for humans, so bearings and manual fleet reviews consume one structured contract instead of reparsing raw fleet files.
@@ -58,7 +58,8 @@ It leads with prominent bordered banners for the tangle and no-watcher cases so 
 On every verified primary harness, tracked hook integration gives the primary session a push-based backstop: when work is in flight and no identity-matched watcher lock with a fresh beacon is live, or when queued wakes are already pending, direct Stop hooks block and passive turn-end hooks force one bounded follow-up.
 The guard covers the main primary and genuinely marked secondmate homes, exempts child crewmate/scout worktrees, is loop-safe per harness, writes a size-capped diagnostic for each warning decision, and is documented in [turnend-guard.md](turnend-guard.md).
 
-A presence-gated sub-supervisor (`bin/fm-supervise-daemon.sh`) extends this for walk-away supervision: the `/afk` skill starts it through the tracked foreground helper `bin/fm-afk-start.sh`, after which the watcher reverts to daemon-managed one-shot mode and the daemon self-handles routine wakes in bash.
+A presence-gated sub-supervisor (`bin/fm-supervise-daemon.sh`) extends this for walk-away supervision: the `/afk` skill starts it through the tracked foreground helper `bin/fm-afk-start.sh`, which refuses to report healthy away mode unless the injection channel passes its activation check.
+After successful activation, the watcher reverts to daemon-managed one-shot mode and the daemon self-handles routine wakes in bash.
 The watcher and daemon share `bin/fm-classify-lib.sh` for captain-relevant status verbs, declared-external-wait vocabulary, and status-scan primitives.
 The always-on watcher also uses that library's absorb classification on no-verb signals and first-sighting stale panes before status-log terminality is trusted, while the daemon maintains distinct wedge and deliberate-hold recheck cadences.
 The daemon escalates captain-relevant events, plus a bounded recheck for a deliberate hold that remains idle, as one batched, single-line digest prefixed with an in-band sentinel marker so firstmate can tell daemon injections apart from real messages.
@@ -67,7 +68,7 @@ Pane existence, busy checks, composer checks, capture, and verified submit route
 Composer-content classification has one shared owner, `bin/fm-composer-lib.sh`, used by tmux, herdr, Orca, and cmux after each adapter performs its own capture and composer-row recognition.
 The daemon injects only into an affirmatively `empty` composer, so both `pending` and `unknown` defer and a bare dead-shell prompt cannot receive an escalation; the complete policy is in [Composer-emptiness safety](herdr-backend.md#composer-emptiness-safety-2026-07-10-fleet-wide-across-all-four-backends).
 Unsupported supervisor backends refuse at daemon startup.
-Stalled escalation delivery writes `state/.subsuper-inject-wedged` and attempts a configured backend-independent active alert after `FM_MAX_DEFER_SECS` instead of silently deferring forever.
+An activation-check failure or stalled escalation delivery writes `state/.subsuper-inject-wedged` and attempts a configured backend-independent active alert instead of silently deferring forever.
 `fm-send.sh` selects a pre-Enter popup-settle for slash commands and for codex `$...` skill invocations using metadata-routed target `harness=` values, then adds its own `FM_SEND_SETTLE` pause after successful text sends so immediate peeks catch the receiving turn starting; the sub-supervisor uses only the shared submit core and does not pay that post-submit pause.
 
 ## Runtime session backends

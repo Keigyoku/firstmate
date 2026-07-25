@@ -1016,12 +1016,10 @@ inject_channel_probe() {  # <state> <label>
   return 0
 }
 
-# Startup /afk self-test of the inject channel (task fm-afk-inject-wedge).
-# Proves the supervisor pane can accept a digest RIGHT NOW - the 2026-07-24
-# app-spawned Claude incident sat 33h with composer permanently "pending" and
-# only a passive marker (cleared before catch-up) as the signal. Returns 0 when
-# a real self-test inject confirms submit; on any failure writes the durable
-# wedge marker, fires the active alert, prints LOUD to stderr, and returns 1.
+# Startup /afk self-test of the inject channel.
+# Returns 0 only after a real self-test injection confirms submit.
+# On failure it writes the durable wedge marker, fires the active alert, prints
+# loudly on stderr, and returns 1.
 # Does NOT weaken the composer guard: a non-empty/unknown/busy target fails the
 # test instead of being force-injected. Requires afk active (inject_msg presence
 # gate) and FM_SUPERVISOR_TARGET / FM_SUPERVISOR_BACKEND already resolved.
@@ -1509,12 +1507,8 @@ fm_super_main() {
   log "daemon starting (pid $$); target=$TARGET; target_source=$target_source; backend=$BACKEND; backend_source=$backend_source; afk=$afk_status; inject_skip='${FM_INJECT_SKIP:-$INJECT_SKIP_DEFAULT}'; stale_escalate=${FM_STALE_ESCALATE_SECS:-$STALE_ESCALATE_SECS_DEFAULT}s; batch=${FM_ESCALATE_BATCH_SECS:-$ESCALATE_BATCH_SECS_DEFAULT}s"
   migrate_watcher_pause_markers "$STATE"
 
-  # Startup inject-channel self-test (fm-afk-inject-wedge). When afk is already
-  # on (the normal /afk path sets state/.afk before exec), prove the channel can
-  # accept a digest immediately so a permanently-pending composer or wrong target
-  # fails LOUD at activation instead of buffering for a day. When afk is off
-  # (daemon started without the flag), skip - inject_msg is presence-gated and
-  # there is no captain-consented away mode to protect yet.
+  # Verify the injection channel immediately when /afk has already set its flag.
+  # Skip the presence-gated check when the daemon starts outside away mode.
   if afk_active "$STATE"; then
     local inject_self_test=${FM_INJECT_SELF_TEST:-full}
     local inject_self_test_ok=0

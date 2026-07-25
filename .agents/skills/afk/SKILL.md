@@ -23,34 +23,32 @@ batched digest rather than per-wake injections.
    This file survives a firstmate restart: recovery re-enters afk if the
    flag is present.
 
-2. **Ensure the sub-supervisor daemon is running.** Start the helper as its own
-   tracked background terminal/session:
+2. **Ensure the sub-supervisor daemon is running.**
+   Start the helper as its own tracked background terminal/session:
    ```sh
    bin/fm-afk-start.sh
    ```
-   The helper sets or refreshes `state/.afk`, exits immediately if the identity-backed daemon lock already names a live process, and otherwise execs `bin/fm-supervise-daemon.sh` in the foreground.
+   The helper sets or refreshes `state/.afk`.
+   It probes the injection channel when an identity-backed daemon is already live, and otherwise execs `bin/fm-supervise-daemon.sh` in the foreground for its startup self-test.
    Do not wrap this in `nohup ... &`.
-   Codex/herdr can reap fire-and-forget shell children after a tool call
-   returns; a tracked background terminal/session keeps the daemon attached to
-   the harness lifecycle and survived the real incident reproduction.
-   The daemon is **presence-gated**: it injects escalations only while
-   `state/.afk` exists, and stays quiet otherwise.
+   Codex/herdr can reap fire-and-forget shell children after a tool call returns.
+   A tracked background terminal/session keeps the daemon attached to the harness lifecycle.
+   The daemon is **presence-gated**: it injects escalations only while `state/.afk` exists, and stays quiet otherwise.
 
-3. **Inject-channel self-test at activation (fail loud).**
-   `fm-afk-start.sh` and daemon startup run `inject_channel_self_test`: probe the
-   supervisor target, require an affirmatively empty composer, and inject a one-line
-   self-test digest. On failure they write `state/.subsuper-inject-wedged`, fire the
-   active wedge alert, print ERROR on stderr, and refuse silent away-mode (exit
-   non-zero / clear `.afk` on fresh start). Do **not** tell the captain away-mode is
-   healthy if that self-test failed - a wedged channel must be fixed before walking
-   away. `bin/fm-session-start.sh` also prints any durable inject-wedged marker in
-   the fleet digest so recovery cannot depend on a human habit of checking the file.
+3. **Require successful inject-channel verification at activation.**
+   A fresh daemon start requires an idle target with an affirmatively empty composer and submits a one-line self-test digest.
+   Refreshing an existing daemon performs the same availability probe without submitting from a second process.
+   Neither path weakens the composer guard.
+   On failure, the helper reports an error, writes `state/.subsuper-inject-wedged`, fires the active wedge alert, and refuses to report healthy away mode.
+   A failed fresh start also clears `state/.afk`.
+   Do not tell the captain away mode is healthy until the helper reports success.
+   `bin/fm-session-start.sh` surfaces any durable inject-wedged marker during recovery.
+   The script headers own the exact probe, submit, and failure mechanics.
 
 4. **Do not separately arm `fm-watch.sh`.** The daemon manages the watcher as
    its child; the singleton lock no-ops a stray arm harmlessly.
 
-5. **Acknowledge** to the captain that away-mode is active **only after** the
-   helper reported success (including inject self-test OK).
+5. **Acknowledge** to the captain that away-mode is active **only after** the helper reports successful channel verification.
    The daemon will self-handle routine wakes, escalate captain-relevant events and bounded declared-external-wait rechecks, and let the captain exit by sending any real message.
 
 ## How to exit afk
