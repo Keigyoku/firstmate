@@ -255,8 +255,9 @@ afk_active() {  # <state>
 }
 
 # afk_enter / afk_exit: write/clear the away-mode flag. Called by the /afk
-# skill (enter) and by firstmate on user return (exit). Durable: a plain file,
-# so recovery (§5) re-enters afk if it is present after a restart.
+# skill (enter) and by firstmate on user return (exit). The flag survives a
+# restart, but session start accepts it only with a live identity-backed daemon;
+# otherwise it clears the flag and records a durable wedge alarm.
 afk_enter() {  # <state>
   mkdir -p "$1"
   date '+%s' > "$1/$AFK_FLAG_NAME"

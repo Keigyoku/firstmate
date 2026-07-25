@@ -20,8 +20,8 @@ batched digest rather than per-wake injections.
    ```sh
    date '+%s' > state/.afk
    ```
-   This file survives a firstmate restart: recovery re-enters afk if the
-   flag is present.
+   This file survives a firstmate restart, but recovery treats it as healthy only while the identity-backed daemon is live.
+   If the flag remains after the daemon dies, session start clears it and raises the durable wedge alarm.
 
 2. **Ensure the sub-supervisor daemon is running.**
    ```sh
@@ -29,20 +29,20 @@ batched digest rather than per-wake injections.
    ```
    The helper sets or refreshes `state/.afk`.
    If an identity-backed daemon is already live it probes the inject channel (no second-process inject).
-   Otherwise it starts `bin/fm-supervise-daemon.sh` **detached** in a new session, using `setsid` or a portable Python/Perl fallback, so a reaped harness background task cannot take the daemon with it (2026-07-25: foreground exec died with the tracked task while `.afk` stayed set - silent hole).
-   The parent waits for the pid file, settles `FM_AFK_START_SETTLE_SECS` (default 3s), and fails LOUD if the daemon is already dead (start-then-die).
-   `FM_AFK_START_FOREGROUND=1` restores legacy exec for hermetic e2es that own the process.
+   Otherwise it starts `bin/fm-supervise-daemon.sh` **detached** in a new session, then waits through a settle window and fails LOUD if the daemon is already dead.
+   `bin/fm-afk-start.sh --help` owns the detachment fallbacks, settle override, and foreground test override.
    The daemon is **presence-gated**: it injects only while `state/.afk` exists.
 
 3. **Require successful inject-channel verification at activation.**
-   A fresh daemon start requires an idle, non-busy target with an affirmatively empty composer and submits a one-line self-test digest (`FM_INJECT_SELF_TEST=full` default).
-   Continuous supervisor busy (primary mid-turn) fails activation — go idle before `/afk`.
-   Mid-afk continuous busy correctly defers inject; after `FM_MAX_DEFER_SECS` the wedge alarm fires (not silent forever).
+   By default, a fresh daemon start requires an idle, non-busy target with an affirmatively empty composer and submits a one-line self-test digest.
+   Continuous supervisor busy (primary mid-turn) fails activation - go idle before `/afk`.
+   After activation, the busy and composer guards follow the bounded max-defer contract below.
    On failure: write `state/.subsuper-inject-wedged`, fire the active alert, refuse healthy away-mode, clear `.afk` on fresh start.
    Do not tell the captain away mode is healthy until the helper reports success.
 
 4. **Flag-on-daemon-dead is automatic.**
-   `bin/fm-session-start.sh` detects `.afk` with no live daemon, prints `AFK_DAEMON_DEAD`, clears `.afk`, and writes the durable wedge marker.
+   A lock-owning `bin/fm-session-start.sh` detects `.afk` with no live daemon, prints `AFK_DAEMON_DEAD`, clears `.afk`, and writes the durable wedge marker.
+   A read-only session reports the suspected wedge without changing the fleet-lock holder's state.
    Never treat flag-only as healthy away-mode.
 
 5. **Do not separately arm `fm-watch.sh`.** The daemon manages the watcher as
