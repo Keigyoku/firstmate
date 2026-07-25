@@ -29,9 +29,7 @@ fi
 # inherits the path and records too). It logs "<channel>\t<summary>" to
 # $FM_WEDGE_ALARM_LOG, which a test sets to its own file to assert on; unset means
 # /dev/null. FM_WEDGE_ALARM_FAIL=<channel> makes the recorder exit non-zero for
-# that channel, to exercise graceful degradation. Suites that do not source this
-# harness still cannot fire a real notification: the daemon defaults the seam to
-# "discard" whenever it is sourced (its library-mode guard).
+# that channel, to exercise graceful degradation.
 # Create the recorder dir with mktemp directly (not fm_test_tmproot, whose
 # first call installs an EXIT trap that, invoked inside a command-substitution
 # subshell, would delete the dir on subshell exit). Register it for the same
