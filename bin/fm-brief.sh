@@ -171,6 +171,18 @@ if [ -n "$EXPECT_HEAD" ] && [ -z "$ON_BRANCH" ]; then
   exit 1
 fi
 
+MODE=
+if [ "$KIND" = ship ]; then
+  REPO=${POS[1]}
+  read -r MODE _ <<EOF
+$("$FM_ROOT/bin/fm-project-mode.sh" "$REPO")
+EOF
+  if [ "$MODE" = local-only ] && [ -n "$PR_REF" ]; then
+    echo "error: --pr is not valid for local-only projects" >&2
+    exit 1
+  fi
+fi
+
 BRIEF="$DATA/$ID/brief.md"
 [ -e "$BRIEF" ] && { echo "error: $BRIEF already exists" >&2; exit 1; }
 mkdir -p "$DATA/$ID"
@@ -354,9 +366,6 @@ fi
 
 # Ship task: shape Setup / Rule 1 / Definition of done by the project's delivery mode.
 # yolo does not affect the brief (it governs firstmate's approval behaviour), so discard it.
-read -r MODE _ <<EOF
-$("$FM_ROOT/bin/fm-project-mode.sh" "$REPO")
-EOF
 
 # Fleet TDD contract (one owner of the full text).
 # Source: vellum-tdd-adoption-scout report sec 6.1-6.2 + captain locks A1 (2026-07-20).
@@ -552,14 +561,29 @@ esac
 # emit a create-branch instruction (git checkout -b / "create your branch").
 SETUP_STEP=1
 if [ -n "$ON_BRANCH" ]; then
+  ON_BRANCH_Q=$(shell_quote "$ON_BRANCH")
+  ON_LOCAL_REF_Q=$(shell_quote "refs/heads/$ON_BRANCH")
+  ON_REMOTE_REF_Q=$(shell_quote "origin/$ON_BRANCH")
+  ON_REMOTE_TRACKING_REF_Q=$(shell_quote "refs/remotes/origin/$ON_BRANCH")
+  ON_REMOTE_HEAD_REF_Q=$(shell_quote "refs/heads/$ON_BRANCH")
+  ON_FETCH_REFSPEC_Q=$(shell_quote "+refs/heads/$ON_BRANCH:refs/remotes/origin/$ON_BRANCH")
   SETUP_INTRO="You are in a disposable git worktree of $REPO. This task continues existing branch \`$ON_BRANCH\`; do not create a new branch."
-  SETUP_STEPS="${SETUP_STEP}. First action: fetch and check out the existing branch \`$ON_BRANCH\` (do NOT create a new branch):
-   \`git fetch origin $ON_BRANCH && git checkout -B $ON_BRANCH origin/$ON_BRANCH\`
-   Confirm \`git rev-parse --abbrev-ref HEAD\` equals \`$ON_BRANCH\`. If not, append \`blocked: wrong branch, expected $ON_BRANCH got <actual>\` and stop."
+  if [ "$MODE" = local-only ]; then
+    SETUP_STEPS="${SETUP_STEP}. First action: check out the existing local branch \`$ON_BRANCH\` (do NOT create a new branch):
+   Run \`git switch -- $ON_BRANCH_Q\`.
+   Confirm \`git rev-parse --abbrev-ref HEAD\` equals \`$ON_BRANCH\`. If not, append \`blocked: wrong branch, expected $ON_BRANCH_Q got <actual>\` and stop."
+  else
+    SETUP_STEPS="${SETUP_STEP}. First action: fetch and check out the existing branch \`$ON_BRANCH\` (do NOT create a new branch):
+   Run \`git fetch origin $ON_FETCH_REFSPEC_Q\`.
+   If \`git show-ref --verify --quiet $ON_LOCAL_REF_Q\` succeeds, run \`git switch -- $ON_BRANCH_Q\`; otherwise run \`git switch --track -- $ON_REMOTE_REF_Q\`.
+   Confirm \`git rev-parse --abbrev-ref HEAD\` equals \`$ON_BRANCH\`. If not, append \`blocked: wrong branch, expected $ON_BRANCH_Q got <actual>\` and stop.
+   Then \`test \"\$(git rev-parse HEAD)\" = \"\$(git rev-parse $ON_REMOTE_TRACKING_REF_Q)\"\` must succeed. If it does not, append \`blocked: local branch $ON_BRANCH_Q differs from origin before work starts\` and stop. Do not reset either ref."
+  fi
   SETUP_STEP=$((SETUP_STEP + 1))
   if [ -n "$EXPECT_HEAD" ]; then
+    EXPECT_HEAD_Q=$(shell_quote "$EXPECT_HEAD")
     SETUP_STEPS="$SETUP_STEPS
-${SETUP_STEP}. Assert the expected head: \`git rev-parse HEAD\` must equal or start with \`$EXPECT_HEAD\`. If it does not, append \`blocked: unexpected HEAD, expected $EXPECT_HEAD got <actual-sha>\` and stop. Do not reset the branch to force a match - report the actual sha and stop."
+${SETUP_STEP}. Assert the expected head: \`case \"\$(git rev-parse HEAD)\" in $EXPECT_HEAD_Q*) true ;; *) false ;; esac\` must succeed. If it does not, append \`blocked: unexpected HEAD, expected $EXPECT_HEAD_Q got <actual-sha>\` and stop. Do not reset the branch to force a match - report the actual sha and stop."
     SETUP_STEP=$((SETUP_STEP + 1))
   fi
   if [ -n "$PR_REF" ]; then
@@ -568,13 +592,16 @@ ${SETUP_STEP}. Assert the expected head: \`git rev-parse HEAD\` must equal or st
       ''|*[!0-9]*) PR_DISPLAY=$PR_REF ;;
       *) PR_DISPLAY="PR #$PR_REF" ;;
     esac
+    PR_DISPLAY_Q=$(shell_quote "$PR_DISPLAY")
     SETUP_STEPS="$SETUP_STEPS
-${SETUP_STEP}. PR association (authoritative): this work updates $PR_DISPLAY. Pushing \`$ON_BRANCH\` updates that PR in place. Do not open a new PR. If the delivery gate claims no PR exists for this branch, append \`blocked: gate claims no PR for $ON_BRANCH (expected $PR_DISPLAY)\` and stop - do not open a replacement PR."
+${SETUP_STEP}. PR association (authoritative): this work updates $PR_DISPLAY. Pushing \`$ON_BRANCH\` updates that PR in place. Do not open a new PR. If the delivery gate claims no PR exists for this branch, append \`blocked: gate claims no PR for $ON_BRANCH_Q (expected $PR_DISPLAY_Q)\` and stop - do not open a replacement PR."
     SETUP_STEP=$((SETUP_STEP + 1))
   fi
-  SETUP_STEPS="$SETUP_STEPS
-${SETUP_STEP}. Branch custody: Never force-push. Never reset (hard or mixed) this shared branch to discard history. If a push is refused because a stale pipeline holds custody, abort that stale run by id from the PR body (\`no-mistakes axi abort --run <id>\`), then push again. After every successful push, confirm the remote tip with \`git ls-remote origin refs/heads/$ON_BRANCH\` and ensure it matches your local HEAD. If you still cannot push without force, append \`needs-decision:\` or \`blocked:\` and stop."
-  SETUP_STEP=$((SETUP_STEP + 1))
+  if [ "$MODE" != local-only ]; then
+    SETUP_STEPS="$SETUP_STEPS
+${SETUP_STEP}. Branch custody: Never force-push. Never reset (hard or mixed) this shared branch to discard history. If a push is refused because a stale pipeline holds custody, abort that stale run by id from the PR body (\`no-mistakes axi abort --run <id>\`), then push again. After every successful push, confirm the remote tip with \`git ls-remote origin $ON_REMOTE_HEAD_REF_Q\` and ensure it matches your local HEAD. If you still cannot push without force, append \`needs-decision:\` or \`blocked:\` and stop."
+    SETUP_STEP=$((SETUP_STEP + 1))
+  fi
 else
   SETUP_INTRO="You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch."
   SETUP_STEPS="${SETUP_STEP}. First action: create your branch: \`git checkout -b fm/$ID\`"
