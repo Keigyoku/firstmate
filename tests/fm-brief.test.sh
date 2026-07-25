@@ -429,7 +429,7 @@ test_on_branch_setup_checks_out_existing_without_create() {
   mkdir -p "$home/data"
   id="brief-on-branch-o1"
   branch="fm/vellum-voice-e2e-g7"
-  pr_url="https://github.com/Keigyoku/vellum-app/pull/830"
+  pr_url="https://github.com/example/vellum-app/pull/830"
   expect_head="81fae0b6abc123"
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj \
     --on-branch "$branch" --pr "$pr_url" --expect-head "$expect_head" >/dev/null 2>&1
