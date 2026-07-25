@@ -475,6 +475,48 @@ EOF
   pass "ci-monitoring run with checks already green surfaces done"
 }
 
+# A crew that finished validation (ci-monitor checks green / terminal done) and
+# then declared paused: is deliberately waiting on something outside the run
+# (smoke, review round, captain merge). The declared pause outranks the terminal
+# run-step so supervisors absorb on the long pause cadence instead of thrashing
+# stale wakes. An active working or parked run still outranks a stale paused line.
+test_declared_pause_outranks_terminal_ci_monitor() {
+  reset_fakes
+  local d; d=$(new_case pause-over-ci-green)
+  make_repo_on_branch "$d/wt" fm/feat-pause-ci
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-pause-ci.meta" "window=fm:fm-feat-pause-ci" "worktree=$d/wt" "kind=ship"
+  printf 'paused: PR 792 green, awaiting smoke r4 verdict\n' > "$d/state/feat-pause-ci.status"
+  FM_FAKE_AXI_STATUS="$(run_ci_monitoring fm/feat-pause-ci)"
+  FM_FAKE_CI_LOGS=$(cat <<'EOF'
+CI checks running, waiting for results...
+all CI checks passed - still monitoring until merged or closed
+EOF
+)
+  local out; out=$(run_crew_state "$d" feat-pause-ci)
+  assert_contains "$out" "state: paused" "declared pause under green ci-monitor -> paused"
+  assert_contains "$out" "source: status-log" "declared pause is status-log sourced"
+  assert_contains "$out" "awaiting smoke r4 verdict" "pause reason is preserved"
+  assert_not_contains "$out" "state: done" "terminal run must not mask declared pause"
+  pass "declared pause outranks terminal/green ci-monitor run-step"
+}
+
+test_active_run_outranks_stale_paused_status() {
+  reset_fakes
+  local d; d=$(new_case active-over-pause)
+  make_repo_on_branch "$d/wt" fm/feat-active-pause
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-active-pause.meta" "window=fm:fm-feat-active-pause" "worktree=$d/wt" "kind=ship"
+  printf 'paused: holding for upstream\n' > "$d/state/feat-active-pause.status"
+  FM_FAKE_AXI_STATUS="$(run_running fm/feat-active-pause)"
+  FM_FAKE_BUSY=0
+  local out; out=$(run_crew_state "$d" feat-active-pause)
+  assert_contains "$out" "state: working" "active run outranks stale paused status"
+  assert_contains "$out" "source: run-step" "active run remains run-step sourced"
+  assert_not_contains "$out" "state: paused" "stale paused must not mask active run"
+  pass "active working run-step outranks a stale paused: status line"
+}
+
 test_top_level_ci_checks_green_surfaces_done() {
   reset_fakes
   local d; d=$(new_case top-level-ci-green)
@@ -1097,6 +1139,8 @@ test_scalar_gate_parked_not_superseded
 test_gate_block_parked_not_superseded
 test_ci_ready_done_log_beats_monitoring_run
 test_ci_monitoring_checks_green_surfaces_done
+test_declared_pause_outranks_terminal_ci_monitor
+test_active_run_outranks_stale_paused_status
 test_top_level_ci_checks_green_surfaces_done
 test_ci_monitoring_no_checks_terminal_surfaces_done
 test_ci_monitoring_green_then_rearm_stays_working

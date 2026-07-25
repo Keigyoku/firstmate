@@ -260,6 +260,37 @@ test_pause_verb_override_renders_all_brief_scaffolds() {
   pass "fm-brief.sh: custom pause verb renders in every scaffold"
 }
 
+# Crew-side half of the paused-absorb contract: when firstmate tells a crew to
+# wait/stand by/hold/park, the scaffold must say append paused: then idle - so the
+# watcher has an explicit status line to key on (never silent idle alone).
+test_briefs_instruct_wait_status_contract() {
+  local home kind id brief
+  home="$TMP_ROOT/wait-status-contract-home"
+  mkdir -p "$home/data"
+
+  for kind in ship scout secondmate; do
+    id="brief-wait-contract-$kind"
+    case "$kind" in
+      ship)
+        FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate >/dev/null 2>&1
+        ;;
+      scout)
+        FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --scout >/dev/null 2>&1
+        ;;
+      secondmate)
+        FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" --secondmate --no-projects >/dev/null 2>&1
+        ;;
+    esac
+    brief="$home/data/$id/brief.md"
+    assert_grep 'wait, stand by, hold, or park' "$brief" \
+      "$kind brief missing wait/stand-by/hold/park instruction"
+    # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
+    assert_grep 'paused: {what you are waiting for}' "$brief" \
+      "$kind brief missing explicit paused-what-waiting-for contract line"
+  done
+  pass "fm-brief.sh: wait-status contract present in every scaffold"
+}
+
 # Fleet TDD contract (vellum-tdd-adoption-scout report sec 6.1-6.2, captain locks
 # A1 + F1-F4): every ship-mode brief carries the Test-first DoD; scouts stay
 # report-only. Also absorbs fm-brief-closes-issue: ship briefs instruct Closes #N.
@@ -377,6 +408,7 @@ test_herdr_lab_omission_is_loud_for_ship_and_scout
 test_herdr_lab_contract_applies_to_scouts_but_not_secondmates
 test_secondmate_no_projects_charter
 test_pause_verb_override_renders_all_brief_scaffolds
+test_briefs_instruct_wait_status_contract
 test_ship_briefs_emit_tdd_contract
 test_scout_brief_has_no_tdd_contract
 test_role_line_on_ship_and_scout

@@ -27,7 +27,10 @@
 #      the active step is ci, `axi status` alone cannot tell "still waiting on
 #      checks" from "checks green, waiting on merge" (see nm_ci_checks_state) -
 #      a ci-step log-tail check overrides working -> done once checks read
-#      green, so a green PR is never silently read as still-validating.
+#      green, so a green PR is never silently read as still-validating. A second
+#      exception: a declared `paused:` status outranks a terminal/finished
+#      run-step (done/failed) so a stand-by after checks-green is not read as a
+#      finished crew; active working and parked runs still outrank a stale pause.
 #   3. Reconcile the status log: if its last line says needs-decision/blocked but
 #      the run-step shows the run moved on, the log is deterministically stale and
 #      is flagged superseded. A genuinely parked run plus a needs-decision log
@@ -548,6 +551,15 @@ if [ "$HAVE_RUN" = 1 ]; then
       fi
       ;;
   esac
+
+  # Declared external wait outranks a terminal/finished run-step. Common case:
+  # checks-green ci-monitor still reports done while the crew stands by for smoke
+  # or captain merge (`paused: ...`). An ACTIVE working or parked run still wins so
+  # a crew that resumed after pausing (or is mid-validation / at an ask-user gate)
+  # is never mis-classed as paused. See crew_absorb_class for the absorb half.
+  if status_is_paused "$LOG_LINE" && [ "$RUN_STATE" != working ] && [ "$RUN_STATE" != parked ]; then
+    emit paused status-log "$(log_note_of "$LOG_LINE")"
+  fi
 
   emit "$RUN_STATE" run-step "$RUN_DETAIL"
 fi

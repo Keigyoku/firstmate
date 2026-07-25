@@ -331,19 +331,23 @@ signal_reason_is_actionable() {  # <file> ...
 #   working - an actively-running no-mistakes step (running/fixing/ci) or a busy
 #             pane; the crew is legitimately mid-work on a static-looking pane
 #             (e.g. waiting on CI);
-#   paused  - the crew's authoritative current state is a declared external-wait
-#             pause (paused:), or a firstmate-marked ask-user gate still verified
-#             parked by its run-step; either hold is EXPECTED to idle;
+#   paused  - the crew DECLARED an external-wait pause (paused:), or a firstmate-
+#             marked ask-user gate still verified parked by its run-step; either
+#             hold is EXPECTED to idle. A terminal/done run-step (e.g. ci-monitor
+#             checks-green) does NOT cancel a declared pause - that is the hold
+#             the crew is waiting through. An ACTIVE working run-step/pane still
+#             wins so a crew that resumed after pausing is never mis-absorbed;
 #   none    - neither, so the wake must surface (a stopped/finished/parked/failed/
-#             torn-down/unknown crew, or an unreadable verdict).
-# One fm-crew-state.sh read serves BOTH absorb reasons at once. Reading the state
-# authoritatively (not the status log) is what keeps run-step precedence: a crew
-# that appended paused: but then STARTED a run reports working, never paused.
+#             torn-down/unknown crew with no declared pause, or an unreadable
+#             verdict). blocked: is never paused.
+# One fm-crew-state.sh read serves BOTH absorb reasons at once, then a cheap
+# last-status paused check covers the terminal-run-step gap without weakening
+# stale detection for non-declaring idle crews.
 # NOT a pure read: fm-crew-state.sh may make a bounded no-mistakes call, so callers
 # run it only on no-verb signal and first-sighting stale paths, never every wake.
 # FM_CREW_STATE_BIN lets tests stub the verdict.
 crew_absorb_class() {  # <id>
-  local id=$1 line state src
+  local id=$1 line state src last st
   [ -n "$id" ] || { printf 'none'; return; }
   if held_gate_is_verified "$id"; then
     printf 'paused'
@@ -356,6 +360,17 @@ crew_absorb_class() {  # <id>
   if [ "$state" = working ]; then
     src=${line#*source: }; src=${src%% *}
     case "$src" in run-step|pane) printf 'working'; return ;; esac
+  fi
+  # Declared external wait outranks a non-working authoritative state (done,
+  # failed, parked-without-held-marker, status-log working, unknown). Only an
+  # explicit last-line paused: qualifies - never idle-looking panes alone.
+  st=${STATE:-${FM_STATE_OVERRIDE:-}}
+  if [ -n "$st" ]; then
+    last=$(last_status_line "$st/$id.status")
+    if status_is_paused "$last"; then
+      printf 'paused'
+      return
+    fi
   fi
   printf 'none'
 }
