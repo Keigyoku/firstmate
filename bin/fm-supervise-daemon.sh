@@ -1429,9 +1429,18 @@ fm_super_main() {
     fi
     exit 1
   fi
-  echo "$$" > "$PIDFILE"
-  fm_pid_identity "${BASHPID:-$$}" > "$LOCK/pid-identity" 2>/dev/null || true
-  rm -f "$READYFILE"
+  rm -f "$READYFILE" "$PIDFILE"
+  if ! fm_pid_identity "${BASHPID:-$$}" > "$LOCK/pid-identity" 2>/dev/null; then
+    echo "error: cannot publish supervise daemon pid identity" >&2
+    fm_lock_release "$LOCK" 2>/dev/null || true
+    exit 1
+  fi
+  if ! printf '%s\n' "$$" > "$PIDFILE"; then
+    echo "error: cannot publish supervise daemon pid file: $PIDFILE" >&2
+    rm -f "$PIDFILE" 2>/dev/null || true
+    fm_lock_release "$LOCK" 2>/dev/null || true
+    exit 1
+  fi
 
   # --- auto-discover the supervisor BACKEND (tmux vs herdr) first -----------
   # Priority: FM_SUPERVISOR_BACKEND override > $TMUX_PANE (tmux) > $HERDR_ENV=1

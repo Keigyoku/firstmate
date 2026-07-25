@@ -165,7 +165,7 @@ SH
 }
 
 test_daemon_ready_marker_follows_startup_and_shutdown() {
-  local dir state fakebin capture sent pid i
+  local dir state fakebin capture sent pid i published_pid
   dir=$(make_supercase daemon-ready-marker)
   state="$dir/state"; fakebin="$dir/fakebin"
   capture="$dir/composer"; sent="$dir/sent.log"
@@ -178,6 +178,16 @@ test_daemon_ready_marker_follows_startup_and_shutdown() {
     FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_SENT="$sent" \
     FM_INJECT_SELF_TEST=probe FM_POLL=1 "$DAEMON" >/dev/null 2>&1 &
   pid=$!
+  i=0
+  while [ "$i" -lt 50 ] && [ ! -e "$state/.supervise-daemon.pid" ]; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.01
+    i=$((i + 1))
+  done
+  assert_present "$state/.supervise-daemon.pid" "daemon did not publish its pid file"
+  assert_present "$state/.supervise-daemon.lock/pid-identity" "daemon published its pid before its identity"
+  published_pid=$(cat "$state/.supervise-daemon.pid")
+  [ "$published_pid" = "$pid" ] || fail "daemon published pid $published_pid instead of launched pid $pid"
   i=0
   while [ "$i" -lt 50 ] && [ ! -e "$state/.supervise-daemon.ready" ]; do
     kill -0 "$pid" 2>/dev/null || break
