@@ -287,9 +287,17 @@ test_crew_absorb_class_declared_pause_outranks_terminal_run() {
     || fail "declared pause under FAILED run-step was absorbed: $(crew_absorb_class a)"
   ! crew_is_paused a || fail "crew_is_paused true under failed run-step with paused status"
 
+  FM_FAKE_CREW_STATE='state: parked · source: run-step · parked at review'
+  [ "$(crew_absorb_class a)" = none ] \
+    || fail "declared pause under unheld parked run-step was absorbed: $(crew_absorb_class a)"
+
+  FM_FAKE_CREW_STATE='state: unknown · source: run-step · outcome: mystery'
+  [ "$(crew_absorb_class a)" = none ] \
+    || fail "declared pause under unknown run-step was absorbed: $(crew_absorb_class a)"
+
   unset FM_STATE_OVERRIDE
   unset FM_FAKE_CREW_STATE
-  pass "crew_absorb_class: declared pause outranks terminal run-step; working run and blocked still win"
+  pass "crew_absorb_class: declared pause absorbs only terminal done run-step"
 }
 
 # Captain-ordered restriction of paused-masks-failed-run: last status paused: +

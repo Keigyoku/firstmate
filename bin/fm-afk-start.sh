@@ -1,25 +1,27 @@
 #!/usr/bin/env bash
-# Enter away mode and ensure the sub-supervisor daemon is running and still
-# alive after a short settle window.
+# Enter away mode and ensure the sub-supervisor daemon is ready and still alive
+# after a short settle window.
 #
 # Usage: fm-afk-start.sh
 #   Checks state/.supervise-daemon.lock, and:
 #     - refreshes state/.afk, probes the inject channel (no concurrent inject),
 #       prints "afk: daemon already running pid=<pid>", exits 0 when a live
-#       identity-backed daemon holds the lock;
+#       identity-backed daemon holds the lock and has published readiness;
 #     - otherwise sets state/.afk, starts bin/fm-supervise-daemon.sh in a new
 #       session so a reaped harness background task cannot take the daemon with
-#       it, waits for the pid file, settles FM_AFK_START_SETTLE_SECS (default 3),
-#       and fails LOUD if the daemon is already dead (start-then-die) or if
-#       startup cleared .afk (self-test failed).
+#       it, waits for state/.supervise-daemon.ready (published only after the
+#       startup inject self-test succeeds), settles FM_AFK_START_SETTLE_SECS
+#       (default 3), and fails LOUD if the daemon dies or startup clears .afk.
 #
 # Why detach (2026-07-25 evidence): exec'ing the daemon in a Claude tracked
 # background task made the daemon die when the harness reaped that task, while
 # state/.afk stayed set - silent hole (flag on, nothing triages). Session
 # detachment plus the parent settle-check proves the process is still alive.
 #
-# FM_AFK_START_SETTLE_SECS  seconds to wait after pid file appears before the
-#                          still-alive check (default 3).
+# FM_AFK_START_SETTLE_SECS  seconds to wait after readiness before the still-
+#                          alive check (default 3).
+# FM_AFK_START_READY_TIMEOUT_SECS  seconds to wait for the daemon's explicit
+#                          post-self-test ready marker (default 10).
 # FM_AFK_START_FOREGROUND=1  legacy: exec the daemon in the foreground instead
 #                          of detaching (e2e / callers that own the process).
 set -eu
@@ -32,9 +34,12 @@ LOCK="$STATE/.supervise-daemon.lock"
 DAEMON="$SCRIPT_DIR/fm-supervise-daemon.sh"
 SETTLE_SECS=${FM_AFK_START_SETTLE_SECS:-3}
 case "$SETTLE_SECS" in ''|*[!0-9]*) SETTLE_SECS=3 ;; esac
+READY_TIMEOUT_SECS=${FM_AFK_START_READY_TIMEOUT_SECS:-10}
+case "$READY_TIMEOUT_SECS" in ''|*[!0-9]*) READY_TIMEOUT_SECS=10 ;; esac
+READY="$STATE/.supervise-daemon.ready"
 
 usage() {
-  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in
@@ -141,10 +146,17 @@ export FM_SUPERVISOR_TARGET
 
 pid=$(daemon_lock_pid 2>/dev/null || true)
 if daemon_lock_held_by_live_daemon; then
+  if [ ! -e "$READY" ]; then
+    echo "error: supervise daemon pid=$pid is live but not ready - away-mode refused" >&2
+    exit 1
+  fi
   # Refresh afk, then probe channel availability without writing from this
   # process. The running daemon remains the sole injector.
+  had_afk=0
+  [ -e "$STATE/.afk" ] && had_afk=1
   date '+%s' > "$STATE/.afk"
   if ! inject_channel_probe "$STATE" "live-daemon probe"; then
+    [ "$had_afk" = 1 ] || rm -f "$STATE/.afk"
     echo "error: AFK inject channel probe FAILED while daemon pid=$pid is live - do not trust away-mode until the channel is fixed (see state/.subsuper-inject-wedged)" >&2
     exit 1
   fi
@@ -156,6 +168,7 @@ if fm_pid_alive "$pid" && [ -n "$pid" ]; then
   fm_lock_remove_path "$LOCK" 2>/dev/null || true
 fi
 
+rm -f "$READY"
 date '+%s' > "$STATE/.afk"
 
 # Legacy foreground path for e2e / callers that own the process lifecycle.
@@ -197,7 +210,7 @@ DETACH_METHOD=
 DAEMON_START_PID=
 launch_daemon_detached || exit 1
 
-echo "afk: starting supervise daemon detached ($DETACH_METHOD); parent will verify still-alive after ${SETTLE_SECS}s settle"
+echo "afk: starting supervise daemon detached ($DETACH_METHOD); parent will wait for post-self-test readiness and verify still-alive after ${SETTLE_SECS}s settle"
 echo "afk: inject channel self-test runs at daemon startup (fails loud if the supervisor pane cannot accept escalations)"
 
 # Wait for the daemon to publish its pid file (startup + lock acquire).
@@ -223,8 +236,27 @@ if [ ! -f "$STATE/.supervise-daemon.pid" ]; then
   exit 1
 fi
 
+i=0
+ready_wait_steps=$((READY_TIMEOUT_SECS * 5))
+while [ "$i" -lt "$ready_wait_steps" ]; do
+  [ -e "$READY" ] && break
+  if ! daemon_lock_held_by_live_daemon; then
+    [ -s "$STATE/.supervise-daemon.stderr" ] && sed -n '1,40p' "$STATE/.supervise-daemon.stderr" >&2
+    [ -s "$STATE/.supervise-daemon.log" ] && tail -n 20 "$STATE/.supervise-daemon.log" >&2
+    afk_start_fail_daemon_dead "daemon exited before post-self-test readiness"
+    exit 1
+  fi
+  sleep 0.2
+  i=$((i + 1))
+done
+
+if [ ! -e "$READY" ]; then
+  afk_start_fail_daemon_dead "no post-self-test readiness after ${READY_TIMEOUT_SECS}s"
+  exit 1
+fi
+
 # Post-start still-alive check: start-then-die is invisible if we only verify
-# "started". Sleep the settle window, then re-check identity-backed liveness.
+# readiness. Sleep the settle window, then re-check identity-backed liveness.
 sleep "$SETTLE_SECS"
 
 if ! daemon_lock_held_by_live_daemon; then
@@ -240,5 +272,5 @@ if [ ! -e "$STATE/.afk" ]; then
 fi
 
 live_pid=$(daemon_lock_pid 2>/dev/null || true)
-echo "afk: daemon live pid=${live_pid:-?} after ${SETTLE_SECS}s settle; away-mode active"
+echo "afk: daemon ready and live pid=${live_pid:-?} after ${SETTLE_SECS}s settle; away-mode active"
 exit 0

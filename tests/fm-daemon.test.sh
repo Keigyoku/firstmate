@@ -102,6 +102,7 @@ test_afk_start_live_daemon_probes_without_injecting() {
   bash -c 'sleep 30; :' fm-supervise-daemon.sh &
   holder=$!
   printf '%s\n' "$holder" > "$lock/pid"
+  : > "$state/.supervise-daemon.ready"
 
   out=$(PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" \
     FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET=fakepane \
@@ -134,6 +135,7 @@ SH
   bash -c 'sleep 30; :' fm-supervise-daemon.sh &
   holder=$!
   printf '%s\n' "$holder" > "$lock/pid"
+  : > "$state/.supervise-daemon.ready"
 
   out=$(PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" \
     FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET=fakepane \
@@ -149,7 +151,35 @@ SH
   [ -s "$state/.subsuper-inject-wedged" ] || fail "live-daemon probe failure did not write the wedge marker"
   [ -s "$alarm_log" ] || fail "production launcher inherited the test-only discard suppressor"
   [ ! -s "$sent" ] || fail "failed live-daemon probe typed into the pending composer"
-  pass "fm-afk-start.sh clears inherited discard and alarms on a failed live probe"
+  assert_absent "$state/.afk" "failed live-daemon probe enabled away mode"
+  pass "fm-afk-start.sh rolls back a new away flag when a live probe fails"
+}
+
+test_daemon_ready_marker_follows_startup_and_shutdown() {
+  local dir state fakebin capture sent pid i
+  dir=$(make_supercase daemon-ready-marker)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  capture="$dir/composer"; sent="$dir/sent.log"
+  printf '│ > │\n' > "$capture"
+  : > "$sent"
+  afk_enter "$state"
+
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" \
+    FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET=fakepane \
+    FM_FAKE_TMUX_CAPTURE="$capture" FM_FAKE_TMUX_SENT="$sent" \
+    FM_INJECT_SELF_TEST=probe FM_POLL=1 "$DAEMON" >/dev/null 2>&1 &
+  pid=$!
+  i=0
+  while [ "$i" -lt 50 ] && [ ! -e "$state/.supervise-daemon.ready" ]; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  assert_present "$state/.supervise-daemon.ready" "daemon did not publish post-self-test readiness"
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  assert_absent "$state/.supervise-daemon.ready" "daemon shutdown left a stale readiness marker"
+  pass "supervise daemon readiness marker spans only its ready lifetime"
 }
 
 test_afk_start_uses_python_setsid_fallback() {
@@ -1985,6 +2015,7 @@ test_afk_start_reclaims_stale_daemon_lock_reused_pid
 test_afk_start_does_not_set_flag_when_startup_preflight_fails
 test_afk_start_live_daemon_probes_without_injecting
 test_afk_start_live_probe_clears_inherited_discard_for_alarm
+test_daemon_ready_marker_follows_startup_and_shutdown
 test_afk_start_uses_python_setsid_fallback
 test_daemon_state_root_uses_fm_home
 test_classify_routine_signal_self

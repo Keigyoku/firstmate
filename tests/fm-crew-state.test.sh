@@ -536,6 +536,22 @@ test_failed_run_not_outranked_by_paused_status() {
   pass "failed run-step is not outranked by a declared paused: status line"
 }
 
+test_parked_run_not_outranked_by_paused_status() {
+  reset_fakes
+  local d; d=$(new_case parked-over-pause)
+  make_repo_on_branch "$d/wt" fm/feat-parked-pause
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-parked-pause.meta" "window=fm:fm-feat-parked-pause" "worktree=$d/wt" "kind=ship"
+  printf 'paused: awaiting external review\n' > "$d/state/feat-parked-pause.status"
+  FM_FAKE_AXI_STATUS="$(run_parked fm/feat-parked-pause)"
+  FM_FAKE_BUSY=0
+  local out; out=$(run_crew_state "$d" feat-parked-pause)
+  assert_contains "$out" "state: parked" "parked run remains parked despite paused: status"
+  assert_contains "$out" "source: run-step" "parked run stays run-step sourced"
+  assert_not_contains "$out" "state: paused" "paused: must not mask an unheld parked run-step"
+  pass "parked run-step is not outranked by a declared paused: status line"
+}
+
 test_top_level_ci_checks_green_surfaces_done() {
   reset_fakes
   local d; d=$(new_case top-level-ci-green)
@@ -1161,6 +1177,7 @@ test_ci_monitoring_checks_green_surfaces_done
 test_declared_pause_outranks_terminal_ci_monitor
 test_active_run_outranks_stale_paused_status
 test_failed_run_not_outranked_by_paused_status
+test_parked_run_not_outranked_by_paused_status
 test_top_level_ci_checks_green_surfaces_done
 test_ci_monitoring_no_checks_terminal_surfaces_done
 test_ci_monitoring_green_then_rearm_stays_working

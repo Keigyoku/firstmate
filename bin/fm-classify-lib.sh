@@ -370,15 +370,17 @@ crew_absorb_class() {  # <id>
     printf 'none'
     return
   fi
-  # Declared external wait outranks a non-working, non-failed authoritative
-  # state (done/checks-green, parked-without-held-marker, status-log working,
-  # unknown). Only an explicit last-line paused: qualifies - never idle panes.
-  st=${STATE:-${FM_STATE_OVERRIDE:-}}
-  if [ -n "$st" ]; then
-    last=$(last_status_line "$st/$id.status")
-    if status_is_paused "$last"; then
-      printf 'paused'
-      return
+  # A last-line declared external wait may absorb only an authoritative terminal
+  # done/checks-green state. Parked, unknown, and other non-terminal states must
+  # surface unless an earlier authoritative path classified them as a hold.
+  if [ "$state" = "done" ]; then
+    st=${STATE:-${FM_STATE_OVERRIDE:-}}
+    if [ -n "$st" ]; then
+      last=$(last_status_line "$st/$id.status")
+      if status_is_paused "$last"; then
+        printf 'paused'
+        return
+      fi
     fi
   fi
   printf 'none'

@@ -50,6 +50,8 @@
 #     alert if submit still cannot be confirmed.
 #   - Startup inject self-test (inject_channel_self_test): when afk is on at
 #     daemon start, prove the supervisor pane can accept a digest immediately.
+#     Successful startup publishes state/.supervise-daemon.ready only after this
+#     check; shutdown removes it.
 #     A live-daemon /afk refresh uses inject_channel_probe without submitting.
 #     A permanently-pending composer or wrong auto-discovered target fails LOUD
 #     with the durable wedge marker instead of buffering for hours.
@@ -1409,6 +1411,7 @@ fm_super_main() {
   local WATCH_ERR="$STATE/.supervise-daemon.watcher.err"
   local LOCK="$STATE/.supervise-daemon.lock"
   local PIDFILE="$STATE/.supervise-daemon.pid"
+  local READYFILE="$STATE/.supervise-daemon.ready"
   local INJECT_FAIL_SLEEP=${FM_INJECT_FAIL_SLEEP:-$INJECT_FAIL_SLEEP_DEFAULT}
   local CRASH_THRESHOLD=${FM_CRASH_THRESHOLD:-$CRASH_THRESHOLD_DEFAULT}
   local CRASH_WINDOW=${FM_CRASH_WINDOW:-$CRASH_WINDOW_DEFAULT}
@@ -1428,6 +1431,7 @@ fm_super_main() {
   fi
   echo "$$" > "$PIDFILE"
   fm_pid_identity "${BASHPID:-$$}" > "$LOCK/pid-identity" 2>/dev/null || true
+  rm -f "$READYFILE"
 
   # --- auto-discover the supervisor BACKEND (tmux vs herdr) first -----------
   # Priority: FM_SUPERVISOR_BACKEND override > $TMUX_PANE (tmux) > $HERDR_ENV=1
@@ -1535,7 +1539,9 @@ fm_super_main() {
   # --- shutdown: flush buffered escalations, reap child, release lock -------
   local WATCHER_PID="" CUR_TMP=""
   cleanup() {
-    trap - TERM INT
+    local status=$?
+    trap - TERM INT EXIT
+    rm -f "$READYFILE" 2>/dev/null || true
     wedge_alarm_stop_active_notifier
     escalate_flush "$STATE" 2>/dev/null || true
     if [ -n "${WATCHER_PID:-}" ]; then
@@ -1548,9 +1554,18 @@ fm_super_main() {
     fm_lock_release "$LOCK" 2>/dev/null || true
     rm -f "$PIDFILE" 2>/dev/null || true
     log "daemon shutting down"
-    exit 0
+    exit "$status"
   }
-  trap cleanup TERM INT
+  trap cleanup TERM INT EXIT
+
+  if ! : > "$READYFILE"; then
+    echo "error: cannot publish supervise daemon readiness: $READYFILE" >&2
+    log "startup failed: cannot publish post-self-test readiness"
+    rm -f "$STATE/.afk" 2>/dev/null || true
+    fm_lock_release "$LOCK" 2>/dev/null || true
+    rm -f "$PIDFILE" 2>/dev/null || true
+    exit 1
+  fi
 
   # --- crash-loop guard -----------------------------------------------------
   local crash_times=() backoff_secs=$CRASH_NORMAL_SLEEP
