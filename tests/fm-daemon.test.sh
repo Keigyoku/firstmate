@@ -1121,9 +1121,9 @@ test_inject_channel_self_test_succeeds_on_empty_and_delivers() {
   pass "inject_channel_self_test delivers on empty composer and clears wedge marker"
 }
 
-test_inject_channel_self_test_preserves_wedge_when_buffer_flush_fails() {
+test_inject_channel_self_test_leaves_buffer_for_daemon() {
   local dir state fakebin sent
-  dir=$(make_bordered_case selftest-buffer-flush-fails)
+  dir=$(make_bordered_case selftest-buffer-daemon-owned)
   state="$dir/state"; fakebin="$dir/fakebin"
   sent="$dir/sent.log"; : > "$sent"
   printf '│ > │\n' > "$dir/composer"
@@ -1131,38 +1131,14 @@ test_inject_channel_self_test_preserves_wedge_when_buffer_flush_fails() {
   escalate_add "$state" "blocked: production escalation remains undelivered"
   printf 'old wedge marker\n' > "$state/.subsuper-inject-wedged"
   export FM_SUPERVISOR_TARGET=fakepane FM_SUPERVISOR_BACKEND=tmux
-  (
-    escalate_flush() {
-      : > "$state/flush-attempted"
-      return 1
-    }
-    PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
-      FM_INJECT_CONFIRM_SLEEP=0.05 inject_channel_self_test "$state"
-  ) || fail "self-test failed when only the buffered escalation flush deferred"
-  [ -e "$state/flush-attempted" ] || fail "self-test did not attempt to flush the existing escalation buffer"
-  [ -s "$state/.subsuper-escalations" ] || fail "self-test discarded an escalation after its flush failed"
-  [ -s "$state/.subsuper-inject-wedged" ] || fail "self-test cleared the wedge marker while an escalation remained buffered"
-  pass "inject_channel_self_test preserves wedge evidence until buffered escalations deliver"
-}
-
-test_inject_channel_self_test_flushes_buffer_before_clearing_wedge() {
-  local dir state fakebin sent
-  dir=$(make_bordered_case selftest-buffer-flush-ok)
-  state="$dir/state"; fakebin="$dir/fakebin"
-  sent="$dir/sent.log"; : > "$sent"
-  printf '│ > │\n' > "$dir/composer"
-  afk_enter "$state"
-  escalate_add "$state" "done: production escalation must deliver"
-  printf 'old wedge marker\n' > "$state/.subsuper-inject-wedged"
-  export FM_SUPERVISOR_TARGET=fakepane FM_SUPERVISOR_BACKEND=tmux
   PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
     FM_INJECT_CONFIRM_SLEEP=0.05 inject_channel_self_test "$state" \
-    || fail "self-test failed while flushing a healthy buffered escalation"
-  grep -F 'production escalation must deliver' "$sent" >/dev/null \
-    || fail "self-test cleared recovery state without delivering the buffered escalation"
-  [ ! -s "$state/.subsuper-escalations" ] || fail "self-test left a successfully delivered escalation buffered"
-  [ ! -e "$state/.subsuper-inject-wedged" ] || fail "self-test left the wedge marker after delivering the buffer"
-  pass "inject_channel_self_test flushes buffered escalations before clearing wedge evidence"
+    || fail "self-test failed while a real escalation remained buffered"
+  grep -F 'production escalation remains undelivered' "$sent" >/dev/null \
+    && fail "self-test raced the daemon by flushing its escalation buffer"
+  [ -s "$state/.subsuper-escalations" ] || fail "self-test mutated the daemon-owned escalation buffer"
+  [ -s "$state/.subsuper-inject-wedged" ] || fail "self-test cleared the wedge marker while an escalation remained buffered"
+  pass "inject_channel_self_test leaves buffered escalations and wedge evidence for the daemon"
 }
 
 # Non-regression: a healthy empty channel still delivers a real escalation after
@@ -1331,13 +1307,22 @@ SH
   printf '%s\n' "$dir"
 }
 
-test_wedge_alarm_library_mode_leaves_exec_unset() {
+test_wedge_alarm_library_mode_defaults_to_discard() {
   local out
   # shellcheck disable=SC2016  # $1/$FM_WEDGE_ALARM_EXEC must expand in the child, not here
   out=$(env -u FM_WEDGE_ALARM_EXEC bash -c '. "$1"; printf "%s" "${FM_WEDGE_ALARM_EXEC:-UNSET}"' _ "$DAEMON")
+  [ "$out" = discard ] \
+    || fail "sourcing the daemon did not install the safe notifier default (got: $out)"
+  pass "library mode defaults FM_WEDGE_ALARM_EXEC to discard"
+}
+
+test_wedge_alarm_live_library_mode_leaves_exec_unset() {
+  local out
+  # shellcheck disable=SC2016  # $1/$FM_WEDGE_ALARM_EXEC must expand in the child, not here
+  out=$(env -u FM_WEDGE_ALARM_EXEC bash -c 'FM_WEDGE_ALARM_ALLOW_LIVE=1; . "$1"; printf "%s" "${FM_WEDGE_ALARM_EXEC:-UNSET}"' _ "$DAEMON")
   [ "$out" = UNSET ] \
-    || fail "sourcing the daemon installed a notifier override inherited by production (got: $out)"
-  pass "library mode leaves FM_WEDGE_ALARM_EXEC unset for production callers"
+    || fail "live production sourcing installed a notifier override (got: $out)"
+  pass "live library mode leaves FM_WEDGE_ALARM_EXEC unset"
 }
 
 test_wake_helpers_replace_inherited_notifier_override() {
@@ -1919,8 +1904,7 @@ test_submit_ack_confirms_on_codex_dim_placeholder_after_submit
 test_submit_ack_reports_pending_on_persistent_swallow
 test_inject_channel_self_test_fails_loud_on_pending_composer
 test_inject_channel_self_test_succeeds_on_empty_and_delivers
-test_inject_channel_self_test_preserves_wedge_when_buffer_flush_fails
-test_inject_channel_self_test_flushes_buffer_before_clearing_wedge
+test_inject_channel_self_test_leaves_buffer_for_daemon
 test_escalate_flush_still_delivers_real_escalation_on_empty
 test_max_defer_empty_swallow_types_once_and_alarms
 test_max_defer_flushes_empty_idle_pane
@@ -1928,7 +1912,8 @@ test_max_defer_pending_composer_alarms_without_typing
 test_normal_flush_clears_stale_wedge_marker
 test_below_max_defer_does_nothing
 test_max_defer_afk_inactive_does_not_flush_or_alarm
-test_wedge_alarm_library_mode_leaves_exec_unset
+test_wedge_alarm_library_mode_defaults_to_discard
+test_wedge_alarm_live_library_mode_leaves_exec_unset
 test_wake_helpers_replace_inherited_notifier_override
 test_wedge_alarm_discard_seam_fires_nothing
 test_wedge_alarm_direct_notifiers_honor_discard_seam

@@ -117,9 +117,9 @@
 #                                   channel routes through this command as
 #                                   `<cmd> <channel> <summary>` instead of
 #                                   invoking its real notifier; "discard" fires
-#                                   nothing. Unset in production. Test harnesses
-#                                   set this to a recorder before sourcing the
-#                                   daemon.
+#                                   nothing. Unset in production. Sourced use
+#                                   defaults to "discard" unless
+#                                   FM_WEDGE_ALARM_ALLOW_LIVE=1.
 #          FM_WEDGE_ALARM_TIMEOUT_SECS seconds allowed for each notifier before
 #                                   its watchdog terminates it and continues to the
 #                                   next channel (default 10; invalid/zero uses the
@@ -1020,9 +1020,6 @@ inject_channel_self_test() {  # <state>
     inject_channel_fail_loud "$state" "self-test inject could not confirm submit (composer empty probe passed but Enter/submit failed)"
     return 1
   fi
-  if [ -s "$state/.subsuper-escalations" ]; then
-    escalate_flush "$state" || true
-  fi
   if [ ! -s "$state/.subsuper-escalations" ]; then
     rm -f "$state/.subsuper-inject-wedged"
   fi
@@ -1625,7 +1622,10 @@ fm_super_main() {
   done
 }
 
-# Run only when executed, not when sourced.
+# Run only when executed, not when sourced (tests source the classifiers).
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   fm_super_main "$@"
+elif [ "${FM_WEDGE_ALARM_ALLOW_LIVE:-0}" != 1 ]; then
+  : "${FM_WEDGE_ALARM_EXEC:=discard}"
+  export FM_WEDGE_ALARM_EXEC
 fi

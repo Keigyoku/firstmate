@@ -36,7 +36,12 @@ mkdir -p "$STATE"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-supervise-daemon.sh
-. "$DAEMON"
+load_daemon_library() {
+  local FM_WEDGE_ALARM_ALLOW_LIVE=1
+  . "$DAEMON"
+}
+load_daemon_library
+unset -f load_daemon_library
 
 daemon_lock_owner() {
   local owner
