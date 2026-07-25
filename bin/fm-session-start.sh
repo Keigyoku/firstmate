@@ -299,10 +299,11 @@ else
 fi
 
 # --- 4. supervision operating instructions ----------------------------------
-# Away-mode is healthy only when both state/.afk AND a live supervise daemon
-# exist. The lock holder clears flag-on-daemon-dead and records the wedge.
+# Away-mode is healthy only when state/.afk, a ready marker, and a live supervise
+# daemon exist. The lock holder clears unhealthy away-mode and records the wedge.
 afk_daemon_is_live() {
   local pid cmd
+  [ -e "$STATE/.supervise-daemon.ready" ] || return 1
   [ -e "$STATE/.supervise-daemon.pid" ] || return 1
   pid=$(cat "$STATE/.supervise-daemon.pid" 2>/dev/null || true)
   [ -n "$pid" ] || return 1
@@ -333,8 +334,8 @@ if [ -e "$STATE/.afk" ]; then
     if [ "$READ_ONLY" -eq 0 ]; then
       {
         printf 'fm away-mode inject WEDGED as of %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')"
-        printf 'reason: AFK_DAEMON_DEAD detected at session-start (flag on, daemon not live)\n'
-        printf 'Cleared state/.afk so away-mode does not look healthy without a supervisor.\n'
+        printf 'reason: AFK_DAEMON_DEAD detected at session-start (flag on, daemon not ready/live)\n'
+        printf 'Cleared state/.afk so away-mode does not look healthy without a ready supervisor.\n'
         printf 'Re-run /afk (bin/fm-afk-start.sh) after fixing the launch path.\n'
       } > "$STATE/.subsuper-inject-wedged" 2>/dev/null || true
       rm -f "$STATE/.afk" 2>/dev/null || true
@@ -420,14 +421,14 @@ done
 
 subsection "AFK"
 if [ "${AFK_DAEMON_DEAD:-0}" -eq 1 ]; then
-  printf 'AFK_DAEMON_DEAD: state/.afk was set but the supervise daemon was NOT running.\n'
+  printf 'AFK_DAEMON_DEAD: state/.afk was set but the supervise daemon was NOT ready/live.\n'
   if [ "${AFK_DAEMON_DEAD_MUTATED:-0}" -eq 1 ]; then
     printf 'Cleared state/.afk (flag-on-daemon-dead is a silent hole). Re-run /afk to restart detached.\n'
   else
     printf 'INJECT_WEDGED_SUSPECTED: read-only session left state/.afk and wedge state unchanged for the fleet-lock holder.\n'
   fi
 elif [ -e "$STATE/.afk" ]; then
-  printf 'present - away-mode supervision is active; the daemon owns the watcher (pid live).\n'
+  printf 'present - away-mode supervision is active; the daemon owns the watcher (ready, pid live).\n'
 else
   printf 'absent\n'
 fi

@@ -739,6 +739,7 @@ SH
   "$home/fm-supervise-daemon.sh" &
   _fake_daemon_pid=$!
   printf '%s\n' "$_fake_daemon_pid" > "$home/state/.supervise-daemon.pid"
+  : > "$home/state/.supervise-daemon.ready"
   # shellcheck disable=SC2064
   trap "kill $_fake_daemon_pid 2>/dev/null || true" RETURN
 
@@ -752,6 +753,35 @@ SH
   assert_not_contains "$out" "AFK_DAEMON_DEAD" "healthy live daemon misclassified as dead"
 
   pass "next step delegates watcher ownership to the AFK daemon"
+}
+
+test_session_start_rejects_live_daemon_without_readiness() {
+  local rec root home fakebin out daemon_pid
+  rec=$(new_world afk-daemon-not-ready)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  : > "$home/state/.afk"
+  cat > "$home/fm-supervise-daemon.sh" <<'SH'
+#!/usr/bin/env bash
+while true; do sleep 60; done
+SH
+  chmod +x "$home/fm-supervise-daemon.sh"
+  "$home/fm-supervise-daemon.sh" &
+  daemon_pid=$!
+  printf '%s\n' "$daemon_pid" > "$home/state/.supervise-daemon.pid"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  kill "$daemon_pid" 2>/dev/null || true
+  wait "$daemon_pid" 2>/dev/null || true
+
+  assert_contains "$out" "AFK_DAEMON_DEAD" "live daemon without readiness was treated as healthy"
+  assert_absent "$home/state/.afk" "session-start left .afk set without daemon readiness"
+  assert_not_contains "$out" "Away mode is active" "unready daemon received away-mode instructions"
+
+  pass "session start rejects a live daemon without readiness"
 }
 
 # Automatic wedge surface (fm-afk-inject-wedge): a durable inject-wedged marker
@@ -946,6 +976,7 @@ test_backlog_compact_tasks_axi_unavailable_uses_manual_fallback
 test_fleet_digest_empty_fleet
 test_next_step_sources_x_mode_cadence
 test_next_step_afk_delegates_to_daemon
+test_session_start_rejects_live_daemon_without_readiness
 test_session_start_surfaces_inject_wedged_marker
 test_session_start_detects_afk_daemon_dead
 test_supervision_block_exactly_one_and_pi_diagnostic
