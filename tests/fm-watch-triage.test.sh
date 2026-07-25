@@ -692,6 +692,43 @@ test_nonterminal_stale_paused_under_terminal_run_absorbed() {
   pass "declared pause under terminal run-step is absorbed (no stale thrash)"
 }
 
+# Anti-regression for the pause-absorb fix: blocked: is a stuck crew, never a
+# declared wait. Even under a terminal run-step and a high pause re-surface
+# window, an idle blocked crew must surface immediately and must NOT enter
+# pause tracking (absorbed-is-not-forgotten must not expand to hide blockers).
+test_blocked_stale_surfaces_immediately_never_pause_absorbed() {
+  local dir state fakebin out drain_out capture_file window key pane_hash sig pid
+  dir=$(make_case blocked-stale-never-pause); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
+  window="test:fm-blocked"
+  printf 'idle, stuck waiting for help' > "$capture_file"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/blocked.meta"
+  printf 'blocked: needs credentials for the registry\n' > "$state/blocked.status"
+  sig=$(seen_sig "$state/blocked.status"); printf '%s' "$sig" > "$state/.seen-blocked_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle, stuck waiting for help")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  # Same terminal-run backdrop as the pause-absorb fix; blocked must still surface.
+  export FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review (still monitoring for merge/close)'
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_PAUSE_RESURFACE_SECS=999 FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "watcher did not surface a blocked: crew immediately: $(cat "$out")"
+  grep -Fx "stale: $window" "$out" >/dev/null || fail "blocked: stale did not print an immediate stale wake: $(cat "$out")"
+  grep -F "possible wedge" "$out" >/dev/null && fail "blocked: was mislabeled a possible wedge"
+  grep -F "awaiting external" "$out" >/dev/null && fail "blocked: was mislabeled a paused external-wait recheck"
+  [ ! -e "$state/.paused-$key" ] || fail "blocked: entered pause tracking (would hide a stuck crew)"
+  [ ! -e "$state/.paused-resurfaced-$key" ] || fail "blocked: recorded a pause re-surface marker"
+  [ ! -e "$state/.stale-since-$key" ] || fail "blocked: started a wedge/pause timer instead of immediate surface"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after blocked: stale failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "blocked: stale was not queued"
+  pass "blocked: idle under terminal run surfaces immediately and never enters pause absorb"
+}
+
 # A captain-owed ask-user gate is a deliberate hold only after firstmate marked
 # the surfaced decision and the authoritative run-step still verifies the gate.
 test_nonterminal_stale_held_gate_absorbed_then_resurfaced() {
@@ -1316,6 +1353,7 @@ test_wedge_escalation_resets_when_pane_becomes_active
 test_nonterminal_stale_not_working_surfaced
 test_nonterminal_stale_paused_absorbed_then_resurfaced
 test_nonterminal_stale_paused_under_terminal_run_absorbed
+test_blocked_stale_surfaces_immediately_never_pause_absorbed
 test_nonterminal_stale_held_gate_absorbed_then_resurfaced
 test_unmarked_parked_gate_still_surfaces
 test_held_gate_marker_clears_before_stale
