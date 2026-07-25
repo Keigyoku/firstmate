@@ -517,6 +517,25 @@ test_active_run_outranks_stale_paused_status() {
   pass "active working run-step outranks a stale paused: status line"
 }
 
+# Captain lock (paused-masks-failed-run): a declared paused: must NOT outrank an
+# authoritative failed/cancelled run-step. Failure is at least as captain-relevant
+# as blocked:; a stale pause written before the run failed must not swallow it.
+test_failed_run_not_outranked_by_paused_status() {
+  reset_fakes
+  local d; d=$(new_case failed-over-pause)
+  make_repo_on_branch "$d/wt" fm/feat-failed-pause
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-failed-pause.meta" "window=fm:fm-feat-failed-pause" "worktree=$d/wt" "kind=ship"
+  printf 'paused: awaiting smoke r4 verdict\n' > "$d/state/feat-failed-pause.status"
+  FM_FAKE_AXI_STATUS="$(run_failed fm/feat-failed-pause)"
+  FM_FAKE_BUSY=0
+  local out; out=$(run_crew_state "$d" feat-failed-pause)
+  assert_contains "$out" "state: failed" "failed run remains failed despite paused: status"
+  assert_contains "$out" "source: run-step" "failed run stays run-step sourced"
+  assert_not_contains "$out" "state: paused" "paused: must not mask failed run-step"
+  pass "failed run-step is not outranked by a declared paused: status line"
+}
+
 test_top_level_ci_checks_green_surfaces_done() {
   reset_fakes
   local d; d=$(new_case top-level-ci-green)
@@ -1141,6 +1160,7 @@ test_ci_ready_done_log_beats_monitoring_run
 test_ci_monitoring_checks_green_surfaces_done
 test_declared_pause_outranks_terminal_ci_monitor
 test_active_run_outranks_stale_paused_status
+test_failed_run_not_outranked_by_paused_status
 test_top_level_ci_checks_green_surfaces_done
 test_ci_monitoring_no_checks_terminal_surfaces_done
 test_ci_monitoring_green_then_rearm_stays_working
