@@ -1077,6 +1077,72 @@ test_submit_ack_reports_pending_on_persistent_swallow() {
   pass "submit-ACK reports pending on a persistently swallowed Enter (type-once)"
 }
 
+# --- inject channel self-test (fm-afk-inject-wedge) ---------------------------
+# A permanently-pending composer (app-spawned Claude primary, 2026-07-24) deferred
+# every inject for 33h. Self-test must fail LOUD at activation - write the durable
+# marker, refuse healthy afk - without weakening the composer guard so real
+# escalations still only land on an affirmatively empty composer.
+
+test_inject_channel_self_test_fails_loud_on_pending_composer() {
+  local dir state fakebin sent
+  dir=$(make_bordered_case selftest-pending)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  sent="$dir/sent.log"; : > "$sent"
+  printf '│ > human draft still sitting │\n' > "$dir/composer"
+  afk_enter "$state"
+  export FM_SUPERVISOR_TARGET=fakepane FM_SUPERVISOR_BACKEND=tmux
+  if PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
+      inject_channel_self_test "$state"; then
+    fail "self-test succeeded on a pending composer (must fail loud)"
+  fi
+  [ -s "$state/.subsuper-inject-wedged" ] \
+    || fail "self-test did not write durable inject-wedged marker on pending composer"
+  grep -F 'not confirmed-empty' "$state/.subsuper-inject-wedged" >/dev/null \
+    || fail "wedge marker missing not-confirmed-empty diagnosis: $(cat "$state/.subsuper-inject-wedged")"
+  [ ! -s "$sent" ] || fail "self-test typed into a pending composer"
+  pass "inject_channel_self_test fails loud on pending composer and never types"
+}
+
+test_inject_channel_self_test_succeeds_on_empty_and_delivers() {
+  local dir state fakebin sent
+  dir=$(make_bordered_case selftest-empty-ok)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  sent="$dir/sent.log"; : > "$sent"
+  printf '│ > │\n' > "$dir/composer"
+  afk_enter "$state"
+  export FM_SUPERVISOR_TARGET=fakepane FM_SUPERVISOR_BACKEND=tmux
+  PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
+    FM_INJECT_CONFIRM_SLEEP=0.05 inject_channel_self_test "$state" \
+    || fail "self-test failed on an empty bordered composer"
+  grep -F 'self-test OK' "$sent" >/dev/null \
+    || fail "self-test did not deliver a confirmed inject on empty composer: $(cat "$sent")"
+  [ ! -e "$state/.subsuper-inject-wedged" ] \
+    || fail "successful self-test left an inject-wedged marker"
+  pass "inject_channel_self_test delivers on empty composer and clears wedge marker"
+}
+
+# Non-regression: a healthy empty channel still delivers a real escalation after
+# the self-test path exists - away-mode must not get quieter.
+test_escalate_flush_still_delivers_real_escalation_on_empty() {
+  local dir state fakebin sent
+  dir=$(make_bordered_case escalate-still-delivers)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  sent="$dir/sent.log"; : > "$sent"
+  printf '│ > │\n' > "$dir/composer"
+  afk_enter "$state"
+  escalate_add "$state" "done: PR https://example.test/pr/792 checks green"
+  export FM_SUPERVISOR_TARGET=fakepane FM_SUPERVISOR_BACKEND=tmux
+  PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
+    FM_INJECT_CONFIRM_SLEEP=0.05 escalate_flush "$state" \
+    || fail "escalate_flush failed on empty composer after self-test work"
+  grep -F 'Supervisor escalate' "$sent" >/dev/null \
+    || fail "real escalation did not reach the primary: $(cat "$sent")"
+  grep -F 'checks green' "$sent" >/dev/null \
+    || fail "real escalation digest lost its payload: $(cat "$sent")"
+  [ ! -s "$state/.subsuper-escalations" ] || fail "buffer not cleared after successful real flush"
+  pass "real captain-relevant escalation still delivers on empty composer (away-mode not quieter)"
+}
+
 test_max_defer_empty_swallow_types_once_and_alarms() {
   local dir state fakebin sent
   dir=$(make_bordered_case maxdefer-stuck)
@@ -1812,6 +1878,9 @@ test_pane_input_pending_codex_real_text_is_pending
 test_submit_ack_confirms_on_bordered_empty_composer
 test_submit_ack_confirms_on_codex_dim_placeholder_after_submit
 test_submit_ack_reports_pending_on_persistent_swallow
+test_inject_channel_self_test_fails_loud_on_pending_composer
+test_inject_channel_self_test_succeeds_on_empty_and_delivers
+test_escalate_flush_still_delivers_real_escalation_on_empty
 test_max_defer_empty_swallow_types_once_and_alarms
 test_max_defer_flushes_empty_idle_pane
 test_max_defer_pending_composer_alarms_without_typing

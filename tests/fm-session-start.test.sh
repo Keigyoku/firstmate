@@ -731,6 +731,29 @@ EOF
   pass "next step delegates watcher ownership to the AFK daemon"
 }
 
+# Automatic wedge surface (fm-afk-inject-wedge): a durable inject-wedged marker
+# must appear in the session-start digest so recovery never depends on the human
+# habit of checking state/.subsuper-inject-wedged first.
+test_session_start_surfaces_inject_wedged_marker() {
+  local rec root home fakebin out
+  rec=$(new_world inject-wedged-surface)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  printf 'fm away-mode inject WEDGED as of 2026-07-24\nreason: composer not confirmed-empty (state=pending)\n' \
+    > "$home/state/.subsuper-inject-wedged"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "INJECT_WEDGED:" "session-start did not surface inject-wedged marker"
+  assert_contains "$out" "composer not confirmed-empty" "session-start did not print wedge diagnosis"
+  assert_contains "$out" "fix the supervisor pane" "session-start did not instruct remediation"
+
+  pass "session-start surfaces durable inject-wedged marker automatically"
+}
+
 test_supervision_block_exactly_one_and_pi_diagnostic() {
   local rec root home fakebin out block_count wake_line sup_line context_line
   rec=$(new_world pi-supervision-block)
@@ -876,6 +899,7 @@ test_backlog_compact_tasks_axi_unavailable_uses_manual_fallback
 test_fleet_digest_empty_fleet
 test_next_step_sources_x_mode_cadence
 test_next_step_afk_delegates_to_daemon
+test_session_start_surfaces_inject_wedged_marker
 test_supervision_block_exactly_one_and_pi_diagnostic
 test_pi_diagnostic_rejects_stale_loaded_marker
 test_pi_diagnostic_accepts_prelock_loaded_marker

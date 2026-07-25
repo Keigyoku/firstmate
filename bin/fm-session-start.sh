@@ -383,6 +383,15 @@ if [ -e "$STATE/.afk" ]; then
 else
   printf 'absent\n'
 fi
+# Automatic wedge surface (fm-afk-inject-wedge): never rely on the human habit
+# "check state/.subsuper-inject-wedged first". A durable marker means the inject
+# channel failed - escalate LOUD in the digest so recovery cannot miss it.
+if [ -e "$STATE/.subsuper-inject-wedged" ]; then
+  printf '\nINJECT_WEDGED: away-mode inject channel is or was blocked - escalations may not have reached the primary.\n'
+  printf 'Marker: %s\n' "$STATE/.subsuper-inject-wedged"
+  sed -n '1,20p' "$STATE/.subsuper-inject-wedged" 2>/dev/null || true
+  printf 'Act: fix the supervisor pane / FM_SUPERVISOR_TARGET, drain buffered escalations, clear the marker only after delivery is proven.\n'
+fi
 
 # --- 7. closing reminder -----------------------------------------------
 section "NEXT STEP"

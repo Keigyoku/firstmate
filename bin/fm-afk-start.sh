@@ -82,10 +82,35 @@ daemon_lock_held_by_live_daemon() {
   daemon_pid_matches "$pid" "$owner"
 }
 
+# Resolve supervisor backend/target before claiming afk healthy. Used both for
+# the already-running re-probe and for the start path's preflight.
+backend=$(discover_supervisor_backend) || true
+if ! fm_backend_list_contains "$FM_SUPERVISOR_SUPPORTED_BACKENDS" "$backend"; then
+  echo "error: away-mode daemon does not support supervisor backend '$backend' yet (supported: $FM_SUPERVISOR_SUPPORTED_BACKENDS); set FM_SUPERVISOR_BACKEND=tmux|herdr and FM_SUPERVISOR_TARGET to run firstmate's own pane under a supported backend" >&2
+  exit 1
+fi
+FM_SUPERVISOR_BACKEND="$backend"
+export FM_SUPERVISOR_BACKEND
+
+target=$(discover_supervisor_target) || true
+if ! fm_backend_target_exists "$backend" "$target"; then
+  echo "error: supervisor target '$target' does not resolve to a $backend pane; set FM_SUPERVISOR_TARGET" >&2
+  exit 1
+fi
+FM_SUPERVISOR_TARGET="$target"
+export FM_SUPERVISOR_TARGET
+
 pid=$(daemon_lock_pid 2>/dev/null || true)
 if daemon_lock_held_by_live_daemon; then
+  # Refresh afk, then re-prove the inject channel. A live daemon whose composer
+  # is permanently pending (the 2026-07-24 app-spawned Claude wedge) must not
+  # look healthy just because the process is still running.
   date '+%s' > "$STATE/.afk"
-  echo "afk: daemon already running pid=$pid"
+  if ! inject_channel_self_test "$STATE"; then
+    echo "error: AFK inject channel self-test FAILED while daemon pid=$pid is live - do not trust away-mode until the channel is fixed (see state/.subsuper-inject-wedged)" >&2
+    exit 1
+  fi
+  echo "afk: daemon already running pid=$pid; inject channel self-test OK"
   exit 0
 fi
 
@@ -93,18 +118,7 @@ if fm_pid_alive "$pid" && [ -n "$pid" ]; then
   fm_lock_remove_path "$LOCK" 2>/dev/null || true
 fi
 
-backend=$(discover_supervisor_backend) || true
-if ! fm_backend_list_contains "$FM_SUPERVISOR_SUPPORTED_BACKENDS" "$backend"; then
-  echo "error: away-mode daemon does not support supervisor backend '$backend' yet (supported: $FM_SUPERVISOR_SUPPORTED_BACKENDS); set FM_SUPERVISOR_BACKEND=tmux|herdr and FM_SUPERVISOR_TARGET to run firstmate's own pane under a supported backend" >&2
-  exit 1
-fi
-
-target=$(discover_supervisor_target) || true
-if ! fm_backend_target_exists "$backend" "$target"; then
-  echo "error: supervisor target '$target' does not resolve to a $backend pane; set FM_SUPERVISOR_TARGET" >&2
-  exit 1
-fi
-
 date '+%s' > "$STATE/.afk"
 echo "afk: starting supervise daemon in foreground; keep this command as a tracked background session"
+echo "afk: inject channel self-test runs at daemon startup (fails loud if the supervisor pane cannot accept escalations)"
 exec "$DAEMON"

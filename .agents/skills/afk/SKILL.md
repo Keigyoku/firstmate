@@ -36,10 +36,21 @@ batched digest rather than per-wake injections.
    The daemon is **presence-gated**: it injects escalations only while
    `state/.afk` exists, and stays quiet otherwise.
 
-3. **Do not separately arm `fm-watch.sh`.** The daemon manages the watcher as
+3. **Inject-channel self-test at activation (fail loud).**
+   `fm-afk-start.sh` and daemon startup run `inject_channel_self_test`: probe the
+   supervisor target, require an affirmatively empty composer, and inject a one-line
+   self-test digest. On failure they write `state/.subsuper-inject-wedged`, fire the
+   active wedge alert, print ERROR on stderr, and refuse silent away-mode (exit
+   non-zero / clear `.afk` on fresh start). Do **not** tell the captain away-mode is
+   healthy if that self-test failed - a wedged channel must be fixed before walking
+   away. `bin/fm-session-start.sh` also prints any durable inject-wedged marker in
+   the fleet digest so recovery cannot depend on a human habit of checking the file.
+
+4. **Do not separately arm `fm-watch.sh`.** The daemon manages the watcher as
    its child; the singleton lock no-ops a stray arm harmlessly.
 
-4. **Acknowledge** to the captain that away-mode is active.
+5. **Acknowledge** to the captain that away-mode is active **only after** the
+   helper reported success (including inject self-test OK).
    The daemon will self-handle routine wakes, escalate captain-relevant events and bounded declared-external-wait rechecks, and let the captain exit by sending any real message.
 
 ## How to exit afk

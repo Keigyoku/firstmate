@@ -48,6 +48,11 @@
 #     undelivered past FM_MAX_DEFER_SECS, the daemon retries a normal flush and
 #     writes state/.subsuper-inject-wedged and attempts a configurable active
 #     alert if submit still cannot be confirmed.
+#   - Startup inject self-test (inject_channel_self_test): when afk is on at
+#     daemon start (and on /afk refresh of a live daemon), prove the supervisor
+#     pane can accept a digest immediately. A permanently-pending composer or
+#     wrong auto-discovered target fails LOUD with the durable wedge marker
+#     instead of buffering for hours (2026-07-24 app-spawned Claude incident).
 #   - Cheap heartbeat catch-all: every HEARTBEAT_SCAN_SECS the daemon greps all
 #     state/*.status for a captain-relevant line the per-wake classifier might
 #     have missed (e.g. a status verb outside CAPTAIN_RE) and escalates it.
@@ -952,6 +957,75 @@ inject_wedge_alarm() {  # <state> <age-seconds>
   fi
 }
 
+# Write (or force-refresh) the durable inject-wedged marker with a diagnosis, log
+# ERROR, print LOUD on stderr, and fire the active alert. Unlike inject_wedge_alarm
+# this is NOT rate-limited: a startup self-test or a first detection must never
+# stay quiet because a prior marker was "too recent". Does not clear escalations.
+inject_channel_fail_loud() {  # <state> <reason>
+  local state=$1 reason=$2 marker target backend
+  marker="$state/.subsuper-inject-wedged"
+  target="${FM_SUPERVISOR_TARGET:-$FM_SUPERVISOR_TARGET_DEFAULT}"
+  backend="${FM_SUPERVISOR_BACKEND:-${FM_SUPERVISOR_BACKEND_DEFAULT:-tmux}}"
+  {
+    printf 'fm away-mode inject WEDGED as of %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')"
+    printf 'reason: %s\n' "$reason"
+    printf 'target: %s  backend: %s\n' "$target" "$backend"
+    if [ -s "$state/.subsuper-escalations" ]; then
+      printf 'Buffered escalations still undelivered:\n'
+      cat "$state/.subsuper-escalations" 2>/dev/null
+    fi
+  } 2>/dev/null > "$marker" || true
+  log "ERROR: away-mode inject channel failed: $reason (marker $marker)"
+  printf 'error: AFK inject channel WEDGED: %s\n' "$reason" >&2
+  printf 'error: see durable marker %s - away-mode will buffer escalations that never reach the primary until this is fixed\n' "$marker" >&2
+  if [ "$backend" = tmux ]; then
+    tmux display-message -t "$target" "fm: AFK inject WEDGED — see $marker" 2>/dev/null || true
+  fi
+  wedge_alarm_notify "AFK inject channel WEDGED: $reason - see $marker" "$marker" || true
+  return 1
+}
+
+# Startup /afk self-test of the inject channel (task fm-afk-inject-wedge).
+# Proves the supervisor pane can accept a digest RIGHT NOW - the 2026-07-24
+# app-spawned Claude incident sat 33h with composer permanently "pending" and
+# only a passive marker (cleared before catch-up) as the signal. Returns 0 when
+# a real self-test inject confirms submit; on any failure writes the durable
+# wedge marker, fires the active alert, prints LOUD to stderr, and returns 1.
+# Does NOT weaken the composer guard: a non-empty/unknown/busy target fails the
+# test instead of being force-injected. Requires afk active (inject_msg presence
+# gate) and FM_SUPERVISOR_TARGET / FM_SUPERVISOR_BACKEND already resolved.
+inject_channel_self_test() {  # <state>
+  local state=$1 target backend composer
+  state=${1:-$(_state_root)}
+  target="${FM_SUPERVISOR_TARGET:-$FM_SUPERVISOR_TARGET_DEFAULT}"
+  backend="${FM_SUPERVISOR_BACKEND:-tmux}"
+  if ! afk_active "$state"; then
+    inject_channel_fail_loud "$state" "self-test requires state/.afk (afk inactive)"
+    return 1
+  fi
+  if ! fm_backend_target_exists "$backend" "$target"; then
+    inject_channel_fail_loud "$state" "supervisor target '$target' does not resolve on backend=$backend"
+    return 1
+  fi
+  if pane_is_busy "$target" "$backend"; then
+    inject_channel_fail_loud "$state" "supervisor pane busy (agent mid-turn) at self-test; refuse silent afk"
+    return 1
+  fi
+  composer=$(fm_backend_composer_state "$backend" "$target" 2>/dev/null || true)
+  if [ "$composer" != empty ]; then
+    inject_channel_fail_loud "$state" "supervisor composer not confirmed-empty at self-test (state=${composer:-unknown}: pending input, dead-shell prompt, unreadable pane, or wrong target auto-discovery)"
+    return 1
+  fi
+  # Real inject: proves submit + confirmation, not only the composer probe.
+  if ! inject_msg "AFK inject channel self-test OK (ignore this digest; channel healthy)" "$state"; then
+    inject_channel_fail_loud "$state" "self-test inject could not confirm submit (composer empty probe passed but Enter/submit failed)"
+    return 1
+  fi
+  rm -f "$state/.subsuper-inject-wedged"
+  log "inject channel self-test OK (target=$target backend=$backend)"
+  return 0
+}
+
 _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first arrived (sidecar epoch)
   local f=$1 since
   [ -s "$f" ] || { echo 999999; return; }
@@ -1417,6 +1491,23 @@ fm_super_main() {
   afk_active "$STATE" && afk_status="on"
   log "daemon starting (pid $$); target=$TARGET; target_source=$target_source; backend=$BACKEND; backend_source=$backend_source; afk=$afk_status; inject_skip='${FM_INJECT_SKIP:-$INJECT_SKIP_DEFAULT}'; stale_escalate=${FM_STALE_ESCALATE_SECS:-$STALE_ESCALATE_SECS_DEFAULT}s; batch=${FM_ESCALATE_BATCH_SECS:-$ESCALATE_BATCH_SECS_DEFAULT}s"
   migrate_watcher_pause_markers "$STATE"
+
+  # Startup inject-channel self-test (fm-afk-inject-wedge). When afk is already
+  # on (the normal /afk path sets state/.afk before exec), prove the channel can
+  # accept a digest immediately so a permanently-pending composer or wrong target
+  # fails LOUD at activation instead of buffering for a day. When afk is off
+  # (daemon started without the flag), skip - inject_msg is presence-gated and
+  # there is no captain-consented away mode to protect yet.
+  if afk_active "$STATE"; then
+    if ! inject_channel_self_test "$STATE"; then
+      log "startup failed: inject channel self-test WEDGED (target=$TARGET backend=$BACKEND source=$target_source)"
+      echo "error: AFK inject channel self-test FAILED - refusing to run silent away-mode (target=$TARGET backend=$BACKEND source=$target_source); fix the supervisor pane or set FM_SUPERVISOR_TARGET, then re-run /afk" >&2
+      rm -f "$STATE/.afk" 2>/dev/null || true
+      fm_lock_release "$LOCK" 2>/dev/null || true
+      rm -f "$PIDFILE" 2>/dev/null || true
+      exit 1
+    fi
+  fi
 
   # --- shutdown: flush buffered escalations, reap child, release lock -------
   local WATCHER_PID="" CUR_TMP=""
