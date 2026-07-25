@@ -548,6 +548,7 @@ These skills are not captain-invocable; load them only at their precise triggers
 - `review-crew` - load when dispatched as a Review Crew round (a review-fix cycle round on a PR, or an independent pre-merge review).
 - `smoke-crew` - load when dispatched for smoke verification (a Smoke Crew pass, pre-ship live-app matrix run, or regression smoke of a merged or candidate build).
 - `marketing-crew` - load when dispatched as a Marketing Crew task (marketing strategy, copy, content, SEO, launch, growth work).
+- `program-pack` - load when dispatched for end-to-end program planning (program-pack, design pack, or crew-runnable super-flow that must produce a hand-off-ready pack, epic, issues, completeness gate, and cross-harness fresh-eyes).
 
 ## 14. X mode
 
