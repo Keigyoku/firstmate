@@ -364,7 +364,17 @@ report). Templates: [COMPLETENESS.md](COMPLETENESS.md) and Phase 10 in
 **Review harness:** …   # MUST differ
 **Reviewer / task id:** …
 **Pack path:** …
+**Freeze commit SHA:** …
+**Issue snapshot:** <epic + child issue numbers/URLs at freeze time>
 **Date:** YYYY-MM-DD
+
+## Comparison surfaces
+
+| Surface | Evidence reviewed | Findings / N/A justification |
+|---|---|---|
+| Pack ↔ pack | … | … |
+| Pack ↔ filed issue bodies | <issue URLs and body revisions> | … |
+| Pack ↔ active implementation | <PRs, paths, review/test evidence> | <findings or N/A — no active implementation> |
 
 ## Findings
 
