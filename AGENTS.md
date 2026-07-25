@@ -516,7 +516,7 @@ Use its scaffold as the contract, then replace every `{TASK}` placeholder with a
 Keep additions task-specific rather than repeating lifecycle instructions, and alter generated sections only when the task genuinely differs from the standard shape.
 
 Every ship brief must retain the worktree-isolation assertion and stop if launched in the primary checkout.
-For work that must land on an existing branch (review-fix, PR-body correction, stacked slice), scaffold with `--on-branch` and, when known, `--pr` and `--expect-head`, so Setup checks out that branch with no create-branch instruction and names the PR the delivery gate must update.
+For work that must land on an existing branch (review-fix, PR-body correction, stacked slice), scaffold with `--on-branch` and, when known, `--pr` and `--expect-head`, so Setup uses that exact local branch name with no create-branch instruction and names the PR the delivery gate must update.
 Do not paste a prose override that contradicts a default create-branch Setup.
 If a ship task touches firstmate's shared tracked material, explicitly require `firstmate-coding-guidelines` before editing.
 If a task will drive Herdr lifecycle behavior, scaffold with `--herdr-lab`; if that need appears after an unguarded scaffold, stop and regenerate rather than adding commands by hand.

@@ -562,23 +562,20 @@ esac
 SETUP_STEP=1
 if [ -n "$ON_BRANCH" ]; then
   ON_BRANCH_Q=$(shell_quote "$ON_BRANCH")
-  ON_LOCAL_REF_Q=$(shell_quote "refs/heads/$ON_BRANCH")
   ON_REMOTE_REF_Q=$(shell_quote "origin/$ON_BRANCH")
-  ON_REMOTE_TRACKING_REF_Q=$(shell_quote "refs/remotes/origin/$ON_BRANCH")
   ON_REMOTE_HEAD_REF_Q=$(shell_quote "refs/heads/$ON_BRANCH")
-  ON_FETCH_REFSPEC_Q=$(shell_quote "+refs/heads/$ON_BRANCH:refs/remotes/origin/$ON_BRANCH")
   SETUP_INTRO="You are in a disposable git worktree of $REPO. This task continues existing branch \`$ON_BRANCH\`; do not create a new branch."
   if [ "$MODE" = local-only ]; then
     SETUP_STEPS="${SETUP_STEP}. First action: check out the existing local branch \`$ON_BRANCH\` (do NOT create a new branch):
-   Run \`git switch -- $ON_BRANCH_Q\`.
-   Confirm \`git rev-parse --abbrev-ref HEAD\` equals \`$ON_BRANCH\`. If not, append \`blocked: wrong branch, expected $ON_BRANCH_Q got <actual>\` and stop."
+   Run \`git switch -- $ON_BRANCH_Q\`."
   else
     SETUP_STEPS="${SETUP_STEP}. First action: fetch and check out the existing branch \`$ON_BRANCH\` (do NOT create a new branch):
-   Run \`git fetch origin $ON_FETCH_REFSPEC_Q\`.
-   If \`git show-ref --verify --quiet $ON_LOCAL_REF_Q\` succeeds, run \`git switch -- $ON_BRANCH_Q\`; otherwise run \`git switch --track -- $ON_REMOTE_REF_Q\`.
-   Confirm \`git rev-parse --abbrev-ref HEAD\` equals \`$ON_BRANCH\`. If not, append \`blocked: wrong branch, expected $ON_BRANCH_Q got <actual>\` and stop.
-   Then \`test \"\$(git rev-parse HEAD)\" = \"\$(git rev-parse $ON_REMOTE_TRACKING_REF_Q)\"\` must succeed. If it does not, append \`blocked: local branch $ON_BRANCH_Q differs from origin before work starts\` and stop. Do not reset either ref."
+   Run \`git fetch origin $ON_BRANCH_Q && git checkout -B $ON_BRANCH_Q $ON_REMOTE_REF_Q\`."
   fi
+  SETUP_STEPS="$SETUP_STEPS
+   If checkout refuses because another linked worktree already has \`$ON_BRANCH\` checked out, use \`git worktree list --porcelain\` to identify its path, append \`blocked: branch $ON_BRANCH_Q is checked out in another worktree at <path>; firstmate must free it\`, and stop.
+   Do not use a detached HEAD, force-steal the branch, or create a differently named fallback branch. Delivery associates the PR with the local branch name, so the local name must remain \`$ON_BRANCH\`.
+   Immediately after checkout, \`test \"\$(git rev-parse --abbrev-ref HEAD)\" = $ON_BRANCH_Q\` must succeed. If it does not, append \`blocked: wrong branch, expected $ON_BRANCH_Q got <actual>\` and stop."
   SETUP_STEP=$((SETUP_STEP + 1))
   if [ -n "$EXPECT_HEAD" ]; then
     EXPECT_HEAD_Q=$(shell_quote "$EXPECT_HEAD")
@@ -599,7 +596,14 @@ ${SETUP_STEP}. PR association (authoritative): this work updates $PR_DISPLAY. Pu
   fi
   if [ "$MODE" != local-only ]; then
     SETUP_STEPS="$SETUP_STEPS
-${SETUP_STEP}. Branch custody: Never force-push. Never reset (hard or mixed) this shared branch to discard history. If a push is refused because a stale pipeline holds custody, abort that stale run by id from the PR body (\`no-mistakes axi abort --run <id>\`), then push again. After every successful push, confirm the remote tip with \`git ls-remote origin $ON_REMOTE_HEAD_REF_Q\` and ensure it matches your local HEAD. If you still cannot push without force, append \`needs-decision:\` or \`blocked:\` and stop."
+${SETUP_STEP}. Branch custody: Never force-push. After work starts, never reset (hard or mixed) this shared branch to discard history. If a push is refused because a stale pipeline holds custody, abort that stale run by id from the PR body (\`no-mistakes axi abort --run <id>\`), then push again. After every successful push, confirm the remote tip with \`git ls-remote origin $ON_REMOTE_HEAD_REF_Q\` and ensure it matches your local HEAD. If you still cannot push without force, append \`needs-decision:\` or \`blocked:\` and stop."
+    SETUP_STEP=$((SETUP_STEP + 1))
+    case "$MODE" in
+      direct-PR) DELIVERY_ACTION="pushing or updating the PR" ;;
+      *) DELIVERY_ACTION="invoking /no-mistakes" ;;
+    esac
+    SETUP_STEPS="$SETUP_STEPS
+${SETUP_STEP}. Delivery pre-flight: immediately before $DELIVERY_ACTION, \`test \"\$(git rev-parse --abbrev-ref HEAD)\" = $ON_BRANCH_Q\` must succeed. If it does not, append \`blocked: wrong local branch for delivery gate, expected $ON_BRANCH_Q got <actual>\` and stop - do not proceed."
     SETUP_STEP=$((SETUP_STEP + 1))
   fi
 else

@@ -398,15 +398,13 @@ test_role_rejected_for_secondmate_and_unknown() {
 }
 
 # Fresh-branch (default) vs existing-branch (--on-branch) Setup contracts.
-# Fixes the ambiguous-brief half of "pipeline lands on wrong PR / no PR found":
+# Fixes the ambiguous "pipeline lands on wrong PR / no PR found" path:
 # scaffold said "create your branch: git checkout -b fm/<task-id>" while {TASK}
 # prose said to stack on an existing PR branch. Crews that obeyed the scaffold
-# opened task-named branches with no PR (e.g. #835 body-fix). Does NOT address
-# mid-run branch-switch cases where a crew already used the target branch then
-# later landed on a task-named branch (composer-fix #836) - that mechanism is
-# undiagnosed and separate. The create-branch string must be ABSENT from
-# existing-branch briefs - that is the assertion that would have caught the
-# ambiguous-brief class.
+# opened task-named branches with no PR (e.g. #835 body-fix), and a later task-named
+# local branch could misdirect delivery after work started on the target branch
+# (composer-fix #836). The create-branch string must be ABSENT and the local branch
+# name must equal the target at setup and delivery.
 test_fresh_branch_setup_creates_task_branch() {
   local home id brief
   home="$TMP_ROOT/fresh-branch-home"
@@ -446,18 +444,24 @@ test_on_branch_setup_checks_out_existing_without_create() {
     "existing-branch brief must not invent a task-named branch"
 
   # Checkout the named branch, not a new one.
-  assert_grep "git fetch origin '+refs/heads/$branch:refs/remotes/origin/$branch'" "$brief" \
-    "existing-branch brief must fetch the target branch"
-  assert_grep "git switch -- '$branch'" "$brief" \
-    "existing-branch brief must check out the target branch"
-  assert_no_grep "git checkout -B" "$brief" \
-    "existing-branch brief must not reset the target branch"
-  assert_grep "local branch '$branch' differs from origin before work starts" "$brief" \
-    "existing-branch brief must fail closed when local and remote tips differ"
+  assert_grep "git fetch origin '$branch' && git checkout -B '$branch' 'origin/$branch'" "$brief" \
+    "existing-branch brief must reset the named local branch from its remote"
   assert_grep "$branch" "$brief" \
     "existing-branch brief must name the target branch"
   assert_grep "do NOT create a new branch" "$brief" \
     "existing-branch brief must forbid creating a new branch"
+  assert_grep "git worktree list --porcelain" "$brief" \
+    "existing-branch brief must identify a linked worktree that holds the branch"
+  assert_grep "firstmate must free it" "$brief" \
+    "existing-branch brief must block for branch custody handoff"
+  assert_grep "Do not use a detached HEAD" "$brief" \
+    "existing-branch brief must forbid a wrong-name fallback"
+  assert_grep "test \"\$(git rev-parse --abbrev-ref HEAD)\" = '$branch'" "$brief" \
+    "existing-branch brief must assert the local branch name"
+  assert_grep "immediately before invoking /no-mistakes" "$brief" \
+    "existing-branch brief must repeat the local-name check before delivery"
+  assert_grep "blocked: wrong local branch for delivery gate, expected '$branch' got <actual>" "$brief" \
+    "existing-branch brief must block delivery from the wrong local branch"
 
   # Expected-head assertion with blocked: stop, reporting actual sha.
   assert_grep "$expect_head" "$brief" \
@@ -478,7 +482,7 @@ test_on_branch_setup_checks_out_existing_without_create() {
   # Custody rules formerly pasted by hand into {TASK}.
   assert_grep "Never force-push" "$brief" \
     "existing-branch brief missing never force-push custody rule"
-  assert_grep "Never reset" "$brief" \
+  assert_grep "never reset" "$brief" \
     "existing-branch brief missing never reset custody rule"
   assert_grep "abort" "$brief" \
     "existing-branch brief missing abort-stale-run custody rule"
@@ -499,18 +503,16 @@ test_on_branch_shell_quotes_command_values() {
     --on-branch "$branch" --pr "$pr_url" --expect-head "$expect_head" >/dev/null 2>&1
   brief="$home/data/$id/brief.md"
 
-  assert_grep "git fetch origin '+refs/heads/$branch:refs/remotes/origin/$branch'" "$brief" \
-    "branch interpolation in fetch command must be shell-quoted"
-  assert_grep "git switch -- '$branch'" "$brief" \
-    "branch interpolation in switch command must be shell-quoted"
+  assert_grep "git fetch origin '$branch' && git checkout -B '$branch' 'origin/$branch'" "$brief" \
+    "branch interpolations in checkout setup must be shell-quoted"
   assert_grep "git ls-remote origin 'refs/heads/$branch'" "$brief" \
     "branch interpolation in ls-remote command must be shell-quoted"
   assert_grep "case \"\$(git rev-parse HEAD)\" in '$expect_head'*)" "$brief" \
     "expected-head interpolation in assertion command must be shell-quoted"
   assert_grep "expected '$pr_url'" "$brief" \
     "PR interpolation in blocked command text must be shell-quoted"
-  assert_no_grep "git fetch origin $branch" "$brief" \
-    "branch metacharacters must not render in an unquoted compound command"
+  assert_no_grep "git checkout -B $branch" "$brief" \
+    "branch metacharacters must not render as an unquoted checkout argument"
   pass "fm-brief.sh: --on-branch shell-quotes generated command values"
 }
 
