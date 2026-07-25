@@ -397,6 +397,191 @@ test_role_rejected_for_secondmate_and_unknown() {
   pass "fm-brief.sh: --role rejects secondmate and unknown names"
 }
 
+# Fresh-branch (default) vs existing-branch (--on-branch) Setup contracts.
+# Fixes the ambiguous "pipeline lands on wrong PR / no PR found" path:
+# scaffold said "create your branch: git checkout -b fm/<task-id>" while {TASK}
+# prose said to stack on an existing PR branch. Crews that obeyed the scaffold
+# opened task-named branches with no PR (e.g. #835 body-fix), and a later task-named
+# local branch could misdirect delivery after work started on the target branch
+# (composer-fix #836). These assertions cover those branch-name failure classes,
+# not unrelated delivery failures: the create-branch string must be ABSENT and the
+# local branch name must equal the target at setup and delivery.
+test_fresh_branch_setup_creates_task_branch() {
+  local home id brief
+  home="$TMP_ROOT/fresh-branch-home"
+  mkdir -p "$home/data"
+  id="brief-fresh-branch-f1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "fresh-branch brief was not scaffolded"
+  assert_grep "create your branch: \`git checkout -b fm/$id\`" "$brief" \
+    "default ship brief must still emit the create-branch first action"
+  assert_grep "git checkout -b fm/$id" "$brief" \
+    "default ship brief must name the task branch create command"
+  assert_no_grep "do NOT create a new branch" "$brief" \
+    "default ship brief must not carry existing-branch custody prose"
+  pass "fm-brief.sh: default ship Setup still creates the task branch"
+}
+
+test_on_branch_setup_checks_out_existing_without_create() {
+  local home id brief branch pr_url expect_head
+  home="$TMP_ROOT/on-branch-home"
+  mkdir -p "$home/data"
+  id="brief-on-branch-o1"
+  branch="fm/vellum-voice-e2e-g7"
+  pr_url="https://github.com/example/vellum-app/pull/830"
+  expect_head="81fae0b6abc123"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj \
+    --on-branch "$branch" --pr "$pr_url" --expect-head "$expect_head" >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "existing-branch brief was not scaffolded"
+
+  # Critical: no create-branch instruction anywhere (the bug class oracle).
+  assert_no_grep "git checkout -b" "$brief" \
+    "existing-branch brief must not contain git checkout -b anywhere"
+  assert_no_grep "create your branch" "$brief" \
+    "existing-branch brief must not say create your branch"
+  assert_no_grep "fm/$id" "$brief" \
+    "existing-branch brief must not invent a task-named branch"
+
+  # Checkout the named branch, not a new one.
+  assert_grep "git fetch origin '$branch' && git checkout -B '$branch' 'origin/$branch'" "$brief" \
+    "existing-branch brief must reset the named local branch from its remote"
+  assert_grep "$branch" "$brief" \
+    "existing-branch brief must name the target branch"
+  assert_grep "do NOT create a new branch" "$brief" \
+    "existing-branch brief must forbid creating a new branch"
+  assert_grep "git worktree list --porcelain" "$brief" \
+    "existing-branch brief must identify a linked worktree that holds the branch"
+  assert_grep "firstmate must free it" "$brief" \
+    "existing-branch brief must block for branch custody handoff"
+  assert_grep "Do not use a detached HEAD" "$brief" \
+    "existing-branch brief must forbid a wrong-name fallback"
+  assert_grep "test \"\$(git rev-parse --abbrev-ref HEAD)\" = '$branch'" "$brief" \
+    "existing-branch brief must assert the local branch name"
+  assert_grep "immediately before invoking /no-mistakes" "$brief" \
+    "existing-branch brief must repeat the local-name check before delivery"
+  assert_grep "blocked: wrong local branch for delivery gate, expected '$branch' got <actual>" "$brief" \
+    "existing-branch brief must block delivery from the wrong local branch"
+
+  # Expected-head assertion with blocked: stop, reporting actual sha.
+  assert_grep "$expect_head" "$brief" \
+    "existing-branch brief must carry the expected head"
+  assert_grep "blocked:" "$brief" \
+    "existing-branch brief must stop with blocked: on unexpected head"
+  assert_grep "git rev-parse HEAD" "$brief" \
+    "existing-branch brief must assert HEAD via git rev-parse"
+
+  # Explicit PR association so the delivery gate updates that PR, not opens one.
+  assert_grep "$pr_url" "$brief" \
+    "existing-branch brief must name the PR URL"
+  assert_grep "Do not open a new PR" "$brief" \
+    "existing-branch brief must forbid opening a replacement PR"
+  assert_grep "updates" "$brief" \
+    "existing-branch brief must state that pushes update the existing PR"
+
+  # Custody rules formerly pasted by hand into {TASK}.
+  assert_grep "Never force-push" "$brief" \
+    "existing-branch brief missing never force-push custody rule"
+  assert_grep "never reset" "$brief" \
+    "existing-branch brief missing never reset custody rule"
+  assert_grep "abort" "$brief" \
+    "existing-branch brief missing abort-stale-run custody rule"
+  assert_grep "git ls-remote" "$brief" \
+    "existing-branch brief missing ls-remote post-push confirmation"
+  pass "fm-brief.sh: --on-branch Setup checks out existing branch with no create"
+}
+
+test_on_branch_shell_quotes_command_values() {
+  local home id brief branch pr_url expect_head
+  home="$TMP_ROOT/on-branch-quoting-home"
+  mkdir -p "$home/data"
+  id="brief-on-branch-q1"
+  # shellcheck disable=SC2016 # Literal expansion syntax is the injection payload.
+  branch='fm/review-$x;`touch-pwn`'
+  # shellcheck disable=SC2016 # Literal expansion syntax is the injection payload.
+  pr_url='https://example.invalid/pull/42?x=$y;`touch-pwn`'
+  # shellcheck disable=SC2016 # Literal expansion syntax is the injection payload.
+  expect_head='abc123$z;`touch-pwn`'
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj \
+    --on-branch "$branch" --pr "$pr_url" --expect-head "$expect_head" >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+
+  assert_grep "git fetch origin '$branch' && git checkout -B '$branch' 'origin/$branch'" "$brief" \
+    "branch interpolations in checkout setup must be shell-quoted"
+  assert_grep "git ls-remote origin 'refs/heads/$branch'" "$brief" \
+    "branch interpolation in ls-remote command must be shell-quoted"
+  assert_grep "case \"\$(git rev-parse HEAD)\" in '$expect_head'*)" "$brief" \
+    "expected-head interpolation in assertion command must be shell-quoted"
+  assert_grep "expected '$pr_url'" "$brief" \
+    "PR interpolation in blocked command text must be shell-quoted"
+  assert_no_grep "git checkout -B $branch" "$brief" \
+    "branch metacharacters must not render as an unquoted checkout argument"
+  pass "fm-brief.sh: --on-branch shell-quotes generated command values"
+}
+
+test_on_branch_local_only_has_local_custody() {
+  local home id brief out status
+  home="$TMP_ROOT/on-branch-local-home"
+  write_registry "$home"
+  id="brief-on-branch-local-l1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj \
+    --on-branch fm/local-stack --expect-head abc123 >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+
+  assert_grep "git switch -- 'fm/local-stack'" "$brief" \
+    "local-only existing-branch brief must switch to the local branch"
+  assert_no_grep "git fetch origin" "$brief" \
+    "local-only existing-branch brief must not require an origin fetch"
+  assert_no_grep "git ls-remote" "$brief" \
+    "local-only existing-branch brief must not require remote-tip verification"
+  assert_no_grep "stale pipeline" "$brief" \
+    "local-only existing-branch brief must not mention pipeline custody"
+  assert_no_grep "Never force-push" "$brief" \
+    "local-only existing-branch brief must not emit remote custody rules"
+  assert_no_grep "open a new PR" "$brief" \
+    "local-only existing-branch brief must not discuss replacement PRs"
+
+  status=0
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" onb-local-pr local-proj \
+    --on-branch fm/local-stack --pr 42 2>&1) || status=$?
+  expect_code 1 "$status" "--pr with local-only delivery should fail"
+  assert_contains "$out" "local-only" "local-only --pr rejection should name the delivery mode"
+  assert_absent "$home/data/onb-local-pr/brief.md" \
+    "rejected local-only --pr request still wrote a brief"
+  pass "fm-brief.sh: local-only --on-branch stays local and rejects --pr"
+}
+
+test_on_branch_rejects_misuse() {
+  local home out status
+  home="$TMP_ROOT/on-branch-reject-home"
+  mkdir -p "$home/data"
+
+  status=0
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" onb-scout some-proj --scout --on-branch fm/x 2>&1) || status=$?
+  expect_code 1 "$status" "--on-branch with --scout should fail"
+  assert_contains "$out" "--on-branch" "scout rejection should mention --on-branch"
+
+  status=0
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" onb-sm --secondmate --no-projects --on-branch fm/x 2>&1) || status=$?
+  expect_code 1 "$status" "--on-branch with --secondmate should fail"
+
+  status=0
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" onb-pr-only some-proj --pr 830 2>&1) || status=$?
+  expect_code 1 "$status" "--pr without --on-branch should fail"
+  assert_contains "$out" "--on-branch" "--pr rejection should require --on-branch"
+
+  status=0
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" onb-head-only some-proj --expect-head abcdef 2>&1) || status=$?
+  expect_code 1 "$status" "--expect-head without --on-branch should fail"
+
+  status=0
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" onb-empty some-proj --on-branch 2>&1) || status=$?
+  expect_code 1 "$status" "--on-branch without a value should fail"
+
+  pass "fm-brief.sh: --on-branch rejects scout/secondmate and orphan flags"
+}
+
 test_script_parses
 test_help_includes_entire_header
 test_ship_modes_generate_clean_briefs
@@ -413,3 +598,8 @@ test_ship_briefs_emit_tdd_contract
 test_scout_brief_has_no_tdd_contract
 test_role_line_on_ship_and_scout
 test_role_rejected_for_secondmate_and_unknown
+test_fresh_branch_setup_creates_task_branch
+test_on_branch_setup_checks_out_existing_without_create
+test_on_branch_shell_quotes_command_values
+test_on_branch_local_only_has_local_custody
+test_on_branch_rejects_misuse

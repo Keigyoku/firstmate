@@ -513,9 +513,12 @@ Preserve durable structured identifiers, dependencies, and completion artifact l
 
 `bin/fm-brief.sh` and its help own scaffold syntax, generated variants, status protocol, delivery-mode definitions of done, and exact safety mechanics.
 Use its scaffold as the contract, then replace every `{TASK}` placeholder with a clear task description, acceptance criteria, constraints, and necessary context before dispatch or seeding.
-Keep additions task-specific rather than repeating lifecycle instructions, and alter generated sections only when the task genuinely differs from the standard shape.
+Keep additions task-specific rather than repeating lifecycle instructions, and use scaffold flags for every supported variant instead of altering generated sections.
+Alter generated sections only when the task genuinely differs from every supported scaffold shape.
 
 Every ship brief must retain the worktree-isolation assertion and stop if launched in the primary checkout.
+For work that must land on an existing branch (review-fix, PR-body correction, stacked slice), scaffold with `--on-branch` and, when known, `--pr` and `--expect-head`, so Setup uses that exact local branch name with no create-branch instruction and names the PR the delivery gate must update.
+Do not paste a prose override that contradicts a default create-branch Setup.
 If a ship task touches firstmate's shared tracked material, explicitly require `firstmate-coding-guidelines` before editing.
 If a task will drive Herdr lifecycle behavior, scaffold with `--herdr-lab`; if that need appears after an unguarded scaffold, stop and regenerate rather than adding commands by hand.
 For role-identity dispatches, pass matching `--role` to both brief and spawn.

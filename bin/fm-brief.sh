@@ -3,16 +3,25 @@
 # data/<task-id>/brief.md under the active firstmate home.
 # For ordinary tasks, the standard Setup/Rules/Definition-of-done contract is
 # filled in. Firstmate then replaces the {TASK} placeholder with the task
-# description, acceptance criteria, and context, and may adjust other sections
-# when the task genuinely deviates (e.g. working an existing external PR instead
-# of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> [--scout] [--herdr-lab] [--role <review-crew|smoke-crew|marketing-crew>]
+# description, acceptance criteria, and context.
+# Usage: fm-brief.sh <task-id> <repo-name> [--scout] [--herdr-lab]
+#          [--role <review-crew|smoke-crew|marketing-crew>]
+#          [--on-branch <branch> [--pr <n|url>] [--expect-head <sha>]]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
 #   --role <review-crew|smoke-crew|marketing-crew> inserts a one-line role-identity
 #   load instruction into ship/scout briefs (matches fm-spawn --role). Not valid
 #   with --secondmate.
+#   --on-branch <branch> scaffolds an existing-branch ship Setup: fetch and check
+#   out that branch with no create-branch instruction. Use for review-fix rounds,
+#   PR-body corrections, and stacked slices that must land on a branch that
+#   already has (or will keep) an existing PR. Default without this flag remains
+#   create `fm/<task-id>`. Not valid with --scout or --secondmate.
+#   --pr <n|url> (requires --on-branch) names the PR this work updates in place
+#   so the crew and delivery gate associate pushes with that PR, not a new one.
+#   --expect-head <sha> (requires --on-branch) requires HEAD equal or prefix-match
+#   after checkout; mismatch stops with blocked: and the actual sha.
 #   --secondmate writes a persistent secondmate charter. The project list
 #   is cloned into the secondmate home, while the natural-language scope
 #   tells the main firstmate when to route work there; routine churn stays in its own home;
@@ -82,6 +91,12 @@ HERDR_LAB=0
 NO_PROJECTS=0
 ROLE=
 ROLE_SET=0
+ON_BRANCH=
+ON_BRANCH_SET=0
+PR_REF=
+PR_SET=0
+EXPECT_HEAD=
+EXPECT_HEAD_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -91,6 +106,9 @@ for a in "$@"; do
     esac
     case "$want_value" in
       role) ROLE=$a; ROLE_SET=1 ;;
+      on-branch) ON_BRANCH=$a; ON_BRANCH_SET=1 ;;
+      pr) PR_REF=$a; PR_SET=1 ;;
+      expect-head) EXPECT_HEAD=$a; EXPECT_HEAD_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -103,6 +121,12 @@ for a in "$@"; do
     --no-projects) NO_PROJECTS=1 ;;
     --role) want_value=role ;;
     --role=*) ROLE=${a#--role=}; ROLE_SET=1 ;;
+    --on-branch) want_value=on-branch ;;
+    --on-branch=*) ON_BRANCH=${a#--on-branch=}; ON_BRANCH_SET=1 ;;
+    --pr) want_value='pr' ;;
+    --pr=*) PR_REF=${a#--pr=}; PR_SET=1 ;;
+    --expect-head) want_value=expect-head ;;
+    --expect-head=*) EXPECT_HEAD=${a#--expect-head=}; EXPECT_HEAD_SET=1 ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -112,6 +136,9 @@ case "$ROLE" in
   ''|review-crew|smoke-crew|marketing-crew) ;;
   *) echo "error: --role must be one of review-crew, smoke-crew, marketing-crew" >&2; exit 1 ;;
 esac
+[ "$ON_BRANCH_SET" -eq 0 ] || [ -n "$ON_BRANCH" ] || { echo "error: --on-branch requires a non-empty value" >&2; exit 1; }
+[ "$PR_SET" -eq 0 ] || [ -n "$PR_REF" ] || { echo "error: --pr requires a non-empty value" >&2; exit 1; }
+[ "$EXPECT_HEAD_SET" -eq 0 ] || [ -n "$EXPECT_HEAD" ] || { echo "error: --expect-head requires a non-empty value" >&2; exit 1; }
 ID=${POS[0]}
 
 if [ "$KIND" = secondmate ] && [ "$HERDR_LAB" -eq 1 ]; then
@@ -127,6 +154,33 @@ fi
 if [ "$NO_PROJECTS" -eq 1 ] && [ "$KIND" != secondmate ]; then
   echo "error: --no-projects applies only to --secondmate charters" >&2
   exit 1
+fi
+
+if [ -n "$ON_BRANCH" ] && [ "$KIND" != ship ]; then
+  echo "error: --on-branch applies only to ship briefs, not --scout or --secondmate" >&2
+  exit 1
+fi
+
+if [ -n "$PR_REF" ] && [ -z "$ON_BRANCH" ]; then
+  echo "error: --pr requires --on-branch" >&2
+  exit 1
+fi
+
+if [ -n "$EXPECT_HEAD" ] && [ -z "$ON_BRANCH" ]; then
+  echo "error: --expect-head requires --on-branch" >&2
+  exit 1
+fi
+
+MODE=
+if [ "$KIND" = ship ]; then
+  REPO=${POS[1]}
+  read -r MODE _ <<EOF
+$("$FM_ROOT/bin/fm-project-mode.sh" "$REPO")
+EOF
+  if [ "$MODE" = local-only ] && [ -n "$PR_REF" ]; then
+    echo "error: --pr is not valid for local-only projects" >&2
+    exit 1
+  fi
 fi
 
 BRIEF="$DATA/$ID/brief.md"
@@ -312,9 +366,6 @@ fi
 
 # Ship task: shape Setup / Rule 1 / Definition of done by the project's delivery mode.
 # yolo does not affect the brief (it governs firstmate's approval behaviour), so discard it.
-read -r MODE _ <<EOF
-$("$FM_ROOT/bin/fm-project-mode.sh" "$REPO")
-EOF
 
 # Fleet TDD contract (one owner of the full text).
 # Source: vellum-tdd-adoption-scout report sec 6.1-6.2 + captain locks A1 (2026-07-20).
@@ -397,11 +448,24 @@ EOF
 # Expand the absolute captain-skill path (the heredoc above is single-quoted).
 TDD_DOD=${TDD_DOD//__HOME__/$HOME}
 
+NEED_DOCTOR=0
 case "$MODE" in
   direct-PR)
-    SETUP2=""
-    RULE1='1. Never push to the default branch (push only your `fm/'"$ID"'` branch). Never merge a PR.'
-    DOD=$(cat <<EOF
+    if [ -n "$ON_BRANCH" ]; then
+      RULE1="1. Never push to the default branch (push only \`$ON_BRANCH\`). Never merge a PR. Never open a new PR; push updates the existing PR on that branch in place."
+      DOD=$(cat <<EOF
+# Definition of done
+This project ships **direct-PR**: you push the existing branch yourself, without the no-mistakes pipeline.
+The task is complete only when committed on \`$ON_BRANCH\`.
+When it is implemented and committed, push \`$ON_BRANCH\` (updating the existing PR in place; do not open a new PR) with \`gh-axi\` as needed, then append \`done: PR {url}\` to the status file and stop.
+Do NOT run /no-mistakes. The captain reviews and merges the PR; firstmate relays it.
+
+$TDD_DOD
+EOF
+)
+    else
+      RULE1='1. Never push to the default branch (push only your `fm/'"$ID"'` branch). Never merge a PR.'
+      DOD=$(cat <<EOF
 # Definition of done
 This project ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 The task is complete only when committed on your branch.
@@ -411,11 +475,25 @@ Do NOT run /no-mistakes. The captain reviews and merges the PR; firstmate relays
 $TDD_DOD
 EOF
 )
+    fi
     ;;
   local-only)
-    SETUP2=""
-    RULE1="1. Never push to any remote and never open a PR. Work only on your \`fm/$ID\` branch; firstmate handles the merge into local \`main\`."
-    DOD=$(cat <<EOF
+    if [ -n "$ON_BRANCH" ]; then
+      RULE1="1. Never push to any remote and never open a PR. Work only on \`$ON_BRANCH\`; firstmate handles the merge into local \`main\`."
+      DOD=$(cat <<EOF
+# Definition of done
+This project ships **local-only**: no remote, no PR, no pipeline.
+The task is complete only when committed on branch \`$ON_BRANCH\`. Do NOT push, do NOT open a PR, do NOT merge.
+Keep the branch a clean fast-forward onto the current default branch - if \`main\` has advanced, rebase onto it so the eventual merge stays a fast-forward.
+When it is implemented and committed, append \`done: ready in branch $ON_BRANCH\` to the status file and stop.
+Firstmate then reviews your branch diff, the captain approves, and firstmate merges it into local \`main\`.
+
+$TDD_DOD
+EOF
+)
+    else
+      RULE1="1. Never push to any remote and never open a PR. Work only on your \`fm/$ID\` branch; firstmate handles the merge into local \`main\`."
+      DOD=$(cat <<EOF
 # Definition of done
 This project ships **local-only**: no remote, no PR, no pipeline.
 The task is complete only when committed on your branch \`fm/$ID\`. Do NOT push, do NOT open a PR, do NOT merge.
@@ -426,12 +504,36 @@ Firstmate then reviews your branch diff, the captain approves, and firstmate mer
 $TDD_DOD
 EOF
 )
+    fi
     ;;
   *)  # no-mistakes (default)
-    SETUP2="
-2. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`."
-    RULE1='1. Never push to the default branch. Never merge a PR.'
-    DOD=$(cat <<EOF
+    NEED_DOCTOR=1
+    if [ -n "$ON_BRANCH" ]; then
+      RULE1="1. Never push to the default branch. Never merge a PR. Never open a new PR; push only \`$ON_BRANCH\` so the existing PR updates in place."
+      DOD=$(cat <<EOF
+# Definition of done
+The task is complete only when committed on \`$ON_BRANCH\`.
+When you believe it is complete, append \`done: {summary}\` to the status file and stop.
+Firstmate will then instruct you to run /no-mistakes to validate on that same branch.
+The pipeline must update the existing PR for \`$ON_BRANCH\`, not open a replacement PR on a task-named branch.
+
+You drive no-mistakes by responding to its gates, not by implementing fixes.
+Follow the guidance no-mistakes itself provides for the mechanics: it loads when you invoke /no-mistakes, and \`no-mistakes axi run --help\` plus the \`help\` lines in each \`axi\` response are authoritative and version-matched to the installed binary.
+Do not hand-edit, commit, or fix findings yourself while a run is active - the pipeline applies every fix.
+
+Two firstmate-specific rules layer on top of that guidance:
+- ask-user findings are not yours to answer: escalate to firstmate (rule 6) and stop.
+  When the decision comes back, feed it to the gate with \`no-mistakes axi respond\` and let the pipeline apply it - do not route the question to "the user" or implement the fix yourself.
+- Avoid \`--yes\`: the captain, not you, owns the ask-user decisions it would silently auto-resolve.
+
+After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
+
+$TDD_DOD
+EOF
+)
+    else
+      RULE1='1. Never push to the default branch. Never merge a PR.'
+      DOD=$(cat <<EOF
 # Definition of done
 The task is complete only when committed on your branch.
 When you believe it is complete, append \`done: {summary}\` to the status file and stop.
@@ -451,8 +553,68 @@ After /no-mistakes reports CI green (the CI-ready return point - do not wait for
 $TDD_DOD
 EOF
 )
+    fi
     ;;
 esac
+
+# Compose Setup intro + numbered first actions. Existing-branch mode must never
+# emit a create-branch instruction (git checkout -b / "create your branch").
+SETUP_STEP=1
+if [ -n "$ON_BRANCH" ]; then
+  ON_BRANCH_Q=$(shell_quote "$ON_BRANCH")
+  ON_REMOTE_REF_Q=$(shell_quote "origin/$ON_BRANCH")
+  ON_REMOTE_HEAD_REF_Q=$(shell_quote "refs/heads/$ON_BRANCH")
+  SETUP_INTRO="You are in a disposable git worktree of $REPO. This task continues existing branch \`$ON_BRANCH\`; do not create a new branch."
+  if [ "$MODE" = local-only ]; then
+    SETUP_STEPS="${SETUP_STEP}. First action: check out the existing local branch \`$ON_BRANCH\` (do NOT create a new branch):
+   Run \`git switch -- $ON_BRANCH_Q\`."
+  else
+    SETUP_STEPS="${SETUP_STEP}. First action: fetch and check out the existing branch \`$ON_BRANCH\` (do NOT create a new branch):
+   Run \`git fetch origin $ON_BRANCH_Q && git checkout -B $ON_BRANCH_Q $ON_REMOTE_REF_Q\`."
+  fi
+  SETUP_STEPS="$SETUP_STEPS
+   If checkout refuses because another linked worktree already has \`$ON_BRANCH\` checked out, use \`git worktree list --porcelain\` to identify its path, append \`blocked: branch $ON_BRANCH_Q is checked out in another worktree at <path>; firstmate must free it\`, and stop.
+   Do not use a detached HEAD, force-steal the branch, or create a differently named fallback branch. Delivery associates the PR with the local branch name, so the local name must remain \`$ON_BRANCH\`.
+   Immediately after checkout, \`test \"\$(git rev-parse --abbrev-ref HEAD)\" = $ON_BRANCH_Q\` must succeed. If it does not, append \`blocked: wrong branch, expected $ON_BRANCH_Q got <actual>\` and stop."
+  SETUP_STEP=$((SETUP_STEP + 1))
+  if [ -n "$EXPECT_HEAD" ]; then
+    EXPECT_HEAD_Q=$(shell_quote "$EXPECT_HEAD")
+    SETUP_STEPS="$SETUP_STEPS
+${SETUP_STEP}. Assert the expected head: \`case \"\$(git rev-parse HEAD)\" in $EXPECT_HEAD_Q*) true ;; *) false ;; esac\` must succeed. If it does not, append \`blocked: unexpected HEAD, expected $EXPECT_HEAD_Q got <actual-sha>\` and stop. Do not reset the branch to force a match - report the actual sha and stop."
+    SETUP_STEP=$((SETUP_STEP + 1))
+  fi
+  if [ -n "$PR_REF" ]; then
+    case "$PR_REF" in
+      *://*) PR_DISPLAY=$PR_REF ;;
+      ''|*[!0-9]*) PR_DISPLAY=$PR_REF ;;
+      *) PR_DISPLAY="PR #$PR_REF" ;;
+    esac
+    PR_DISPLAY_Q=$(shell_quote "$PR_DISPLAY")
+    SETUP_STEPS="$SETUP_STEPS
+${SETUP_STEP}. PR association (authoritative): this work updates $PR_DISPLAY. Pushing \`$ON_BRANCH\` updates that PR in place. Do not open a new PR. If the delivery gate claims no PR exists for this branch, append \`blocked: gate claims no PR for $ON_BRANCH_Q (expected $PR_DISPLAY_Q)\` and stop - do not open a replacement PR."
+    SETUP_STEP=$((SETUP_STEP + 1))
+  fi
+  if [ "$MODE" != local-only ]; then
+    SETUP_STEPS="$SETUP_STEPS
+${SETUP_STEP}. Branch custody: Never force-push. After work starts, never reset (hard or mixed) this shared branch to discard history. If a push is refused because a stale pipeline holds custody, abort that stale run by id from the PR body (\`no-mistakes axi abort --run <id>\`), then push again. After every successful push, confirm the remote tip with \`git ls-remote origin $ON_REMOTE_HEAD_REF_Q\` and ensure it matches your local HEAD. If you still cannot push without force, append \`needs-decision:\` or \`blocked:\` and stop."
+    SETUP_STEP=$((SETUP_STEP + 1))
+    case "$MODE" in
+      direct-PR) DELIVERY_ACTION="pushing or updating the PR" ;;
+      *) DELIVERY_ACTION="invoking /no-mistakes" ;;
+    esac
+    SETUP_STEPS="$SETUP_STEPS
+${SETUP_STEP}. Delivery pre-flight: immediately before $DELIVERY_ACTION, \`test \"\$(git rev-parse --abbrev-ref HEAD)\" = $ON_BRANCH_Q\` must succeed. If it does not, append \`blocked: wrong local branch for delivery gate, expected $ON_BRANCH_Q got <actual>\` and stop - do not proceed."
+    SETUP_STEP=$((SETUP_STEP + 1))
+  fi
+else
+  SETUP_INTRO="You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch."
+  SETUP_STEPS="${SETUP_STEP}. First action: create your branch: \`git checkout -b fm/$ID\`"
+  SETUP_STEP=$((SETUP_STEP + 1))
+fi
+if [ "$NEED_DOCTOR" -eq 1 ]; then
+  SETUP_STEPS="$SETUP_STEPS
+${SETUP_STEP}. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`."
+fi
 
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
@@ -465,13 +627,13 @@ $ROLE_SECTION
 $HERDR_SECTION
 
 # Setup
-You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
+$SETUP_INTRO
 
 **Verify isolation before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from.
 The path check is authoritative: \`git rev-parse --git-dir\` and \`git rev-parse --git-common-dir\` can help inspect the repo, but they do not prove you are outside the primary checkout.
 If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append \`blocked: launched in primary checkout, not an isolated worktree\` to the status file and stop.
 
-1. First action: create your branch: \`git checkout -b fm/$ID\`$SETUP2
+$SETUP_STEPS
 
 # Rules
 $RULE1
@@ -503,4 +665,8 @@ Keep it proportionate: skip \`AGENTS.md\` edits for trivial tasks that produced 
 
 $DOD
 EOF
-echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK})"
+if [ -n "$ON_BRANCH" ]; then
+  echo "scaffolded: $BRIEF (ship, mode=$MODE, on-branch=$ON_BRANCH; replace {TASK})"
+else
+  echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK})"
+fi
