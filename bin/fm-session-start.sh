@@ -299,8 +299,46 @@ else
 fi
 
 # --- 4. supervision operating instructions ----------------------------------
+# Away-mode is healthy only when both state/.afk AND a live supervise daemon
+# exist. Flag-on-daemon-dead (2026-07-25) is a silent hole: clear the flag and
+# write a durable wedge marker so recovery cannot treat it as healthy afk.
+afk_daemon_is_live() {
+  local pid cmd
+  [ -e "$STATE/.supervise-daemon.pid" ] || return 1
+  pid=$(cat "$STATE/.supervise-daemon.pid" 2>/dev/null || true)
+  [ -n "$pid" ] || return 1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  # Prefer /proc (immune to PATH-shadowed test fakes of ps); fall back to
+  # absolute ps binaries. Match the daemon script name only.
+  if [ -r "/proc/$pid/cmdline" ]; then
+    cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
+  else
+    cmd=$(/bin/ps -p "$pid" -o command= 2>/dev/null \
+      || /usr/bin/ps -p "$pid" -o command= 2>/dev/null \
+      || true)
+  fi
+  case "$cmd" in
+    *fm-supervise-daemon.sh*) return 0 ;;
+  esac
+  return 1
+}
 AFK_PRESENT=0
-[ -e "$STATE/.afk" ] && AFK_PRESENT=1
+AFK_DAEMON_DEAD=0
+if [ -e "$STATE/.afk" ]; then
+  if afk_daemon_is_live; then
+    AFK_PRESENT=1
+  else
+    AFK_DAEMON_DEAD=1
+    {
+      printf 'fm away-mode inject WEDGED as of %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')"
+      printf 'reason: AFK_DAEMON_DEAD detected at session-start (flag on, daemon not live)\n'
+      printf 'Cleared state/.afk so away-mode does not look healthy without a supervisor.\n'
+      printf 'Re-run /afk (bin/fm-afk-start.sh) after fixing the launch path.\n'
+    } > "$STATE/.subsuper-inject-wedged" 2>/dev/null || true
+    rm -f "$STATE/.afk" 2>/dev/null || true
+  fi
+fi
 X_MODE_PRESENT=0
 [ -f "$CONFIG/x-mode.env" ] && X_MODE_PRESENT=1
 
@@ -378,8 +416,11 @@ done
 [ "$ORPHAN_STATUS_FOUND" -eq 1 ] || printf '(none)\n'
 
 subsection "AFK"
-if [ -e "$STATE/.afk" ]; then
-  printf 'present - away-mode supervision is active; the daemon owns the watcher.\n'
+if [ "${AFK_DAEMON_DEAD:-0}" -eq 1 ]; then
+  printf 'AFK_DAEMON_DEAD: state/.afk was set but the supervise daemon was NOT running.\n'
+  printf 'Cleared state/.afk (flag-on-daemon-dead is a silent hole). Re-run /afk to restart detached.\n'
+elif [ -e "$STATE/.afk" ]; then
+  printf 'present - away-mode supervision is active; the daemon owns the watcher (pid live).\n'
 else
   printf 'absent\n'
 fi

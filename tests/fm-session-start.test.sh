@@ -719,6 +719,19 @@ EOF
   make_fake_toolchain "$fakebin"
   make_fake_ps_claude "$fakebin"
   : > "$home/state/.afk"
+  # Healthy afk requires a live supervise-daemon pid, not the flag alone.
+  # Keep the script path in ps command= (do not exec away from bash).
+  cat > "$home/fm-supervise-daemon.sh" <<'SH'
+#!/usr/bin/env bash
+# fake live supervise daemon for session-start afk_daemon_is_live
+while true; do sleep 60; done
+SH
+  chmod +x "$home/fm-supervise-daemon.sh"
+  "$home/fm-supervise-daemon.sh" &
+  _fake_daemon_pid=$!
+  printf '%s\n' "$_fake_daemon_pid" > "$home/state/.supervise-daemon.pid"
+  # shellcheck disable=SC2064
+  trap "kill $_fake_daemon_pid 2>/dev/null || true" RETURN
 
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
@@ -727,6 +740,7 @@ EOF
   assert_contains "$out" "daemon owns the watcher" "next step did not delegate watcher ownership to the daemon"
   assert_contains "$out" "- Away mode: active" "supervision block did not include active AFK state"
   assert_not_contains "$out" "  bin/fm-watch-arm.sh" "AFK next step still told the agent to arm the watcher directly"
+  assert_not_contains "$out" "AFK_DAEMON_DEAD" "healthy live daemon misclassified as dead"
 
   pass "next step delegates watcher ownership to the AFK daemon"
 }
@@ -752,6 +766,30 @@ EOF
   assert_contains "$out" "fix the supervisor pane" "session-start did not instruct remediation"
 
   pass "session-start surfaces durable inject-wedged marker automatically"
+}
+
+# Flag-on-daemon-dead: .afk set with no live supervise daemon must not look like
+# healthy away-mode (2026-07-25 silent hole after harness reaped the daemon).
+test_session_start_detects_afk_daemon_dead() {
+  local rec root home fakebin out
+  rec=$(new_world afk-daemon-dead)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  : > "$home/state/.afk"
+  # Stale pid file pointing at this shell is NOT fm-supervise-daemon.sh.
+  printf '%s\n' "$$" > "$home/state/.supervise-daemon.pid"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "AFK_DAEMON_DEAD" "session-start did not surface flag-on-daemon-dead"
+  assert_absent "$home/state/.afk" "session-start left .afk set with dead daemon"
+  assert_contains "$out" "INJECT_WEDGED:" "session-start did not write/surface durable wedge after daemon-dead"
+  assert_not_contains "$out" "Away mode is active" "next step still treated flag-on-daemon-dead as healthy afk"
+
+  pass "session-start detects flag-on-daemon-dead, clears .afk, surfaces wedge"
 }
 
 test_supervision_block_exactly_one_and_pi_diagnostic() {
@@ -900,6 +938,7 @@ test_fleet_digest_empty_fleet
 test_next_step_sources_x_mode_cadence
 test_next_step_afk_delegates_to_daemon
 test_session_start_surfaces_inject_wedged_marker
+test_session_start_detects_afk_daemon_dead
 test_supervision_block_exactly_one_and_pi_diagnostic
 test_pi_diagnostic_rejects_stale_loaded_marker
 test_pi_diagnostic_accepts_prelock_loaded_marker
