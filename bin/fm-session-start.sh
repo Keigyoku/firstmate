@@ -99,6 +99,8 @@ PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
+# shellcheck source=bin/fm-wake-lib.sh
+. "$SCRIPT_DIR/fm-wake-lib.sh"
 
 STATUS_TAIL=${FM_SESSION_START_STATUS_TAIL:-5}
 case "$STATUS_TAIL" in ''|*[!0-9]*) STATUS_TAIL=5 ;; esac
@@ -302,26 +304,12 @@ fi
 # Away-mode is healthy only when state/.afk, a ready marker, and a live supervise
 # daemon exist. The lock holder clears unhealthy away-mode and records the wedge.
 afk_daemon_is_live() {
-  local pid cmd
+  local pid lock_pid
   [ -e "$STATE/.supervise-daemon.ready" ] || return 1
   [ -e "$STATE/.supervise-daemon.pid" ] || return 1
   pid=$(cat "$STATE/.supervise-daemon.pid" 2>/dev/null || true)
-  [ -n "$pid" ] || return 1
-  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  kill -0 "$pid" 2>/dev/null || return 1
-  # Prefer /proc (immune to PATH-shadowed test fakes of ps); fall back to
-  # absolute ps binaries. Match the daemon script name only.
-  if [ -r "/proc/$pid/cmdline" ]; then
-    cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
-  else
-    cmd=$(/bin/ps -p "$pid" -o command= 2>/dev/null \
-      || /usr/bin/ps -p "$pid" -o command= 2>/dev/null \
-      || true)
-  fi
-  case "$cmd" in
-    *fm-supervise-daemon.sh*) return 0 ;;
-  esac
-  return 1
+  lock_pid=$(fm_lock_identity_pid "$STATE/.supervise-daemon.lock" 2>/dev/null || true)
+  [ -n "$lock_pid" ] && [ "$lock_pid" = "$pid" ]
 }
 AFK_PRESENT=0
 AFK_DAEMON_DEAD=0

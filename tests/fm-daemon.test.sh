@@ -23,6 +23,11 @@ fi
 
 TMP_ROOT=$(fm_test_tmproot fm-daemon-tests)
 
+daemon_fixture_identity() {
+  FM_STATE_OVERRIDE="$1" bash -c '. "$1"; fm_pid_identity "$2"' \
+    _ "$ROOT/bin/fm-wake-lib.sh" "$2"
+}
+
 test_afk_start_refuses_when_flag_cannot_be_written() {
   local dir state fakebin out status
   dir=$(make_supercase afk-start-flag-unwritable)
@@ -92,7 +97,7 @@ test_afk_start_does_not_set_flag_when_startup_preflight_fails() {
 }
 
 test_afk_start_live_daemon_probes_without_injecting() {
-  local dir state fakebin capture sent lock holder out status
+  local dir state fakebin capture sent lock holder identity out status
   dir=$(make_supercase afk-start-live-probe)
   state="$dir/state"; fakebin="$dir/fakebin"
   capture="$dir/composer"; sent="$dir/sent.log"; lock="$state/.supervise-daemon.lock"
@@ -102,6 +107,8 @@ test_afk_start_live_daemon_probes_without_injecting() {
   bash -c 'sleep 30; :' fm-supervise-daemon.sh &
   holder=$!
   printf '%s\n' "$holder" > "$lock/pid"
+  identity=$(daemon_fixture_identity "$state" "$holder") || fail "could not identify live daemon fixture"
+  printf '%s\n' "$identity" > "$lock/pid-identity"
   : > "$state/.supervise-daemon.ready"
 
   out=$(PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" \
@@ -119,7 +126,7 @@ test_afk_start_live_daemon_probes_without_injecting() {
 }
 
 test_afk_start_live_probe_clears_inherited_discard_for_alarm() {
-  local dir state fakebin capture sent lock holder alarm alarm_log out status
+  local dir state fakebin capture sent lock holder identity alarm alarm_log out status
   dir=$(make_supercase afk-start-live-probe-alarm)
   state="$dir/state"; fakebin="$dir/fakebin"
   capture="$dir/composer"; sent="$dir/sent.log"; lock="$state/.supervise-daemon.lock"
@@ -135,6 +142,8 @@ SH
   bash -c 'sleep 30; :' fm-supervise-daemon.sh &
   holder=$!
   printf '%s\n' "$holder" > "$lock/pid"
+  identity=$(daemon_fixture_identity "$state" "$holder") || fail "could not identify live daemon fixture"
+  printf '%s\n' "$identity" > "$lock/pid-identity"
   : > "$state/.supervise-daemon.ready"
 
   out=$(PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" \
@@ -214,6 +223,39 @@ SH
   assert_contains "$out" "daemon exited before writing pid file" "fallback launcher failure was not surfaced"
   assert_absent "$state/.afk" "fallback launcher failure left away mode enabled"
   pass "fm-afk-start.sh uses python os.setsid when setsid is unavailable"
+}
+
+test_afk_start_timeout_stops_launched_daemon() {
+  local dir state fakebin tmux_fixture out status orphan_pid
+  dir=$(make_supercase afk-start-timeout-cleanup)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  tmux_fixture="$fakebin/tmux"
+  cat > "$tmux_fixture" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  display-message) printf 'fakepane\n'; exit 0 ;;
+  capture-pane) sleep 30; exit 0 ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$tmux_fixture"
+
+  out=$(PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" \
+    FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET=fakepane \
+    FM_AFK_START_READY_TIMEOUT_SECS=1 FM_AFK_START_SETTLE_SECS=0 \
+    "$AFK_START" 2>&1)
+  status=$?
+  orphan_pid=$(sed -n 's/.*pid_file=\([0-9][0-9]*\).*/\1/p' "$state/.subsuper-inject-wedged" | head -1)
+
+  [ "$status" -ne 0 ] || fail "fm-afk-start.sh accepted a daemon that never became ready"
+  [ -n "$orphan_pid" ] || fail "readiness timeout did not record the launched daemon pid: $out"
+  ! kill -0 "$orphan_pid" 2>/dev/null || fail "readiness timeout left launched daemon pid=$orphan_pid alive"
+  assert_absent "$state/.afk" "readiness timeout left away mode enabled"
+  assert_absent "$state/.supervise-daemon.ready" "readiness timeout left a ready marker"
+  assert_absent "$state/.supervise-daemon.lock" "readiness timeout left the singleton lock held"
+  assert_absent "$state/.supervise-daemon.pid" "readiness timeout left the daemon pid file"
+  pass "fm-afk-start.sh stops and cleans a detached daemon after readiness timeout"
 }
 
 test_daemon_state_root_uses_fm_home() {
@@ -2017,6 +2059,7 @@ test_afk_start_live_daemon_probes_without_injecting
 test_afk_start_live_probe_clears_inherited_discard_for_alarm
 test_daemon_ready_marker_follows_startup_and_shutdown
 test_afk_start_uses_python_setsid_fallback
+test_afk_start_timeout_stops_launched_daemon
 test_daemon_state_root_uses_fm_home
 test_classify_routine_signal_self
 test_classify_terminal_signal_escalates

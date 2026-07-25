@@ -63,48 +63,44 @@ load_daemon_library() {
 load_daemon_library
 unset -f load_daemon_library
 
-daemon_lock_owner() {
-  local owner
-  if [ -L "$LOCK" ]; then
-    owner=$(readlink "$LOCK" 2>/dev/null) || return 1
-    [ -n "$owner" ] || return 1
-    case "$owner" in
-      /*) printf '%s\n' "$owner" ;;
-      *) printf '%s/%s\n' "$(dirname "$LOCK")" "$owner" ;;
-    esac
-    return 0
-  fi
-  [ -d "$LOCK" ] || return 1
-  printf '%s\n' "$LOCK"
-}
-
-daemon_pid_matches() {
-  local pid=$1 owner=$2 identity current command
-  identity=$(cat "$owner/pid-identity" 2>/dev/null || true)
-  if [ -n "$identity" ]; then
-    current=$(fm_pid_identity "$pid") || return 1
-    [ "$current" = "$identity" ]
-    return
-  fi
-  command=$(ps -p "$pid" -o command= 2>/dev/null || true)
-  case "$command" in
-    *"$DAEMON"*|*"fm-supervise-daemon.sh"*) return 0 ;;
-  esac
-  return 1
-}
-
 daemon_lock_pid() {
+  fm_lock_identity_pid "$LOCK"
+}
+
+daemon_lock_recorded_pid() {
   local owner
-  owner=$(daemon_lock_owner) || return 1
+  owner=$(fm_lock_owner_path "$LOCK") || return 1
   cat "$owner/pid" 2>/dev/null || true
 }
 
 daemon_lock_held_by_live_daemon() {
-  local owner pid
-  owner=$(daemon_lock_owner) || return 1
-  pid=$(cat "$owner/pid" 2>/dev/null || true)
-  fm_pid_alive "$pid" || return 1
-  daemon_pid_matches "$pid" "$owner"
+  daemon_lock_pid >/dev/null
+}
+
+afk_start_stop_launched_daemon() {
+  local pid matched owner current_owner i
+  [ -n "${DAEMON_START_PID:-}" ] || return 0
+  pid=$(cat "$STATE/.supervise-daemon.pid" 2>/dev/null || true)
+  [ "$pid" = "$DAEMON_START_PID" ] || return 0
+  matched=$(daemon_lock_pid 2>/dev/null || true)
+  [ "$matched" = "$pid" ] || return 0
+  owner=$(fm_lock_owner_path "$LOCK" 2>/dev/null || true)
+  kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+  i=0
+  while fm_pid_alive "$pid" && [ "$i" -lt 20 ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  kill -KILL -- "-$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  current_owner=$(fm_lock_owner_path "$LOCK" 2>/dev/null || true)
+  if [ -n "$owner" ] && [ "$current_owner" = "$owner" ] &&
+    [ "$(cat "$owner/pid" 2>/dev/null || true)" = "$pid" ]; then
+    fm_lock_remove_path "$LOCK" 2>/dev/null || true
+  fi
+  if [ "$(cat "$STATE/.supervise-daemon.pid" 2>/dev/null || true)" = "$pid" ]; then
+    rm -f "$STATE/.supervise-daemon.pid" 2>/dev/null || true
+  fi
 }
 
 # Fail loud when activation leaves .afk set but the daemon is gone (start-then-
@@ -112,7 +108,9 @@ daemon_lock_held_by_live_daemon() {
 # session-start does not report healthy away-mode with no supervisor.
 afk_start_fail_daemon_dead() {  # <reason>
   local reason=$1 pid
-  pid=$(daemon_lock_pid 2>/dev/null || true)
+  pid=$(cat "$STATE/.supervise-daemon.pid" 2>/dev/null || true)
+  rm -f "$READY" 2>/dev/null || true
+  afk_start_stop_launched_daemon
   {
     printf 'fm away-mode inject WEDGED as of %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')"
     printf 'reason: AFK_DAEMON_DEAD: %s\n' "$reason"
@@ -164,7 +162,8 @@ if daemon_lock_held_by_live_daemon; then
   exit 0
 fi
 
-if fm_pid_alive "$pid" && [ -n "$pid" ]; then
+pid=$(daemon_lock_recorded_pid 2>/dev/null || true)
+if fm_pid_alive "$pid"; then
   fm_lock_remove_path "$LOCK" 2>/dev/null || true
 fi
 

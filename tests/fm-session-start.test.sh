@@ -30,6 +30,11 @@ BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
 TMP_ROOT=$(fm_test_tmproot fm-session-start-tests)
 fm_git_identity fmtest fmtest@example.invalid
 
+session_fixture_identity() {
+  FM_STATE_OVERRIDE="$1" bash -c '. "$1"; fm_pid_identity "$2"' \
+    _ "$ROOT/bin/fm-wake-lib.sh" "$2"
+}
+
 # --- world builders ----------------------------------------------------------
 
 # new_world <name>: a real, throwaway git repo on `main` (so the worktree-tangle
@@ -720,7 +725,7 @@ EOF
 }
 
 test_next_step_afk_delegates_to_daemon() {
-  local rec root home fakebin out
+  local rec root home fakebin out identity lock
   rec=$(new_world next-step-afk)
   IFS='|' read -r root home fakebin <<EOF
 $rec
@@ -739,6 +744,11 @@ SH
   "$home/fm-supervise-daemon.sh" &
   _fake_daemon_pid=$!
   printf '%s\n' "$_fake_daemon_pid" > "$home/state/.supervise-daemon.pid"
+  lock="$home/state/.supervise-daemon.lock"
+  mkdir -p "$lock"
+  printf '%s\n' "$_fake_daemon_pid" > "$lock/pid"
+  identity=$(session_fixture_identity "$home/state" "$_fake_daemon_pid") || fail "could not identify healthy AFK daemon fixture"
+  printf '%s\n' "$identity" > "$lock/pid-identity"
   : > "$home/state/.supervise-daemon.ready"
   # shellcheck disable=SC2064
   trap "kill $_fake_daemon_pid 2>/dev/null || true" RETURN
@@ -756,7 +766,7 @@ SH
 }
 
 test_session_start_rejects_live_daemon_without_readiness() {
-  local rec root home fakebin out daemon_pid
+  local rec root home fakebin out daemon_pid identity lock
   rec=$(new_world afk-daemon-not-ready)
   IFS='|' read -r root home fakebin <<EOF
 $rec
@@ -772,6 +782,11 @@ SH
   "$home/fm-supervise-daemon.sh" &
   daemon_pid=$!
   printf '%s\n' "$daemon_pid" > "$home/state/.supervise-daemon.pid"
+  lock="$home/state/.supervise-daemon.lock"
+  mkdir -p "$lock"
+  printf '%s\n' "$daemon_pid" > "$lock/pid"
+  identity=$(session_fixture_identity "$home/state" "$daemon_pid") || fail "could not identify unready AFK daemon fixture"
+  printf '%s\n' "$identity" > "$lock/pid-identity"
 
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   kill "$daemon_pid" 2>/dev/null || true
@@ -782,6 +797,35 @@ SH
   assert_not_contains "$out" "Away mode is active" "unready daemon received away-mode instructions"
 
   pass "session start rejects a live daemon without readiness"
+}
+
+test_session_start_rejects_stale_daemon_identity() {
+  local rec root home fakebin out daemon_pid lock
+  rec=$(new_world afk-daemon-stale-identity)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  : > "$home/state/.afk"
+  sleep 60 &
+  daemon_pid=$!
+  printf '%s\n' "$daemon_pid" > "$home/state/.supervise-daemon.pid"
+  lock="$home/state/.supervise-daemon.lock"
+  mkdir -p "$lock"
+  printf '%s\n' "$daemon_pid" > "$lock/pid"
+  printf '%s\n' "stale daemon identity" > "$lock/pid-identity"
+  : > "$home/state/.supervise-daemon.ready"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  kill "$daemon_pid" 2>/dev/null || true
+  wait "$daemon_pid" 2>/dev/null || true
+
+  assert_contains "$out" "AFK_DAEMON_DEAD" "stale daemon lock identity was treated as healthy"
+  assert_absent "$home/state/.afk" "session-start left .afk set with a stale daemon identity"
+  assert_not_contains "$out" "Away mode is active" "stale daemon identity received away-mode instructions"
+
+  pass "session start rejects stale daemon lock identities"
 }
 
 # Automatic wedge surface (fm-afk-inject-wedge): a durable inject-wedged marker
@@ -977,6 +1021,7 @@ test_fleet_digest_empty_fleet
 test_next_step_sources_x_mode_cadence
 test_next_step_afk_delegates_to_daemon
 test_session_start_rejects_live_daemon_without_readiness
+test_session_start_rejects_stale_daemon_identity
 test_session_start_surfaces_inject_wedged_marker
 test_session_start_detects_afk_daemon_dead
 test_supervision_block_exactly_one_and_pi_diagnostic
