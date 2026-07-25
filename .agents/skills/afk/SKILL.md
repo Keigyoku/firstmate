@@ -29,7 +29,7 @@ batched digest rather than per-wake injections.
    ```
    The helper sets or refreshes `state/.afk`.
    If an identity-backed daemon is already live it probes the inject channel (no second-process inject).
-   Otherwise it starts `bin/fm-supervise-daemon.sh` **detached** (`setsid`) so a reaped harness background task cannot take the daemon with it (2026-07-25: foreground exec died with the tracked task while `.afk` stayed set — silent hole).
+   Otherwise it starts `bin/fm-supervise-daemon.sh` **detached** in a new session, using `setsid` or a portable Python/Perl fallback, so a reaped harness background task cannot take the daemon with it (2026-07-25: foreground exec died with the tracked task while `.afk` stayed set - silent hole).
    The parent waits for the pid file, settles `FM_AFK_START_SETTLE_SECS` (default 3s), and fails LOUD if the daemon is already dead (start-then-die).
    `FM_AFK_START_FOREGROUND=1` restores legacy exec for hermetic e2es that own the process.
    The daemon is **presence-gated**: it injects only while `state/.afk` exists.

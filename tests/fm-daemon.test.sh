@@ -152,6 +152,40 @@ SH
   pass "fm-afk-start.sh clears inherited discard and alarms on a failed live probe"
 }
 
+test_afk_start_uses_python_setsid_fallback() {
+  local dir state fakebin pathbin python_log out status tool source_path
+  dir=$(make_supercase afk-start-python-setsid)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  pathbin="$dir/pathbin"
+  python_log="$dir/python.log"
+  mkdir -p "$pathbin"
+
+  for tool in bash dirname mkdir readlink cat date rm sed sleep ps uname od tr; do
+    source_path=$(command -v "$tool") || fail "test prerequisite missing: $tool"
+    ln -s "$source_path" "$pathbin/$tool"
+  done
+  ln -s "$fakebin/tmux" "$pathbin/tmux"
+  cat > "$pathbin/python3" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$FM_FAKE_PYTHON_LOG"
+exit 9
+SH
+  chmod +x "$pathbin/python3"
+
+  out=$(PATH="$pathbin" FM_FAKE_PYTHON_LOG="$python_log" \
+    FM_STATE_OVERRIDE="$state" FM_SUPERVISOR_BACKEND=tmux \
+    FM_SUPERVISOR_TARGET=fakepane "$AFK_START" 2>&1)
+  status=$?
+
+  [ "$status" -ne 0 ] || fail "fm-afk-start.sh unexpectedly accepted the fake fallback daemon"
+  assert_present "$python_log" "no-setsid path did not invoke python3"
+  assert_contains "$(cat "$python_log")" "os.setsid()" "python3 fallback did not create a new session"
+  assert_contains "$out" "daemon exited before writing pid file" "fallback launcher failure was not surfaced"
+  assert_absent "$state/.afk" "fallback launcher failure left away mode enabled"
+  pass "fm-afk-start.sh uses python os.setsid when setsid is unavailable"
+}
+
 test_daemon_state_root_uses_fm_home() {
   local dir home override out
   dir=$(make_supercase daemon-fm-home)
@@ -1951,6 +1985,7 @@ test_afk_start_reclaims_stale_daemon_lock_reused_pid
 test_afk_start_does_not_set_flag_when_startup_preflight_fails
 test_afk_start_live_daemon_probes_without_injecting
 test_afk_start_live_probe_clears_inherited_discard_for_alarm
+test_afk_start_uses_python_setsid_fallback
 test_daemon_state_root_uses_fm_home
 test_classify_routine_signal_self
 test_classify_terminal_signal_escalates

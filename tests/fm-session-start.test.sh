@@ -332,7 +332,7 @@ EOF
 # --- lock refusal: read-only path --------------------------------------------
 
 test_lock_refusal_read_only_path() {
-  local rec root home fakebin holder_pid out status
+  local rec root home fakebin holder_pid out status marker_before
   rec=$(new_world lock-refusal)
   IFS='|' read -r root home fakebin <<EOF
 $rec
@@ -349,6 +349,9 @@ EOF
   fm_write_secondmate_meta "$home/state/sm-x.meta" "$home/other-secondmate" "firstmate:fm-sm-x" alpha
   append_wake "$home/state" signal sm-x "done: surfaced before refusal" || fail "seed wake failed"
   git -C "$root" checkout -q -B fm/read-only-tangle
+  : > "$home/state/.afk"
+  printf 'existing lock-holder wedge marker\n' > "$home/state/.subsuper-inject-wedged"
+  marker_before=$(cat "$home/state/.subsuper-inject-wedged")
 
   sleep 300 &
   holder_pid=$!
@@ -373,6 +376,12 @@ EOF
   assert_not_contains "$out" "After draining queued wakes" "read-only guard printed a drain-then-rearm instruction"
   assert_not_contains "$out" "run bin/fm-watch-arm.sh" "read-only guard printed a mutating watcher-arm instruction"
   assert_not_contains "$out" "git -C $root checkout main" "read-only bootstrap printed a state-changing checkout remediation"
+  assert_contains "$out" "AFK_DAEMON_DEAD" "read-only session did not report the dead AFK daemon"
+  assert_contains "$out" "INJECT_WEDGED_SUSPECTED" "read-only session did not report the suspected inject wedge"
+  assert_contains "$out" "left state/.afk and wedge state unchanged" "read-only AFK report did not preserve lock-holder ownership"
+  assert_present "$home/state/.afk" "read-only session removed the lock holder's .afk flag"
+  [ "$(cat "$home/state/.subsuper-inject-wedged")" = "$marker_before" ] \
+    || fail "read-only session overwrote the lock holder's wedge marker"
 
   # Detect-only bootstrap diagnostics still ran (the fakebin's PATH excludes
   # tasks-axi, so bootstrap's own read-only tool-detection line fires

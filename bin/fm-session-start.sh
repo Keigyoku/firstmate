@@ -300,8 +300,7 @@ fi
 
 # --- 4. supervision operating instructions ----------------------------------
 # Away-mode is healthy only when both state/.afk AND a live supervise daemon
-# exist. Flag-on-daemon-dead (2026-07-25) is a silent hole: clear the flag and
-# write a durable wedge marker so recovery cannot treat it as healthy afk.
+# exist. The lock holder clears flag-on-daemon-dead and records the wedge.
 afk_daemon_is_live() {
   local pid cmd
   [ -e "$STATE/.supervise-daemon.pid" ] || return 1
@@ -325,18 +324,22 @@ afk_daemon_is_live() {
 }
 AFK_PRESENT=0
 AFK_DAEMON_DEAD=0
+AFK_DAEMON_DEAD_MUTATED=0
 if [ -e "$STATE/.afk" ]; then
   if afk_daemon_is_live; then
     AFK_PRESENT=1
   else
     AFK_DAEMON_DEAD=1
-    {
-      printf 'fm away-mode inject WEDGED as of %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')"
-      printf 'reason: AFK_DAEMON_DEAD detected at session-start (flag on, daemon not live)\n'
-      printf 'Cleared state/.afk so away-mode does not look healthy without a supervisor.\n'
-      printf 'Re-run /afk (bin/fm-afk-start.sh) after fixing the launch path.\n'
-    } > "$STATE/.subsuper-inject-wedged" 2>/dev/null || true
-    rm -f "$STATE/.afk" 2>/dev/null || true
+    if [ "$READ_ONLY" -eq 0 ]; then
+      {
+        printf 'fm away-mode inject WEDGED as of %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')"
+        printf 'reason: AFK_DAEMON_DEAD detected at session-start (flag on, daemon not live)\n'
+        printf 'Cleared state/.afk so away-mode does not look healthy without a supervisor.\n'
+        printf 'Re-run /afk (bin/fm-afk-start.sh) after fixing the launch path.\n'
+      } > "$STATE/.subsuper-inject-wedged" 2>/dev/null || true
+      rm -f "$STATE/.afk" 2>/dev/null || true
+      AFK_DAEMON_DEAD_MUTATED=1
+    fi
   fi
 fi
 X_MODE_PRESENT=0
@@ -418,7 +421,11 @@ done
 subsection "AFK"
 if [ "${AFK_DAEMON_DEAD:-0}" -eq 1 ]; then
   printf 'AFK_DAEMON_DEAD: state/.afk was set but the supervise daemon was NOT running.\n'
-  printf 'Cleared state/.afk (flag-on-daemon-dead is a silent hole). Re-run /afk to restart detached.\n'
+  if [ "${AFK_DAEMON_DEAD_MUTATED:-0}" -eq 1 ]; then
+    printf 'Cleared state/.afk (flag-on-daemon-dead is a silent hole). Re-run /afk to restart detached.\n'
+  else
+    printf 'INJECT_WEDGED_SUSPECTED: read-only session left state/.afk and wedge state unchanged for the fleet-lock holder.\n'
+  fi
 elif [ -e "$STATE/.afk" ]; then
   printf 'present - away-mode supervision is active; the daemon owns the watcher (pid live).\n'
 else

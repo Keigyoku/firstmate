@@ -58,7 +58,8 @@ It leads with prominent bordered banners for the tangle and no-watcher cases so 
 On every verified primary harness, tracked hook integration gives the primary session a push-based backstop: when work is in flight and no identity-matched watcher lock with a fresh beacon is live, or when queued wakes are already pending, direct Stop hooks block and passive turn-end hooks force one bounded follow-up.
 The guard covers the main primary and genuinely marked secondmate homes, exempts child crewmate/scout worktrees, is loop-safe per harness, writes a size-capped diagnostic for each warning decision, and is documented in [turnend-guard.md](turnend-guard.md).
 
-A presence-gated sub-supervisor (`bin/fm-supervise-daemon.sh`) extends this for walk-away supervision: the `/afk` skill starts it through the tracked foreground helper `bin/fm-afk-start.sh`, which refuses to report healthy away mode unless the injection channel passes its activation check.
+A presence-gated sub-supervisor (`bin/fm-supervise-daemon.sh`) extends this for walk-away supervision.
+The `/afk` skill starts it through `bin/fm-afk-start.sh`, which detaches the daemon into a new session, verifies it after a settle window, and refuses to report healthy away mode unless the injection channel passes its activation check.
 After successful activation, the watcher reverts to daemon-managed one-shot mode and the daemon self-handles routine wakes in bash.
 The watcher and daemon share `bin/fm-classify-lib.sh` for captain-relevant status verbs, declared-external-wait vocabulary, and status-scan primitives.
 The always-on watcher also uses that library's absorb classification on no-verb signals and first-sighting stale panes before status-log terminality is trusted, while the daemon maintains distinct wedge and deliberate-hold recheck cadences.

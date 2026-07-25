@@ -7,16 +7,16 @@
 #     - refreshes state/.afk, probes the inject channel (no concurrent inject),
 #       prints "afk: daemon already running pid=<pid>", exits 0 when a live
 #       identity-backed daemon holds the lock;
-#     - otherwise sets state/.afk, starts bin/fm-supervise-daemon.sh DETACHED
-#       (setsid) so a reaped harness background task cannot take the daemon
-#       with it, waits for the pid file, settles FM_AFK_START_SETTLE_SECS
-#       (default 3), and fails LOUD if the daemon is already dead (start-then-
-#       die) or if startup cleared .afk (self-test failed).
+#     - otherwise sets state/.afk, starts bin/fm-supervise-daemon.sh in a new
+#       session so a reaped harness background task cannot take the daemon with
+#       it, waits for the pid file, settles FM_AFK_START_SETTLE_SECS (default 3),
+#       and fails LOUD if the daemon is already dead (start-then-die) or if
+#       startup cleared .afk (self-test failed).
 #
 # Why detach (2026-07-25 evidence): exec'ing the daemon in a Claude tracked
 # background task made the daemon die when the harness reaped that task, while
-# state/.afk stayed set — silent hole (flag on, nothing triages). setsid +
-# parent settle-check proves the process is still alive after activation.
+# state/.afk stayed set - silent hole (flag on, nothing triages). Session
+# detachment plus the parent settle-check proves the process is still alive.
 #
 # FM_AFK_START_SETTLE_SECS  seconds to wait after pid file appears before the
 #                          still-alive check (default 3).
@@ -34,7 +34,7 @@ SETTLE_SECS=${FM_AFK_START_SETTLE_SECS:-3}
 case "$SETTLE_SECS" in ''|*[!0-9]*) SETTLE_SECS=3 ;; esac
 
 usage() {
-  sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in
@@ -165,13 +165,40 @@ if [ "${FM_AFK_START_FOREGROUND:-0}" = 1 ]; then
   exec "$DAEMON"
 fi
 
-echo "afk: starting supervise daemon detached (setsid); parent will verify still-alive after ${SETTLE_SECS}s settle"
-echo "afk: inject channel self-test runs at daemon startup (fails loud if the supervisor pane cannot accept escalations)"
+launch_daemon_detached() {
+  if command -v setsid >/dev/null 2>&1; then
+    DETACH_METHOD=setsid
+    setsid "$DAEMON" </dev/null \
+      >>"$STATE/.supervise-daemon.stdout" 2>>"$STATE/.supervise-daemon.stderr" &
+  elif command -v python3 >/dev/null 2>&1; then
+    DETACH_METHOD=python3-os.setsid
+    python3 -c 'import os, sys; os.setsid(); os.execv(sys.argv[1], sys.argv[1:])' \
+      "$DAEMON" </dev/null \
+      >>"$STATE/.supervise-daemon.stdout" 2>>"$STATE/.supervise-daemon.stderr" &
+  elif command -v perl >/dev/null 2>&1; then
+    DETACH_METHOD=perl-POSIX-setsid
+    perl -MPOSIX -e 'POSIX::setsid() >= 0 or die "setsid failed: $!"; exec @ARGV or die "exec failed: $!"' \
+      "$DAEMON" </dev/null \
+      >>"$STATE/.supervise-daemon.stdout" 2>>"$STATE/.supervise-daemon.stderr" &
+  elif command -v python >/dev/null 2>&1; then
+    DETACH_METHOD=python-os.setsid
+    python -c 'import os, sys; os.setsid(); os.execv(sys.argv[1], sys.argv[1:])' \
+      "$DAEMON" </dev/null \
+      >>"$STATE/.supervise-daemon.stdout" 2>>"$STATE/.supervise-daemon.stderr" &
+  else
+    echo "error: cannot detach supervise daemon: need setsid, python3, perl, or python" >&2
+    afk_start_fail_daemon_dead "no session-detachment command available"
+    return 1
+  fi
+  DAEMON_START_PID=$!
+}
 
-# Detach so a reaped harness starter task cannot take the daemon with it.
-# stdin closed; stdout/stderr land in state for diagnosis.
-setsid "$DAEMON" </dev/null \
-  >>"$STATE/.supervise-daemon.stdout" 2>>"$STATE/.supervise-daemon.stderr" &
+DETACH_METHOD=
+DAEMON_START_PID=
+launch_daemon_detached || exit 1
+
+echo "afk: starting supervise daemon detached ($DETACH_METHOD); parent will verify still-alive after ${SETTLE_SECS}s settle"
+echo "afk: inject channel self-test runs at daemon startup (fails loud if the supervisor pane cannot accept escalations)"
 
 # Wait for the daemon to publish its pid file (startup + lock acquire).
 i=0
@@ -180,7 +207,7 @@ while [ "$i" -lt 50 ]; do
     break
   fi
   # If starter already exited with failure, surface stderr.
-  if ! kill -0 $! 2>/dev/null && [ ! -f "$STATE/.supervise-daemon.pid" ]; then
+  if ! kill -0 "$DAEMON_START_PID" 2>/dev/null && [ ! -f "$STATE/.supervise-daemon.pid" ]; then
     echo "error: supervise daemon exited before writing pid file" >&2
     [ -s "$STATE/.supervise-daemon.stderr" ] && sed -n '1,40p' "$STATE/.supervise-daemon.stderr" >&2
     [ -s "$STATE/.supervise-daemon.log" ] && tail -n 20 "$STATE/.supervise-daemon.log" >&2

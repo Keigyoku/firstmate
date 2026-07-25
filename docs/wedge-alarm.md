@@ -42,7 +42,7 @@ Every notifier channel (`osascript`, `herdr`, and `command:`) routes through a s
 This makes it structurally impossible for a test to post a real desktop notification, and impossible for a future test author to forget to stub:
 
 - Tests that source the daemon use its library-mode guard, which defaults `FM_WEDGE_ALARM_EXEC` to `discard` and fires nothing.
-- Production `bin/fm-afk-start.sh` sources the daemon library with live alerts explicitly enabled, then execs the daemon for a fresh start.
+- Production `bin/fm-afk-start.sh` sources the daemon library with live alerts explicitly enabled, then starts a fresh daemon in a detached session and verifies it after the settle window.
 - A hermetic test that executes the daemon preserves `discard` only when it sets `FM_WEDGE_ALARM_TEST_MODE=1`.
 - `tests/wake-helpers.sh` upgrades the default to an on-disk recorder that logs `<channel>\t<summary>` to `$FM_WEDGE_ALARM_LOG`, so the daemon and wake suites can assert channel selection without any real notifier.
 - Production leaves `FM_WEDGE_ALARM_EXEC` unset, so the real channels fire.
