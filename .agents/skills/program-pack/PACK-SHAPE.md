@@ -1,4 +1,4 @@
-# program-pack — Pack shape and templates
+# program-pack - Pack shape and templates
 
 Required files and minimum sections. A missing **or thin** required section is a
 completeness **FAIL** (see [COMPLETENESS.md](COMPLETENESS.md)). Completeness
@@ -22,7 +22,7 @@ Calibrate quality against:
 ## README.md
 
 ```markdown
-# <Program title> — design pack
+# <Program title> - design pack
 
 **Program:** `program/<slug>`
 **Era / phase:** <if project uses one>
@@ -31,14 +31,14 @@ Calibrate quality against:
 **Date:** YYYY-MM-DD
 **Owner:** program-pack crew
 **Authoring harness:** <claude | codex | grok | …>
-**Fresh-eyes harness:** <must differ — see Phase 10>
+**Fresh-eyes harness:** <must differ - see Phase 10>
 
 ## North star
 <1–3 sentences: what "done" means for the program as a whole>
 
 ## Appetite / cutting point
 What this program is *worth* cutting to if a slice cannot meet exit criteria
-without reopening architecture. Scope-worth envelope — never wall-clock.
+without reopening architecture. Scope-worth envelope - never wall-clock.
 
 ## Pack contents
 | File | Role |
@@ -72,7 +72,7 @@ Quoted parent law (paths + excerpts), not regenerated folklore.
 ## prd.md
 
 ```markdown
-# PRD — <Program title>
+# PRD - <Program title>
 
 ## Problem
 User- or operator-facing problem. Evidence of pain (incidents, failed PRs,
@@ -90,13 +90,13 @@ Observable outcomes that mean the program succeeded. Not a task list.
 
 ## User / operator stories
 Numbered stories: As a <actor>, I want <capability>, so that <benefit>.
-Cover the program surface thoroughly — thin story lists are a smell.
+Cover the program surface thoroughly - thin story lists are a smell.
 
 ## Non-goals (product)
 Mirror of "what we are NOT doing" in product language.
 
 ## Hardest objections (preplay)
-FAQ-style: strongest reasons this program is wrong, premature, or mis-scoped —
+FAQ-style: strongest reasons this program is wrong, premature, or mis-scoped -
 and the answer. Not marketing; adversarial preplay.
 
 ## Success metrics (optional)
@@ -109,7 +109,7 @@ Never wall-clock.
 ## spec.md
 
 ```markdown
-# Spec — <Program title>
+# Spec - <Program title>
 
 Frontmatter or header: program slug, status, date, parent ADRs, tags.
 
@@ -118,8 +118,8 @@ Frontmatter or header: program slug, status, date, parent ADRs, tags.
 
 ## 2. Scope boundaries
 ### In scope
-### Out of scope (deferred) — with why / when it returns
-### Out of scope (rejected) — with rationale
+### Out of scope (deferred) - with why / when it returns
+### Out of scope (rejected) - with rationale
 ### Parent law (not reopenable)
 Table: lock ID / ADR · **verbatim quote or short excerpt** · path ·
 what it does / does not excuse.
@@ -128,9 +128,9 @@ Do not paraphrase from memory.
 ### Boundaries (Always / Ask first / Never)
 | Tier | Rule |
 |---|---|
-| Always | Crew decides within parent law — list |
-| Ask first | Captain / Lavish — list decision IDs |
-| Never | Out of program — list |
+| Always | Crew decides within parent law - list |
+| Ask first | Captain / Lavish - list decision IDs |
+| Never | Out of program - list |
 
 ## 3. As-is (verified)
 Evidence: file:line, commands, measurements. No folklore.
@@ -153,7 +153,7 @@ Prefer existing seams.
 Risk → severity → mitigation → which slice owns it.
 
 ## 8. ADR impact
-New / amended ADRs or "none — justify".
+New / amended ADRs or "none - justify".
 
 ## 9. References
 ```
@@ -166,7 +166,7 @@ evidence-backed. Boundaries triple must be present on full packs.
 ## architecture.md
 
 ```markdown
-# Architecture — <Program title>
+# Architecture - <Program title>
 
 ## Context
 How this sits in the system.
@@ -199,7 +199,7 @@ Include in-flight doubt outcomes for non-trivial claims
 (CLAIM → evidence → doubt result).
 
 ## Threat / abuse notes (when auth, vault, network, or agents are in blast)
-Abuse cases and fail-closed expectations — not a full security audit.
+Abuse cases and fail-closed expectations - not a full security audit.
 ```
 
 A section titled "Architecture" with only context fluff is **FAIL**. Components,
@@ -210,7 +210,7 @@ flows, failure modes, and alternatives are load-bearing.
 ## decision-ledger.md
 
 ```markdown
-# Decision ledger — <Program title>
+# Decision ledger - <Program title>
 
 | ID | Decision | Options considered | Choice | Rationale | Consequences (+) | Consequences (−) | End-game note |
 |---|---|---|---|---|---|---|---|
@@ -229,12 +229,12 @@ Every row needs both consequence columns. Empty (−) is FAIL unless truly none
 ## implementation-plan.md
 
 ```markdown
-# Implementation plan — <Program title>
+# Implementation plan - <Program title>
 
 **Style:** Independently shippable slices; RED → GREEN → commit when code.
 **Captain locked:** <lock IDs or none>
 **Appetite / cutting point:** <what cuts if exit criteria cannot be met without
-reopening architecture — scope envelope, not calendar>
+reopening architecture - scope envelope, not calendar>
 
 ## Dependency graph
 <code block or mermaid>
@@ -243,7 +243,7 @@ reopening architecture — scope envelope, not calendar>
 | Hole | Risk | Owning slice | Containment |
 |---|---|---|---|
 
-## Slice <ID> — <title>  (#issue when filed)
+## Slice <ID> - <title>  (#issue when filed)
 
 **Goal:** one sentence.
 
@@ -262,7 +262,7 @@ reopening architecture — scope envelope, not calendar>
 **Exit criteria:**
 - [ ] … (observable)
 - [ ] **Example / probe:** <command, scenario, or green/red observation
-      a fresh crew can adjudicate — required for every non-optional slice>
+      a fresh crew can adjudicate - required for every non-optional slice>
 
 **Standing DoD reminder:** exit criteria prove the slice; fleet DoD still
 applies at ship (tests/guards, integration, docs, rollback when blast warrants).
@@ -284,13 +284,13 @@ example/probe.
 ## issue-index.md
 
 ```markdown
-# Issue index — <Program title>
+# Issue index - <Program title>
 
 **Epic:** [Title](https://github.com/<owner>/<repo>/issues/N)
 
 | Slice | Issue | Title | Blocked by | Status label |
 |---|---|---|---|---|
-| A | [#N](url) | … | — | ready-for-agent |
+| A | [#N](url) | … | - | ready-for-agent |
 
 ## Filing notes
 Tracker, labels, any title drift vs plan.
@@ -301,7 +301,7 @@ Tracker, labels, any title drift vs plan.
 ## captain-decisions.md
 
 ```markdown
-# Captain decisions — <Program title>
+# Captain decisions - <Program title>
 
 **Board:** <Lavish URL or path>
 **Artifact:** `.lavish/<name>.html`
@@ -317,7 +317,7 @@ Tracker, labels, any title drift vs plan.
 …
 
 ## Crew recommendation vs lock
-Table when they diverge — pack follows captain.
+Table when they diverge - pack follows captain.
 
 ## None required
 If no board: state why all decisions were provisional under parent law.
@@ -328,7 +328,7 @@ If no board: state why all decisions were provisional under parent law.
 ## promotion-report.md
 
 ```markdown
-# Promotion report — <Program title>
+# Promotion report - <Program title>
 
 ## Locked and ready for implementation crews
 ## Residual open (must be empty or held)
@@ -336,7 +336,7 @@ If no board: state why all decisions were provisional under parent law.
 Verdict on related in-flight PRs (land / amend / supersede / ignore) with rationale.
 ## What becomes parent law
 Which pack decisions / ADRs should merge into long-lived project law after ship
-(archive mindset — anti drift).
+(archive mindset - anti drift).
 ## Circuit breaker
 If slice N cannot meet exit criteria without reopening architecture:
 - which **lock** would reopen (IDs), vs
@@ -358,7 +358,7 @@ report). Templates: [COMPLETENESS.md](COMPLETENESS.md) and Phase 10 in
 ### fresh-eyes.md skeleton
 
 ```markdown
-# Fresh-eyes review — <Program title>
+# Fresh-eyes review - <Program title>
 
 **Authoring harness:** …
 **Review harness:** …   # MUST differ
@@ -374,7 +374,7 @@ report). Templates: [COMPLETENESS.md](COMPLETENESS.md) and Phase 10 in
 |---|---|---|
 | Pack ↔ pack | … | … |
 | Pack ↔ filed issue bodies | <issue URLs and body revisions> | … |
-| Pack ↔ active implementation | <PRs, paths, review/test evidence> | <findings or N/A — no active implementation> |
+| Pack ↔ active implementation | <PRs, paths, review/test evidence> | <findings or N/A - no active implementation> |
 
 ## Findings
 
@@ -397,7 +397,7 @@ report). Templates: [COMPLETENESS.md](COMPLETENESS.md) and Phase 10 in
 Epic: https://github.com/<owner>/<repo>/issues/<epic>
 
 ## Pack
-<path or durable data path> — slice <ID>
+<path or durable data path> - slice <ID>
 
 ## What to build
 End-to-end behaviour or contract this slice makes true.
@@ -413,7 +413,7 @@ regressions in blast radius, docs/ADRs this slice owns, rollback/fail-closed
 when blast is medium or high. Acceptance criteria ≠ DoD.
 
 ## Blocked by
-- None — can start immediately
+- None - can start immediately
 - or full issue URLs
 
 ## Blast radius
@@ -438,7 +438,7 @@ adr: "NNNN"
 date: YYYY-MM-DD
 ---
 
-# NNNN — <Title>
+# NNNN - <Title>
 
 ## Status
 ## Context
@@ -451,5 +451,5 @@ date: YYYY-MM-DD
 ## End-game compatibility
 ## Mechanism verified
 ## Follow-ups
-## References (pack, issues, evidence — quote parent law where superseded)
+## References (pack, issues, evidence - quote parent law where superseded)
 ```

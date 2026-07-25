@@ -11,7 +11,7 @@ description: >-
   firstmate chat. Use when firstmate dispatches a program-planning,
   program-pack, super-flow-as-crew, design-pack, or "plan this program end to
   end" task. Do not use for single-slice bugfixes, smoke, review, or
-  implementation-only work — refuse and redirect.
+  implementation-only work - refuse and redirect.
 user-invocable: false
 metadata:
   internal: true
@@ -21,7 +21,7 @@ metadata:
 
 You are a **Program Pack crew**: one dispatched crew that runs the full planning
 arc and terminates only when a **complete, hand-off-ready program artifact set**
-exists — ready for implementation crews with no planning round-trip — **and** a
+exists - ready for implementation crews with no planning round-trip - **and** a
 **cross-harness fresh-eyes review** has cleared the pack (or its findings have
 been fixed and re-cleared).
 
@@ -54,7 +54,7 @@ vague spec. Lived good packs (topology scout; federation hub-auth pack;
 If your output would be weaker than those, do not mark done.
 
 **Ceremony is not a substitute for truth.** A thick pack that invents presence
-without evidence is the same failure mode as a thin pack — dressed better.
+without evidence is the same failure mode as a thin pack - dressed better.
 Over-running this skill on work that does not need it also hides incompleteness
 behind process. Phase 0 must refuse or demote when the work is not a genuine
 multi-slice program.
@@ -62,7 +62,7 @@ multi-slice program.
 ## Placement / load contract
 
 - Lives under firstmate `.agents/skills/program-pack/` (`metadata.internal: true`).
-- Not a public `skills/` installer skill — it assumes the firstmate crewmate
+- Not a public `skills/` installer skill - it assumes the firstmate crewmate
   contract (status file, Lavish, gh-axi, durable `data/` paths, harness
   dispatch for fresh-eyes).
 - Sibling of `review-crew`, `smoke-crew`, `decision-hold-lifecycle`.
@@ -81,7 +81,7 @@ multi-slice program.
    the program is worth cutting to when a slice cannot meet exit criteria).
 4. **Slices are independently shippable** with per-slice **exit criteria** that
    include at least one **adjudicable example** (command probe, given/when/then,
-   or green/red observation a fresh crew can run) — not "implement the module."
+   or green/red observation a fresh crew can run) - not "implement the module."
 5. **Captain decisions** that are product / architecture locks go through a
    **crew-owned Lavish input board** (build → serve → poll → stamp). Do **not**
    dump open questions into firstmate chat as the primary channel. Use the
@@ -92,7 +92,7 @@ multi-slice program.
    FAIL.
 7. **Prior decisions are quoted, not regenerated.** Parent ADRs, captain locks,
    and prior pack law are cited with path + quote (or stable ID + verbatim
-   text). Paraphrase-from-memory is FAIL — locked decisions that drift from
+   text). Paraphrase-from-memory is FAIL - locked decisions that drift from
    their written form cause real defects.
 8. **Fresh-eyes is mandatory after completeness PASS.** A different harness
    reviews the pack for seams, including **pack ↔ issue bodies** and, when
@@ -107,12 +107,12 @@ treat the utterance as a **completeness FAIL signal**, not a process optimizatio
 
 | Excuse | Reality |
 |---|---|
-| "Too simple for `architecture.md`" | If it is truly simple, Phase 0 redirects. If you are writing a full pack, architecture must have seams, flows, failure modes, and alternatives — not a title page. |
+| "Too simple for `architecture.md`" | If it is truly simple, Phase 0 redirects. If you are writing a full pack, architecture must have seams, flows, failure modes, and alternatives - not a title page. |
 | "Captain will clarify in implementation" | Captain-grade forks lock **now** on Lavish, or hold via `decision-hold-lifecycle`. Implementation crews do not invent product law. |
 | "TBD is fine if issues are filed" | Load-bearing TBD is FAIL. Issues without adjudicable exit criteria are theater. |
 | "Section exists, so completeness passes" | Presence without evidence, examples, or consequences is FAIL. Score quality. |
 | "We'll add exit criteria when we start coding" | Exit criteria are the hand-off. Without them the pack is not done. |
-| "Same harness re-review is fine / faster" | Fresh-eyes **requires a different harness**. Same-model second pass shares blind spots — that is the mechanism, not a preference. Do not "optimize" it away. |
+| "Same harness re-review is fine / faster" | Fresh-eyes **requires a different harness**. Same-model second pass shares blind spots - that is the mechanism, not a preference. Do not "optimize" it away. |
 | "Single vertical slice still needs the full arc" | No. Redirect to a normal ship crew (or mini-pack if mid-size). Over-ceremony hides incompleteness. |
 | "I remember the ADR; no need to quote" | Quote. Regenerated folklore drifts from written law and has already caused defects in this fleet. |
 | "Wall-clock estimate helps prioritization" | Forbidden. Use appetite (scope-worth), blast radius, and dependency only. |
@@ -150,8 +150,10 @@ fail-closed on evidence quality and still requires fresh-eyes.
 Plus **GitHub**: one program epic (or attachment to an existing epic named in the
 brief) and **one sub-issue per shippable slice**, linked as children of the epic.
 
-Templates and required sections: [PACK-SHAPE.md](PACK-SHAPE.md).  
-Captain board protocol: [CAPTAIN-BOARD.md](CAPTAIN-BOARD.md).  
+Templates and required sections: [PACK-SHAPE.md](PACK-SHAPE.md).
+
+Captain board protocol: [CAPTAIN-BOARD.md](CAPTAIN-BOARD.md).
+
 Final gates: [COMPLETENESS.md](COMPLETENESS.md) then Phase 10 fresh-eyes.
 
 ### Standing implementation Definition of Done (downstream, not pack completeness)
@@ -175,7 +177,7 @@ conflate them.
 Run in order for the path Phase 0 selects. Do not mark done mid-arc.
 Status-file updates only on supervisor-relevant state changes.
 
-### Phase 0 — Frame, size, and refuse when wrong tool
+### Phase 0 - Frame, size, and refuse when wrong tool
 
 Restate the program in 2–4 sentences: problem, surface, success condition.
 
@@ -191,14 +193,14 @@ hides; under-ceremony is the captain's original pain. Pick deliberately:
 Also in Phase 0:
 
 - If the brief names multiple independent programs, **stop** and escalate
-  `needs-decision` with a decomposition proposal — one pack run = one program.
+  `needs-decision` with a decomposition proposal - one pack run = one program.
 - Record **parent law** already locked (ADRs, prior captain locks) as
   **quoted** non-reopenable constraints (path + excerpt), not paraphrases.
 - Optional strong test: write a 5–8 line **operator press-release** paragraph
   ("what changes for a CCD power user"). If you cannot, you do not understand
-  the product surface yet — fix understanding before architecture.
+  the product surface yet - fix understanding before architecture.
 
-### Phase 1 — Measured recon
+### Phase 1 - Measured recon
 
 Recon must be **evidence-backed**, not narrative.
 
@@ -216,7 +218,7 @@ Recon must be **evidence-backed**, not narrative.
    - open questions for Phase 2
    - **rabbit holes** spotted early (implementation explosion risks)
 
-### Phase 2 — Decision inventory and boundaries
+### Phase 2 - Decision inventory and boundaries
 
 Produce three lists, then map them to **boundaries**:
 
@@ -232,34 +234,35 @@ implementation crews inherit the same fence.
 Captain-grade questions must be **multiple-choice with a recommended default**,
 each option carrying **consequences (±)** and end-game compatibility notes.
 Frame the board as a **betting table**: appetite, no-gos, and one-way-door
-product forks — not only technical alternatives. Freeform only when the
+product forks - not only technical alternatives. Freeform only when the
 decision genuinely cannot be enumerated.
 
 If there are **zero** captain-grade opens, skip the board (Phase 6 becomes a
 short stamp: `captain-decisions.md` says none required + why).
 
-### Phase 3 — Architecture alternatives + in-flight doubt
+### Phase 3 - Architecture alternatives + in-flight doubt
 
 Produce **at least two** approaches (prefer three when the design space is wide):
 
-- **minimal-change** — smallest delta; lowest blast
-- **clean-cut** — pays refactor / model cost for a single seam
-- **pragmatic** — extend with strategic refactor at leverage points
+- **minimal-change** - smallest delta; lowest blast
+- **clean-cut** - pays refactor / model cost for a single seam
+- **pragmatic** - extend with strategic refactor at leverage points
 
 For each: modules/seams, data flows, failure modes, trade-offs, end-game
 compatibility, rabbit holes. Recommend one. Convergences across alternatives
 become hard rules in the pack.
 
-**In-flight doubt (mandatory for non-trivial claims):**  
+**In-flight doubt (mandatory for non-trivial claims):**
+
 When a recommendation asserts a non-obvious mechanism, trust boundary, protocol
 behavior, or "this is how the substrate works" claim:
 
-1. **CLAIM** — write the claim in one sentence.
-2. **EXTRACT** — list the evidence that would have to be true.
-3. **DOUBT** — attack the claim with a **fresh context** (second explore agent
-   or a clean re-read of primary sources) — not the same monologue that wrote
+1. **CLAIM** - write the claim in one sentence.
+2. **EXTRACT** - list the evidence that would have to be true.
+3. **DOUBT** - attack the claim with a **fresh context** (second explore agent
+   or a clean re-read of primary sources) - not the same monologue that wrote
    the claim.
-4. **RECONCILE** — amend architecture/spec or demote the claim to open/residual.
+4. **RECONCILE** - amend architecture/spec or demote the claim to open/residual.
 5. Cap **≤3** doubt cycles per claim; if still unstable, escalate to captain
    board or `failed:` rather than shipping fiction.
 
@@ -267,11 +270,11 @@ Trivial claims backed by a single unambiguous file:line do not need a full
 doubt cycle. Non-trivial claims do **not** wait for Phase 5.
 
 **Design-first variant:** when parent law is architecture-heavy (federation,
-trust, topology), you may draft architecture alternatives before a full PRD —
+trust, topology), you may draft architecture alternatives before a full PRD -
 but PRD operator fiction and definition of right must still land before the
 captain board.
 
-### Phase 4 — Draft the pack (full or mini)
+### Phase 4 - Draft the pack (full or mini)
 
 Write every required file for the Phase 0 path in [PACK-SHAPE.md](PACK-SHAPE.md)
 in one pass. Do not leave `TBD` in load-bearing sections. Placeholders that
@@ -284,15 +287,15 @@ Implementation plan rules:
   criteria** including **≥1 adjudicable example** (probe command, scenario, or
   green/red observation).
 - Dependency graph is explicit (ASCII or mermaid).
-- Optional / deferrable slices are marked optional — not silently mixed with P0.
+- Optional / deferrable slices are marked optional - not silently mixed with P0.
 - **Appetite / cutting point** stated for the program: what cuts if a slice
   cannot meet exit criteria without reopening architecture.
 - **Rabbit holes** listed with which slice owns containment.
 
 Packs may be **rebased** after captain locks (Phase 6). Drafts are not frozen
-scripture before locks land — but they must still be complete enough to attack.
+scripture before locks land - but they must still be complete enough to attack.
 
-### Phase 5 — Adversarial self-check (crew-local 3-pillar)
+### Phase 5 - Adversarial self-check (crew-local 3-pillar)
 
 Before the captain board, attack the draft:
 
@@ -307,13 +310,13 @@ ambiguities, silent defaults, missing actors, PRD promises with no plan row.
 
 Amend the pack for confirmed high-severity findings. If the design is
 structurally incoherent, loop to Phase 2–3 (cap: two loops). If still broken,
-`failed:` with evidence — do not ship a thin pack.
+`failed:` with evidence - do not ship a thin pack.
 
 This is **not** a substitute for Phase 10 fresh-eyes or for a full multi-agent
 3-Pillar Workflow when the brief demands one. It is the minimum single-crew
 adversarial pass so silent fiction does not reach the captain board.
 
-### Phase 6 — Captain lock (Lavish)
+### Phase 6 - Captain lock (Lavish)
 
 Follow [CAPTAIN-BOARD.md](CAPTAIN-BOARD.md) exactly:
 
@@ -321,18 +324,18 @@ Follow [CAPTAIN-BOARD.md](CAPTAIN-BOARD.md) exactly:
 2. Serve with `npx -y lavish-axi <file>`.
 3. Poll with `npx -y lavish-axi poll <file>` until answers land or the session ends.
 4. Stamp **verbatim** answers into `captain-decisions.md`.
-5. Rebase the pack (spec, architecture, plan, ledger) onto the locks — including
+5. Rebase the pack (spec, architecture, plan, ledger) onto the locks - including
    when the captain rejects the crew recommendation.
 
 Do **not** use firstmate chat as the decision channel. If Lavish cannot run,
-`blocked: lavish unavailable — cannot lock captain decisions` (or
+`blocked: lavish unavailable - cannot lock captain decisions` (or
 `needs-decision` only when the brief forbids local serve). Prefer blocked over
 guessing.
 
 While polling for a long period, use `paused: awaiting captain Lavish locks on
 program-pack board` if the brief supports `paused` for external waits.
 
-### Phase 7 — ADR drafts (when required)
+### Phase 7 - ADR drafts (when required)
 
 If the locked design creates or amends durable architecture law:
 
@@ -345,7 +348,7 @@ If the locked design creates or amends durable architecture law:
 
 If no new ADR is needed, say so in `promotion-report.md` with justification.
 
-### Phase 8 — File GitHub issues
+### Phase 8 - File GitHub issues
 
 Use **gh-axi** (not raw `gh` when both exist).
 
@@ -357,12 +360,12 @@ Use **gh-axi** (not raw `gh` when both exist).
    pointer, blocked-by edges, labels per project triage vocabulary
    (`ready-for-agent` when AFK-ready).
 4. Write `issue-index.md` with full `https://github.com/<owner>/<repo>/issues/<n>`
-   URLs — never bare `#n` alone as the only reference.
+   URLs - never bare `#n` alone as the only reference.
 
 Do not implement product code in this skill's happy path unless the brief
 explicitly promotes the task.
 
-### Phase 9 — Completeness gate (hard)
+### Phase 9 - Completeness gate (hard)
 
 Run [COMPLETENESS.md](COMPLETENESS.md) as a checklist. Score **evidence quality
 and adjudicability**, not mere file existence. Every required item must be
@@ -371,7 +374,7 @@ and adjudicability**, not mere file existence. Every required item must be
 A thin-but-present section fails **harder** than a missing optional flourish.
 Record the filled scores in `completeness.md` (or the durable report).
 
-### Phase 10 — Cross-harness fresh-eyes review (hard)
+### Phase 10 - Cross-harness fresh-eyes review (hard)
 
 **After** completeness PASS and **before** the pack is reported done.
 
@@ -392,10 +395,10 @@ by re-reviewing on the authoring harness "to save a dispatch."
 
 If the brief or environment cannot dispatch a different harness:
 
-- Register `blocked: fresh-eyes requires different harness — authoring=<X>, need Codex or Claude`
+- Register `blocked: fresh-eyes requires different harness - authoring=<X>, need Codex or Claude`
 - Do **not** self-approve. Do **not** mark done.
 - Narrow exception: brief explicitly waives fresh-eyes **and** names who owns
-  residual risk — rare; default is no waiver.
+  residual risk - rare; default is no waiver.
 
 #### What fresh-eyes reviews (seam review, not checklist re-run)
 
@@ -403,20 +406,20 @@ The reviewer does **not** re-score COMPLETENESS.md row-by-row. They hunt what
 the checklist cannot see:
 
 - **Contradictions** between documents (PRD vs plan, architecture vs spec, ledger vs captain locks)
-- **Quiet reversals** — a decision asserted in one file and undone in another
-- **Exit criteria that do not prove the slice** — green boxes that could pass while the slice goal is false
+- **Quiet reversals** - a decision asserted in one file and undone in another
+- **Exit criteria that do not prove the slice** - green boxes that could pass while the slice goal is false
 - **Unstated assumptions** load-bearing for the design
-- **PRD ↔ plan gaps** — promises without delivery rows; plan work that serves no definition of right
-- **Prior-law drift** — paraphrases that no longer match quoted ADRs/locks
-- **False certainty** — architecture that reads complete but has no mechanism evidence
-- **Pack ↔ issue-body seams** — plan/spec exit criteria that do not match filed
+- **PRD ↔ plan gaps** - promises without delivery rows; plan work that serves no definition of right
+- **Prior-law drift** - paraphrases that no longer match quoted ADRs/locks
+- **False certainty** - architecture that reads complete but has no mechanism evidence
+- **Pack ↔ issue-body seams** - plan/spec exit criteria that do not match filed
   issue acceptance text (or issues that invent requirements the pack never locked)
-- **Pack ↔ active-implementation seams** — when any slice already has code, a
+- **Pack ↔ active-implementation seams** - when any slice already has code, a
   PR, or review evidence: behavior present in implementation but **silent or
   contradicted** in the pack, and pack law that active code violates
 
 Written contradictions are only half the seam class.
-A pack that is silent while the code does something else is the other half —
+A pack that is silent while the code does something else is the other half -
 that shape has already caused real defects (for example a silent HTTPS→HTTP
 downgrade that never appeared in any pack artifact).
 
@@ -424,16 +427,16 @@ downgrade that never appeared in any pack artifact).
 
 Every Phase 10 review must cover:
 
-1. **Pack ↔ pack** — cross-document seams listed above.
-2. **Pack ↔ filed issue bodies** — always, not issue existence alone. Read the
+1. **Pack ↔ pack** - cross-document seams listed above.
+2. **Pack ↔ filed issue bodies** - always, not issue existence alone. Read the
    actual issue text against plan exit criteria, DoD pointers, blast, and
    dependencies.
-3. **Pack ↔ active implementation** — **required whenever implementation
+3. **Pack ↔ active implementation** - **required whenever implementation
    exists** for any non-optional slice (open or merged PR, branch with product
    commits, review/test evidence, or shipped code the pack claims to govern).
    Compare pack + ADRs + issue AC against the active diff, review trail, and
    test evidence. Record either the comparison findings or an explicit
-   **N/A — no active implementation** justification in `fresh-eyes.md`.
+   **N/A - no active implementation** justification in `fresh-eyes.md`.
 
 A pack-only review that skips (2) or skips (3) when implementation exists
 **cannot** clear Phase 10.
@@ -472,13 +475,13 @@ fixes) confirms clear.
    `…/data/<task>/report.md`) pointing at the pack, issue URLs, completeness
    PASS, and fresh-eyes clear (harness named).
 2. Copy pack to any durable snapshot path the brief requires.
-3. Status: `done: program pack complete — epic #<n>, N slices, completeness PASS, fresh-eyes clear on <harness>`.
+3. Status: `done: program pack complete - epic #<n>, N slices, completeness PASS, fresh-eyes clear on <harness>`.
 
 ## What this skill does NOT do
 
 - **No product implementation** (unless the brief re-modes the task after pack).
 - **No merge / force-push / remote rewrite.**
-- **No interactive six-gate human babysitting** — that is super-flow's operator
+- **No interactive six-gate human babysitting** - that is super-flow's operator
   mode; you batch and board.
 - **No silent scope growth** past the framed program.
 - **No wall-clock estimates** in plans, issues, or skill templates.
@@ -490,7 +493,7 @@ fixes) confirms clear.
   implementation execution stays on ship / TDD / review-crew skills.
 - **No full-SDLC pack sprawl** (CI/CD matrices, observability launch checklists,
   marketing launch plans). Those belong to implementation and smoke skills.
-- **No Gherkin/EARS ceremony for every line** — prefer probe commands and
+- **No Gherkin/EARS ceremony for every line** - prefer probe commands and
   concrete scenarios where they help; do not invent BDD theater.
 
 ## Relationship to other skills and field sources
@@ -507,16 +510,16 @@ fixes) confirms clear.
 | Amazon PR/FAQ | Steal: short operator fiction / definition of right in user language. Reject: corporate TAM theater for internal platform packs |
 | ATDD / Spec by Example / Kiro EARS | Steal: example-shaped exit criteria; analyze-requirements. Reject: mandatory Gherkin everywhere |
 | OpenSpec | Steal: delta/archive mindset for promotion-report ("what becomes parent law"). Reject: fluid thin proposals without a fail-closed gate |
-| IETF last-call | Steal: external multi-audience review as legitimacy — instantiated as **Phase 10 fresh-eyes**. Reject: full standards process overhead |
+| IETF last-call | Steal: external multi-audience review as legitimacy - instantiated as **Phase 10 fresh-eyes**. Reject: full standards process overhead |
 | Nygard ADR | Steal: consequences (±) on every decision row. ADRs remain point decisions; packs remain programs |
 | Anti-ceremony / supervisor-skill school | Steal: evidence quality over inventory; quote prior decisions; refuse skill for thin work. Reject: using "ceremony is bad" to ship vague briefs again |
-| `decision-hold-lifecycle` | If the task tears down before locks land, register captain holds per that skill — do not lose opens |
+| `decision-hold-lifecycle` | If the task tears down before locks land, register captain holds per that skill - do not lose opens |
 | `review-crew` / `smoke-crew` | Downstream for **code**. Fresh-eyes (Phase 10) is pack-seam review on a different harness; may use review-crew *shape* but targets artifacts, not diffs |
 
 Field research bases (do not re-narrow only to Spec Kit):
 
-- Round 1: `/var/home/mlight/firstmate/data/vellum-program-skill-scout/report.md`
-- Round 2: `/var/home/mlight/firstmate/data/vellum-program-skill-scout-r2/report.md`
+- Round 1: `${FM_HOME}/data/vellum-program-skill-scout/report.md`
+- Round 2: `${FM_HOME}/data/vellum-program-skill-scout-r2/report.md`
 
 ## Anneal
 

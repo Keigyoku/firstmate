@@ -1,4 +1,4 @@
-# program-pack — Completeness gate
+# program-pack - Completeness gate
 
 **Fail closed.** The task is not done until every required row is PASS **and**
 Phase 10 fresh-eyes is clear. Completeness alone is necessary, not sufficient.
@@ -6,7 +6,7 @@ Phase 10 fresh-eyes is clear. Completeness alone is necessary, not sufficient.
 A thin pack that "looks done" is the failure mode this skill exists to kill.
 **A beautiful empty section fails harder than a slightly rough README.**
 
-Run this checklist at the end of Phase 9 — **before** fresh-eyes. Paste a
+Run this checklist at the end of Phase 9 - **before** fresh-eyes. Paste a
 filled copy into `completeness.md` next to the pack (or the durable report).
 Any FAIL → fix or `failed:` with the failing rows; never proceed to fresh-eyes
 or `done:` with open FAILs.
@@ -41,7 +41,7 @@ it is real. Both layers must PASS.
 | Path | Required sections |
 |---|---|
 | **Full** | All rows below marked required for full |
-| **Mini** | A2–A3 or A3 only as listed; A5, A7; B1–B5; C1, C4-mini; D1–D5; F1–F4; G1–G3; H1; skip A4/A6/A8-full architecture/ledger only if Phase 0 documented mid-size and no captain-grade opens — if opens appear, upgrade to full |
+| **Mini** | A2–A3 or A3 only as listed; A5, A7; B1–B5; C1, C4-mini; D1–D5; F1–F4; G1–G3; H1; skip A4/A6/A8-full architecture/ledger only if Phase 0 documented mid-size and no captain-grade opens - if opens appear, upgrade to full |
 
 When in doubt, use **full**.
 
@@ -49,7 +49,7 @@ When in doubt, use **full**.
 
 ## A. Artifact set
 
-Existence only — still required, but **never sufficient**.
+Existence only - still required, but **never sufficient**.
 
 | # | Check | Score |
 |---|---|---|
@@ -72,7 +72,7 @@ Existence only — still required, but **never sufficient**.
 |---|---|---|
 | B1 | Explicit **What we are NOT doing** appears in README and/or spec (deferred vs rejected) | |
 | B2 | No load-bearing `TBD` / `TODO` / `fill in later` / `…` in spec, architecture, or plan exit criteria | |
-| B3 | Parent law / non-reopenable locks listed **with quotes or verbatim excerpts + paths** — not regenerated paraphrase | |
+| B3 | Parent law / non-reopenable locks listed **with quotes or verbatim excerpts + paths** - not regenerated paraphrase | |
 | B4 | **No stop-gap architecture:** every major design states end-game compatibility; no "temporary model we will throw away" without captain lock | |
 | B5 | **No human wall-clock** effort language in pack or issue bodies (scope/risk/blast/appetite only) | |
 | B6 | Related in-flight PRs get an explicit verdict (land / amend / supersede / ignore) when relevant | |
@@ -86,15 +86,15 @@ Existence only — still required, but **never sufficient**.
 | # | Check | Score |
 |---|---|---|
 | C1 | As-is claims cite re-traceable evidence (file:line, command output, measured topology, **quoted** ADR text) | |
-| C2 | Defects/risks are grouped into **families** or a **canonical model** when fragmentation is the disease — not only a bug laundry list | |
-| C3 | Architecture recommendation is chosen among ≥2 alternatives with trade-offs recorded (full; mini N/A if design is forced by parent law — say so) | |
+| C2 | Defects/risks are grouped into **families** or a **canonical model** when fragmentation is the disease - not only a bug laundry list | |
+| C3 | Architecture recommendation is chosen among ≥2 alternatives with trade-offs recorded (full; mini N/A if design is forced by parent law - say so) | |
 | C4 | Adversarial self-check (external / mechanism / third-party) was run; confirmed highs amended or justified residual | |
 | C5 | **Analyze-requirements:** no unresolved contradictions between pack docs; no silent defaults on load-bearing behavior; actors named | |
 | C6 | Non-trivial architecture claims show **in-flight doubt** outcome (CLAIM + evidence + doubt result) or explicit "trivial/unambiguous file:line" waiver per claim | |
 | C7 | Operator fiction / definition of right in user language is present and non-vacuous (full; mini: at least definition of right in spec summary) | |
 
 **Scoring note for C-rows:** If an A-row file exists but C1/C5 fail for its
-content, overall is FAIL. Do not "PASS A4, FAIL C1" and then shrug — both count;
+content, overall is FAIL. Do not "PASS A4, FAIL C1" and then shrug - both count;
 zero FAILs required.
 
 ---
@@ -104,7 +104,7 @@ zero FAILs required.
 | # | Check | Score |
 |---|---|---|
 | D1 | Every non-optional slice is **independently shippable** (own PR / dispatch unit) | |
-| D2 | Every non-optional slice has **exit criteria** a fresh crew can adjudicate green/red **including ≥1 example/probe** (command, scenario, or observable) — "implement X" alone is FAIL | |
+| D2 | Every non-optional slice has **exit criteria** a fresh crew can adjudicate green/red **including ≥1 example/probe** (command, scenario, or observable) - "implement X" alone is FAIL | |
 | D3 | Dependency edges are explicit; no hidden "do everything in one PR" coupling unless labeled as expand-contract exception | |
 | D4 | Optional / later slices are marked optional; P0 path is clear | |
 | D5 | Blast radius stated per slice | |
@@ -159,7 +159,7 @@ zero FAILs required.
 ## After this gate: Phase 10
 
 Completeness **PASS** unlocks **cross-harness fresh-eyes** (SKILL.md Phase 10).
-Fresh-eyes is **not** a re-run of this checklist — it is a separate hard gate:
+Fresh-eyes is **not** a re-run of this checklist - it is a separate hard gate:
 
 - Different harness from authoring
 - Seam review (contradictions, quiet reversals, non-proving exits, unstated
@@ -196,7 +196,7 @@ OVERALL: PASS | FAIL
 **OVERALL PASS** only if zero FAIL on required rows for the chosen path.
 
 On FAIL, do not append `done:` and do not start fresh-eyes until fixed. Either
-repair or append `failed: completeness gate — <failing ids>`.
+repair or append `failed: completeness gate - <failing ids>`.
 
 On PASS, proceed to Phase 10. Task-level `done:` only after J1–J4 CLEAR
 (J4 may be N/A with written no-implementation justification).
