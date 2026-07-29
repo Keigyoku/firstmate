@@ -53,8 +53,32 @@ fm_child_node_uuid_v4() {
   printf '%s\n' "$id"
 }
 
+fm_child_node_exclusive_json() {  # <destination>
+  local destination=$1 directory temporary
+  [ ! -d "$destination" ] || return 1
+  directory=$(dirname "$destination")
+  mkdir -p "$directory"
+  temporary=$(mktemp "$directory/.$(basename "$destination").tmp.XXXXXX") || return 1
+  if ! jq -e . > "$temporary"; then
+    rm -f "$temporary"
+    return 1
+  fi
+  if command -v sync >/dev/null 2>&1; then
+    sync -f "$temporary" 2>/dev/null || sync 2>/dev/null || true
+  fi
+  if ! ln "$temporary" "$destination" 2>/dev/null; then
+    rm -f "$temporary"
+    return 1
+  fi
+  rm -f "$temporary"
+  if command -v sync >/dev/null 2>&1; then
+    sync -f "$directory" 2>/dev/null || true
+  fi
+}
+
 fm_child_node_valid_uuid_v4() {  # <id>
   case "$1" in
+    *[!0-9a-f-]*) return 1 ;;
     ????????-????-4???-[89ab]???-????????????) return 0 ;;
     *) return 1 ;;
   esac

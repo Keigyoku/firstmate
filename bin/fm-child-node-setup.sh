@@ -104,7 +104,17 @@ if ! jq -e '.schema == "dev.vellum.child-node.provision/1" and (.container_id | 
     --arg container_id "$CONTAINER_ID" \
     --arg created_at "$CREATED_AT" \
     '{schema:"dev.vellum.child-node.provision/1",container_id:$container_id,created_at:$created_at,identity_kind:"child-container"}' \
-    | fm_resident_atomic_json "$PROVISION"
+    | fm_child_node_exclusive_json "$PROVISION" \
+    || {
+      if [ ! -e "$PROVISION" ]; then
+        echo "fm-child-node-setup: could not create provision.json" >&2
+        exit 1
+      fi
+    }
+  if ! jq -e '.schema == "dev.vellum.child-node.provision/1" and (.container_id | type == "string")' "$PROVISION" >/dev/null 2>&1; then
+    echo "fm-child-node-setup: provision.json exists but is not a valid child-node provision; refusing to overwrite" >&2
+    exit 1
+  fi
 fi
 
 CONTAINER_ID=$(fm_child_node_container_id "$CHILD_HOME")

@@ -28,6 +28,14 @@ run_setup() {
     "$ROOT/bin/fm-child-node-setup.sh" "$TASK_ID" --kind ship
 }
 
+if bash -c '. "$1"; fm_child_node_valid_uuid_v4 zzzzzzzz-zzzz-4zzz-azzz-zzzzzzzzzzzz' \
+  _ "$ROOT/bin/fm-child-node-lib.sh"; then
+  fail "UUID-v4 validator accepted non-hexadecimal components"
+fi
+bash -c '. "$1"; fm_child_node_valid_uuid_v4 12345678-9abc-4def-8abc-1234567890ab' \
+  _ "$ROOT/bin/fm-child-node-lib.sh" \
+  || fail "UUID-v4 validator rejected a hexadecimal UUID-v4"
+
 # --- slice 1: birth writes the three immutable docs under crews/<task>/.child-node/ ---
 run_setup
 [ -f "$CONTRACT" ] || fail "setup did not write contract.json under crews/$TASK_ID/.child-node/"
@@ -75,6 +83,57 @@ case "$BAD_OUT" in
   *refusing*) ;;
   *) fail "setup did not report refuse-to-overwrite for invalid provision.json" ;;
 esac
+
+RACE_HOME="$TEST_ROOT/race-home"
+RACE_TASK=race-k2
+RACE_PROVISION="$RACE_HOME/crews/$RACE_TASK/.child-node/provision.json"
+RACE_FAKEBIN=$(fm_fakebin "$TEST_ROOT/race-fake")
+RACE_A_READY="$TEST_ROOT/race-a.ready"
+RACE_B_READY="$TEST_ROOT/race-b.ready"
+RACE_A_ID=11111111-1111-4111-8111-111111111111
+RACE_B_ID=22222222-2222-4222-8222-222222222222
+mkdir -p "$RACE_HOME/state" "$RACE_HOME/data" "$RACE_HOME/config" "$RACE_HOME/projects"
+cp -a "$HOME_DIR/.god-node" "$RACE_HOME/.god-node"
+cat > "$RACE_FAKEBIN/uuidgen" <<'SH'
+#!/usr/bin/env bash
+set -eu
+: > "$FM_UUID_READY"
+wait_count=0
+while [ ! -e "$FM_UUID_PEER" ]; do
+  sleep 0.01
+  wait_count=$((wait_count + 1))
+  [ "$wait_count" -lt 1000 ] || exit 1
+done
+if [ -n "${FM_UUID_WAIT_FOR_FILE:-}" ]; then
+  wait_count=0
+  while [ ! -e "$FM_UUID_WAIT_FOR_FILE" ]; do
+    sleep 0.01
+    wait_count=$((wait_count + 1))
+    [ "$wait_count" -lt 1000 ] || exit 1
+  done
+fi
+printf '%s\n' "$FM_UUID_VALUE"
+SH
+chmod +x "$RACE_FAKEBIN/uuidgen"
+FM_HOME="$RACE_HOME" FM_ROOT_OVERRIDE="$ROOT" PATH="$RACE_FAKEBIN:$PATH" \
+  FM_UUID_READY="$RACE_A_READY" FM_UUID_PEER="$RACE_B_READY" FM_UUID_VALUE="$RACE_A_ID" \
+  "$ROOT/bin/fm-child-node-setup.sh" "$RACE_TASK" --kind ship \
+  >"$TEST_ROOT/race-a.out" 2>&1 &
+RACE_A_PID=$!
+FM_HOME="$RACE_HOME" FM_ROOT_OVERRIDE="$ROOT" PATH="$RACE_FAKEBIN:$PATH" \
+  FM_UUID_READY="$RACE_B_READY" FM_UUID_PEER="$RACE_A_READY" FM_UUID_VALUE="$RACE_B_ID" \
+  FM_UUID_WAIT_FOR_FILE="$RACE_PROVISION" \
+  "$ROOT/bin/fm-child-node-setup.sh" "$RACE_TASK" --kind ship \
+  >"$TEST_ROOT/race-b.out" 2>&1 &
+RACE_B_PID=$!
+RACE_A_RC=0
+RACE_B_RC=0
+wait "$RACE_A_PID" || RACE_A_RC=$?
+wait "$RACE_B_PID" || RACE_B_RC=$?
+[ "$RACE_A_RC" -eq 0 ] || fail "first concurrent setup failed: $(cat "$TEST_ROOT/race-a.out")"
+[ "$RACE_B_RC" -eq 0 ] || fail "second concurrent setup failed: $(cat "$TEST_ROOT/race-b.out")"
+[ "$(jq -r '.container_id' "$RACE_PROVISION")" = "$RACE_A_ID" ] \
+  || fail "later concurrent setup replaced the first provision identity"
 pass "idempotent setup preserves identity and refuses clobber of invalid provision"
 
 # --- slice 4: first child-current pointer (atomic birth publish) ---
