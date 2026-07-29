@@ -33,6 +33,17 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "payload=$(cat); root=${CLAUDE_PROJECT_DIR:-$(pwd -P)}; if [ -f \"$root/AGENTS.md\" ] && [ -f \"$root/bin/fm-claim-coach-inject.sh\" ]; then printf '%s' \"$payload\" | \"$root/bin/fm-claim-coach-inject.sh\"; fi"
+          }
+        ]
+      }
     ]
   }
 }

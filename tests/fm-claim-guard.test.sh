@@ -15,6 +15,7 @@ install_claim_scripts() {
   local dir=$1
   mkdir -p "$dir/bin" "$dir/docs"
   cp "$ROOT/bin/fm-claim-guard.sh" "$dir/bin/fm-claim-guard.sh"
+  cp "$ROOT/bin/fm-claim-coach-inject.sh" "$dir/bin/fm-claim-coach-inject.sh"
   cp "$ROOT/bin/fm-glass.sh" "$dir/bin/fm-glass.sh"
   cp "$ROOT/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard.sh"
   # Composed Stop-hook tests run turnend first; it sources these.
@@ -23,7 +24,8 @@ install_claim_scripts() {
   cp "$ROOT/bin/fm-supervision-instructions.sh" "$dir/bin/fm-supervision-instructions.sh"
   cp "$ROOT/bin/fm-harness.sh" "$dir/bin/fm-harness.sh"
   cp -R "$ROOT/docs/supervision-protocols" "$dir/docs/supervision-protocols"
-  chmod +x "$dir/bin/fm-claim-guard.sh" "$dir/bin/fm-glass.sh" "$dir/bin/fm-turnend-guard.sh" \
+  chmod +x "$dir/bin/fm-claim-guard.sh" "$dir/bin/fm-claim-coach-inject.sh" \
+    "$dir/bin/fm-glass.sh" "$dir/bin/fm-turnend-guard.sh" \
     "$dir/bin/fm-supervision-instructions.sh" "$dir/bin/fm-harness.sh"
 }
 
@@ -104,41 +106,189 @@ payload_with_message() {
     '{last_assistant_message:$m, stop_hook_active:$a}'
 }
 
-CLAIM_TEXT='Captain, the vellum dashboard is rendering and working after the boot.'
-NO_CLAIM_TEXT='Crewmate is still working on the backlog item; no app status yet.'
+CLAIM_TEXT='Captain, the vellum dashboard rendered after the boot.'
+# No outcome/state assertion at all => nothing to coach.
+NO_CLAIM_TEXT='Captain, three items are queued behind the input-route change; I will flag the one that needs your eyes.'
+# A non-rendered state claim: the coaching line must NOT prescribe a screenshot.
+CLAIM_CI='Captain, the Vellum flake is fixed and checks passed.'
+# A fresh screenshot can evidence rendering, but not CI.
+CLAIM_MIXED='Captain, the Vellum dashboard rendered and CI passed.'
+# Same claim carrying its receipt => silent.
+CLAIM_CI_RECEIPT='Captain, the Vellum flake is fixed and checks passed (gh check-runs on 4a91c2f: all green).'
+# The attribution shape data/captain.md mandates => silent.
+CLAIM_ATTRIBUTED='Captain, the crew reports the Vellum flake is fixed; unverified, I have not reproduced it.'
 
-test_claim_no_evidence_blocks() {
+PENDING_REL=fm-state/claim-coach-pending
+SESSION_A=11111111-aaaa-4aaa-8aaa-111111111111
+SESSION_B=22222222-bbbb-4bbb-8bbb-222222222222
+
+payload_with_session() {
+  local message=$1 session=$2 stop_active=${3:-false}
+  jq -cn --arg m "$message" --arg s "$session" --argjson a "$stop_active" \
+    '{last_assistant_message:$m, session_id:$s, stop_hook_active:$a}'
+}
+
+run_inject_hook() {
+  local dir=$1 session=$2
+  local home
+  home=$(cd "$dir" && pwd)
+  jq -cn --arg s "$session" '{session_id:$s, prompt:"next turn", hook_event_name:"UserPromptSubmit"}' \
+    | CLAUDECODE=1 CLAUDE_PROJECT_DIR="$home" FM_HOME="$home" \
+      bash "$dir/bin/fm-claim-coach-inject.sh" 2>/dev/null
+}
+
+write_pending() {
+  local dir=$1 session=$2 epoch=$3 line=$4
+  mkdir -p "$dir/fm-state"
+  jq -cn --arg s "$session" --argjson e "$epoch" --arg l "$line" \
+    '{session_id:$s, epoch:$e, line:$l}' > "$dir/$PENDING_REL"
+}
+
+test_claim_records_coaching_never_blocks() {
   local dir out status payload
-  dir=$(make_primary_dir "$TMP_ROOT/claim-block")
+  dir=$(make_primary_dir "$TMP_ROOT/claim-coach")
   write_stale_marker "$dir"
-  payload=$(payload_with_message "$CLAIM_TEXT" false)
+  payload=$(payload_with_session "$CLAIM_TEXT" "$SESSION_A" false)
   out=$(run_claim_hook "$dir" "$payload"); status=$?
-  expect_code 2 "$status" "claim without fresh glass must block"
-  assert_contains "$out" 'UNVERIFIED APP-STATE CLAIM' "block banner missing"
-  assert_contains "$out" 'bin/fm-glass.sh' "remedy must name bin/fm-glass.sh"
-  pass "fm-claim-guard: claim + no/stale evidence blocks"
+  expect_code 0 "$status" "claim guard must NEVER block; it is a reminder, not a gate"
+  [ -z "$out" ] || fail "Stop hook must stay silent on its own stream, got: $out"
+  assert_present "$dir/$PENDING_REL" "unevidenced claim must record a pending coaching line"
+  assert_grep 'fm-glass.sh' "$dir/$PENDING_REL" "rendered-state coaching must name the glass capture"
+  pass "fm-claim-guard: unevidenced claim records coaching and never blocks"
+}
+
+test_non_rendered_claim_coaching_is_kind_matched() {
+  local dir status payload line
+  dir=$(make_primary_dir "$TMP_ROOT/claim-coach-ci")
+  write_stale_marker "$dir"
+  payload=$(payload_with_session "$CLAIM_CI" "$SESSION_A" false)
+  run_claim_hook "$dir" "$payload" >/dev/null; status=$?
+  expect_code 0 "$status" "non-rendered claim must not block"
+  assert_present "$dir/$PENDING_REL" "non-rendered claim must record coaching"
+  line=$(jq -r '.line' "$dir/$PENDING_REL")
+  case $line in
+    *fm-glass.sh*) fail "a CI/repo claim must not be told to take a screenshot: $line" ;;
+  esac
+  pass "fm-claim-guard: non-rendered coaching does not prescribe a screenshot"
+}
+
+test_evidenced_message_records_nothing() {
+  local dir status payload
+  dir=$(make_primary_dir "$TMP_ROOT/claim-coach-silent")
+  write_stale_marker "$dir"
+  for payload in "$(payload_with_session "$CLAIM_CI_RECEIPT" "$SESSION_A" false)" \
+                 "$(payload_with_session "$CLAIM_ATTRIBUTED" "$SESSION_A" false)" \
+                 "$(payload_with_session "$NO_CLAIM_TEXT" "$SESSION_A" false)"; do
+    rm -f "$dir/$PENDING_REL"
+    run_claim_hook "$dir" "$payload" >/dev/null; status=$?
+    expect_code 0 "$status" "evidenced/attributed/non-claim must not block"
+    assert_absent "$dir/$PENDING_REL" "receipted, attributed, or non-claim text must record nothing"
+  done
+  pass "fm-claim-guard: receipted, attributed, and non-claim messages record nothing"
 }
 
 test_claim_fresh_evidence_allows() {
   local dir out status payload
   dir=$(make_primary_dir "$TMP_ROOT/claim-allow-fresh")
   write_fresh_marker "$dir"
-  payload=$(payload_with_message "$CLAIM_TEXT" false)
+  payload=$(payload_with_session "$CLAIM_TEXT" "$SESSION_A" false)
   out=$(run_claim_hook "$dir" "$payload"); status=$?
   expect_code 0 "$status" "claim with fresh glass must allow"
   [ -z "$out" ] || fail "fresh-evidence allow must be silent, got: $out"
+  assert_absent "$dir/$PENDING_REL" "fresh glass must record no coaching for a rendered claim"
   pass "fm-claim-guard: claim + fresh evidence allows"
+}
+
+test_mixed_claim_requires_receipt_with_fresh_glass() {
+  local dir line payload status
+  dir=$(make_primary_dir "$TMP_ROOT/claim-mixed-fresh")
+  write_fresh_marker "$dir"
+  payload=$(payload_with_session "$CLAIM_MIXED" "$SESSION_A" false)
+  run_claim_hook "$dir" "$payload" >/dev/null; status=$?
+  expect_code 0 "$status" "mixed rendered and CI claim must never block"
+  assert_present "$dir/$PENDING_REL" "fresh glass must not clear a mixed rendered and CI claim"
+  line=$(jq -r '.line' "$dir/$PENDING_REL")
+  assert_contains "$line" 'cite a URL' "mixed claim must receive receipt-kind coaching"
+  case $line in
+    *fm-glass.sh*) fail "mixed claim must not receive rendered-only coaching: $line" ;;
+  esac
+  pass "fm-claim-guard: mixed claim with fresh glass still requires a receipt"
 }
 
 test_no_claim_allows() {
   local dir out status payload
   dir=$(make_primary_dir "$TMP_ROOT/claim-no-claim")
-  # No marker at all — still allow when the message is not an app-state claim.
-  payload=$(payload_with_message "$NO_CLAIM_TEXT" false)
+  payload=$(payload_with_session "$NO_CLAIM_TEXT" "$SESSION_A" false)
   out=$(run_claim_hook "$dir" "$payload"); status=$?
   expect_code 0 "$status" "non-claim message must allow without glass"
   [ -z "$out" ] || fail "no-claim allow must be silent, got: $out"
   pass "fm-claim-guard: no app-state claim allows"
+}
+
+test_inject_delivers_and_clears() {
+  local dir out
+  dir=$(make_primary_dir "$TMP_ROOT/coach-inject")
+  write_pending "$dir" "$SESSION_A" "$(date +%s)" "claim-coach: cite the receipt"
+  out=$(run_inject_hook "$dir" "$SESSION_A")
+  assert_contains "$out" 'claim-coach: cite the receipt' "injector must emit the pending line"
+  assert_absent "$dir/$PENDING_REL" "injector must clear the pending record after delivering it"
+  pass "fm-claim-coach-inject: delivers the pending line and clears it"
+}
+
+test_inject_drops_foreign_session() {
+  local dir out
+  dir=$(make_primary_dir "$TMP_ROOT/coach-foreign")
+  write_pending "$dir" "$SESSION_A" "$(date +%s)" "claim-coach: stale cross-session line"
+  out=$(run_inject_hook "$dir" "$SESSION_B")
+  case $out in
+    *stale\ cross-session*) fail "a pending line from another session must never surface: $out" ;;
+  esac
+  assert_absent "$dir/$PENDING_REL" "a foreign-session pending record must be discarded, not kept"
+  pass "fm-claim-coach-inject: never surfaces another session's pending line"
+}
+
+test_inject_drops_empty_recorded_session() {
+  local dir out
+  dir=$(make_primary_dir "$TMP_ROOT/coach-empty-session")
+  write_pending "$dir" "" "$(date +%s)" "claim-coach: unscoped line"
+  out=$(run_inject_hook "$dir" "$SESSION_A")
+  case $out in
+    *unscoped\ line*) fail "a pending line without a recorded session must never surface: $out" ;;
+  esac
+  assert_absent "$dir/$PENDING_REL" "an empty-session pending record must be discarded"
+  pass "fm-claim-coach-inject: empty recorded session never acts as a wildcard"
+}
+
+test_inject_out_of_scope_leaves_pending() {
+  local dir out
+  dir=$(make_secondmate_dir "$TMP_ROOT/coach-secondmate")
+  write_pending "$dir" "$SESSION_A" "$(date +%s)" "claim-coach: primary-only line"
+  out=$(run_inject_hook "$dir" "$SESSION_A")
+  [ -z "$out" ] || fail "out-of-scope injector must stay silent, got: $out"
+  assert_present "$dir/$PENDING_REL" "out-of-scope injector must leave pending state untouched"
+  pass "fm-claim-coach-inject: out-of-scope hook leaves pending state untouched"
+}
+
+test_inject_drops_expired() {
+  local dir out
+  dir=$(make_primary_dir "$TMP_ROOT/coach-expired")
+  # 2020-01-01: far outside any sane expiry window.
+  write_pending "$dir" "$SESSION_A" 1577836800 "claim-coach: ancient reminder"
+  out=$(run_inject_hook "$dir" "$SESSION_A")
+  case $out in
+    *ancient\ reminder*) fail "an expired pending line must never surface: $out" ;;
+  esac
+  assert_absent "$dir/$PENDING_REL" "an expired pending record must be discarded"
+  pass "fm-claim-coach-inject: expired pending line never resurfaces"
+}
+
+test_inject_silent_without_pending() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/coach-none")
+  out=$(run_inject_hook "$dir" "$SESSION_A"); status=$?
+  expect_code 0 "$status" "injector must exit 0 with no pending record"
+  [ -z "$out" ] || fail "injector must stay silent with nothing pending, got: $out"
+  pass "fm-claim-coach-inject: silent when nothing is pending"
 }
 
 test_stop_hook_active_allows() {
@@ -177,9 +327,9 @@ test_transcript_fallback_blocks() {
   # No last_assistant_message — force the JSONL fallback path.
   payload=$(payload_for "$transcript" false)
   out=$(run_claim_hook "$dir" "$payload"); status=$?
-  expect_code 2 "$status" "transcript fallback must still block claims without glass"
-  assert_contains "$out" 'UNVERIFIED APP-STATE CLAIM' "transcript fallback block banner missing"
-  pass "fm-claim-guard: transcript_path fallback blocks without last_assistant_message"
+  expect_code 0 "$status" "transcript fallback must not block either"
+  assert_present "$dir/$PENDING_REL" "transcript fallback must still record coaching"
+  pass "fm-claim-guard: transcript_path fallback records coaching without last_assistant_message"
 }
 
 test_non_primary_scope_allows() {
@@ -227,9 +377,9 @@ test_composed_stop_hook_runs_both() {
         /bin/sh -c 'payload=$(cat); root=${CLAUDE_PROJECT_DIR:-$(pwd -P)}; if [ -f "$root/AGENTS.md" ] && [ -f "$root/bin/fm-turnend-guard.sh" ]; then printf "%s" "$payload" | "$root/bin/fm-turnend-guard.sh" || exit $?; if [ -f "$root/bin/fm-claim-guard.sh" ]; then printf "%s" "$payload" | "$root/bin/fm-claim-guard.sh"; fi; fi'
     ) 2>&1
   ); status=$?
-  expect_code 2 "$status" "composed Stop hook must still block on claim without glass"
-  assert_contains "$out" 'UNVERIFIED APP-STATE CLAIM' "composed hook must surface claim banner"
-  pass "fm-claim-guard: composed Claude Stop hook still blocks claims"
+  expect_code 0 "$status" "composed Stop hook must not block on an unevidenced claim"
+  assert_present "$dir/$PENDING_REL" "composed hook must still record coaching"
+  pass "fm-claim-guard: composed Claude Stop hook records coaching without blocking"
 }
 
 test_settings_hook_invokes_claim_guard() {
@@ -240,7 +390,11 @@ test_settings_hook_invokes_claim_guard() {
   [ -n "$command" ] || fail "Stop hook command is missing from .claude/settings.json"
   assert_contains "$command" 'fm-turnend-guard.sh' "Stop hook must still invoke fm-turnend-guard.sh"
   assert_contains "$command" 'fm-claim-guard.sh' "Stop hook must invoke fm-claim-guard.sh after turnend"
-  pass ".claude/settings.json: Stop hook composes turnend then claim guard"
+  local ups
+  ups=$(jq -r '[.hooks.UserPromptSubmit[]?.hooks[]?.command] | join(" ")' "$settings")
+  assert_contains "$ups" 'fm-claim-coach-inject.sh' \
+    "UserPromptSubmit must invoke fm-claim-coach-inject.sh; without it the coaching line reaches nobody"
+  pass ".claude/settings.json: Stop composes turnend+claim guard, UserPromptSubmit injects coaching"
 }
 
 test_glass_records_marker() {
@@ -294,9 +448,18 @@ if os.fork() == 0:
   pass "fm-glass: records freshness marker and prints path"
 }
 
-test_claim_no_evidence_blocks
+test_claim_records_coaching_never_blocks
+test_non_rendered_claim_coaching_is_kind_matched
+test_evidenced_message_records_nothing
 test_claim_fresh_evidence_allows
+test_mixed_claim_requires_receipt_with_fresh_glass
 test_no_claim_allows
+test_inject_delivers_and_clears
+test_inject_drops_foreign_session
+test_inject_drops_empty_recorded_session
+test_inject_out_of_scope_leaves_pending
+test_inject_drops_expired
+test_inject_silent_without_pending
 test_stop_hook_active_allows
 test_missing_transcript_fails_open
 test_transcript_fallback_blocks
