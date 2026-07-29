@@ -5,6 +5,7 @@ Internal protocol paths retain the ratified `god-node` names.
 The producer surface under `bin/fm-resident-*.sh` is vendored into the vellum build, whose brand-string guard rejects that project's capitalized display-brand literal anywhere outside its own canonical brand module.
 Comments on this surface therefore use the sanctioned lowercase codename spelling; `tests/fm-resident-producer.test.sh` asserts it, and the vellum guard remains the sole owner of the policy.
 Lowercase `dev.vellum.*` schema strings and the uppercase `VELLUM_TRANSCRIPT_ROOT` environment name are wire identifiers rather than display brand, so the guard does not match them and they must not be renamed.
+Per-crew Child Node birth under `crews/<task-id>/` is owned by [crew-child-node-contract.md](crew-child-node-contract.md).
 
 ## Provisioned metadata
 

@@ -49,8 +49,11 @@ assert_contains "$stop_cmds" 'fm-claim-guard.sh' 'Stop must keep claim guard com
 allow_arm=$("$ROOT/bin/fm-arm-pretool-check.sh" --command 'echo safe' 2>/dev/null; echo $?)
 [ "$allow_arm" = 0 ] || fail "arm-pretool should allow non-arm command (got $allow_arm)"
 
-# Subagent on non-primary (this worktree is linked) should be inert/allow
-allow_sub=$("$ROOT/bin/fm-subagent-pretool-check.sh" --tool Agent 2>/dev/null; echo $?)
+# Subagent outside a firstmate root should be inert/allow. Use an explicit
+# non-primary root so this assertion is independent of whether CI checks out the
+# branch as a plain checkout or a linked gate worktree.
+allow_sub=$(FM_ROOT_OVERRIDE="$ROOT/tests" FM_HOME="$ROOT/tests" \
+  "$ROOT/bin/fm-subagent-pretool-check.sh" --tool Agent 2>/dev/null; echo $?)
 [ "$allow_sub" = 0 ] || fail "subagent guard should be inert outside primary (got $allow_sub)"
 
 pass 'primary PreToolUse stack composes arm-pretool + subagent; Stop keeps claim guard'

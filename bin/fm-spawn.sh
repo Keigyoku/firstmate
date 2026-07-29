@@ -1608,6 +1608,50 @@ META_WINDOW=$T
 } > "$STATE/$ID.meta"
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
+# Child Node birth (CN-P): producer-owned identity under crews/<task-id>/.
+# Parent link is the God Node provision container_id (durable), never a soft
+# god: session wire id alone. Idempotent on respawn: valid provision identity
+# is never replaced (docs/crew-child-node-contract.md). Fail closed so CN-B
+# dual-read always has real docs to prefer.
+if ! FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" \
+  "$FM_ROOT/bin/fm-child-node-setup.sh" "$ID" --kind "$KIND"; then
+  echo "error: Child Node setup failed for $ID" >&2
+  exit 1
+fi
+CHILD_BACKEND_KIND=$BACKEND
+CHILD_WORKSPACE_ID=
+CHILD_PANE_ID=
+case "$BACKEND" in
+  herdr)
+    CHILD_WORKSPACE_ID=${HERDR_WORKSPACE_ID:-}
+    CHILD_PANE_ID=${HERDR_PANE_ID:-}
+    ;;
+  zellij)
+    CHILD_WORKSPACE_ID=${ZELLIJ_SES:-}
+    CHILD_PANE_ID=${ZELLIJ_PANE_ID:-}
+    ;;
+  cmux)
+    CHILD_WORKSPACE_ID=${CMUX_WORKSPACE_ID:-}
+    CHILD_PANE_ID=${CMUX_SURFACE_ID:-}
+    ;;
+  tmux)
+    # Window name is not a pane id; omit incomplete backend rather than invent.
+    ;;
+  orca)
+    CHILD_WORKSPACE_ID=${ORCA_WORKTREE_ID:-}
+    CHILD_PANE_ID=${ORCA_TERMINAL:-}
+    ;;
+esac
+if ! FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" \
+  FM_CHILD_BACKEND_KIND="${CHILD_WORKSPACE_ID:+$CHILD_BACKEND_KIND}" \
+  FM_CHILD_WORKSPACE_ID="$CHILD_WORKSPACE_ID" \
+  FM_CHILD_PANE_ID="$CHILD_PANE_ID" \
+  FM_CHILD_STATUS_VERB=working \
+  "$FM_ROOT/bin/fm-child-node-publish.sh" "$ID" starting; then
+  echo "error: Child Node first current publish failed for $ID" >&2
+  exit 1
+fi
+
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
