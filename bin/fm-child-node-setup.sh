@@ -88,9 +88,8 @@ if ! jq -e '.schema == "dev.vellum.child-node/1" and .minimum_reader == 1 and ha
   exit 1
 fi
 
-# Keep only a complete provision shape (fm_child_node_provision_valid). Half-formed
-# documents with a string container_id but missing created_at/identity_kind are NOT
-# valid identities — refuse rather than preserve-and-publish them as valid.
+# Keep only a complete provision shape (fm_child_node_provision_valid).
+# Refuse incomplete documents rather than preserving and publishing them as valid identities.
 if ! fm_child_node_provision_valid "$PROVISION"; then
   # Refuse to replace a present but invalid provision document: that would clobber
   # operator-owned content. Only create when missing.

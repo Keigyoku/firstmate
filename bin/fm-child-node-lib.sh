@@ -22,7 +22,6 @@
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-resident-lib.sh"
 
 # Authoritative complete Child Node provision document predicate (jq).
-# Fields: schema, UUID-v4 container_id, producer RFC3339Z created_at, identity_kind.
 # shellcheck disable=SC2016
 fm_child_node_provision_shape_jq='
   .schema == "dev.vellum.child-node.provision/1"
@@ -106,7 +105,7 @@ fm_child_node_exclusive_json() {  # <destination>
   fi
 }
 
-# Standalone UUID-v4 check for non-provision ids (e.g. parent God Node id).
+# Standalone UUID-v4 check for non-provision ids (for example, the parent God Node id).
 # Child provision identity validation goes only through fm_child_node_provision_valid.
 fm_child_node_valid_uuid_v4() {  # <id>
   [[ "$1" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]

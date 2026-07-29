@@ -28,7 +28,7 @@ Identity lives under the producer home so it survives worktree recycle.
 | Document | Schema | Mutability |
 | --- | --- | --- |
 | `contract.json` | `dev.vellum.child-node/1` with `minimum_reader: 1` | Written only when absent; must not hold instance identity fields |
-| `provision.json` | complete shape owned by `fm_child_node_provision_shape_jq` / `fm_child_node_provision_valid` in `bin/fm-child-node-lib.sh` (`dev.vellum.child-node.provision/1`, hex UUID-v4 `container_id`, producer RFC3339Z `created_at`, `identity_kind: child-container`) | Immutable once the complete shape is present; half-formed docs are refused, not published as valid |
+| `provision.json` | Complete shape defined only by `fm_child_node_provision_shape_jq` / `fm_child_node_provision_valid` in `bin/fm-child-node-lib.sh` | Immutable once the complete shape is present; incomplete docs are refused, not published as valid |
 | `child.json` | `dev.vellum.child/1` | Static descriptor; may be rewritten like `resident.json` |
 
 `child_type` is `firstmate-crew` (ship), `firstmate-scout` (scout), or `firstmate-secondmate` (secondmate).
