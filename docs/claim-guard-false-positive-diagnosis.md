@@ -127,11 +127,20 @@ One failed attempt says the problem is hard and the next attempt might land it.
 A converging series - five fixes, each competently addressing the previous defect, each reproducing it one boundary further out - says the approach is wrong, and that no sixth attempt along the same line will land it either.
 That distinction is the entire reason this document exists, and it is why the work was stopped rather than continued.
 
-1. **Whole message, referent and assertion.** The original predicate: any app referent token anywhere plus any health verb anywhere, unbound. `the Vellum crew is still working` blocked on `vellum` + `working`.
-2. **Whole message, assertion and receipt.** The receipt rewrite: any receipt anywhere cleared every assertion anywhere. `PR merged (https://...); CI is green` passed although the CI half had no receipt.
-3. **Clause span.** A clause splitter was added. It enumerated subjects, so comma-separated clauses and conjunctions still shared one receipt: `PR merged (url), deployment is live` remained a single unit.
-4. **Mood exclusion span.** A narrow prospective/conditional exclusion was added so `waiting for CI to turn green` would not fire. One marker then amnestied its whole clause: `If CI is green, deployment is live` discarded the definite unreceipted second assertion along with the conditional first.
-5. **Command string.** The seam moved to recording what the turn ran, but the recorder classified commands by regex over the raw command string with no quote or heredoc handling, so `printf '%s\n' '; git status'` recorded a `git-read` although only `printf` executed.
+1. **Whole message, referent and assertion.**
+   The original predicate: any app referent token anywhere plus any health verb anywhere, unbound.
+   `the Vellum crew is still working` blocked on `vellum` + `working`.
+2. **Whole message, assertion and receipt.**
+   The receipt rewrite: any receipt anywhere cleared every assertion anywhere.
+   `PR merged (https://...); CI is green` passed although the CI half had no receipt.
+3. **Clause span.**
+   A clause splitter was added.
+   It enumerated subjects, so comma-separated clauses and conjunctions still shared one receipt: `PR merged (url), deployment is live` remained a single unit.
+4. **Mood exclusion span.**
+   A narrow prospective/conditional exclusion was added so `waiting for CI to turn green` would not fire.
+   One marker then amnestied its whole clause: `If CI is green, deployment is live` discarded the definite unreceipted second assertion along with the conditional first.
+5. **Command string.**
+   The seam moved to recording what the turn ran, but the recorder classified commands by regex over the raw command string with no quote or heredoc handling, so `printf '%s\n' '; git status'` recorded a `git-read` although only `printf` executed.
 
 Instances 1, 2, 3 and 5 are literally the same defect: unbound token matching over a span, where content that should not count leaks into the match.
 Instance 5 is the important one, because it appeared *after* the seam had supposedly moved off the message text.
@@ -139,7 +148,8 @@ The evidence side was still being inferred from a string; only which string had 
 
 ## Why the receipt rewrite was dropped rather than shipped
 
-The old guard is **noisy**. The receipt rewrite is **fail-open**.
+The old guard is **noisy**.
+The receipt rewrite is **fail-open**.
 
 A noisy guard costs a rewritten message per false positive, and the reader knows it fired.
 A fail-open guard goes quiet while certifying claims nothing checked, and it is worse than the bug it replaces precisely because it *looks* fixed.
@@ -156,7 +166,8 @@ The class disappears when nothing has to be parsed at all: **the thing that actu
 
 The primitive already exists in this repo, twice:
 
-- `bin/fm-glass.sh` writes `fm-state/last-glass-capture` from inside itself, only when it genuinely ran. Nothing infers a screenshot from prose.
+- `bin/fm-glass.sh` writes `fm-state/last-glass-capture` from inside itself, only when it genuinely ran.
+  Nothing infers a screenshot from prose.
 - The crew kill guard prepends a shim directory to the shell `PATH` (`/tmp/fm-<task-id>/killguard-bin`) so a real invocation passes through firstmate's own wrapper (`docs/crew-kill-guard.md`).
 
 Combining them: a small set of verification entrypoints - firstmate's own scripts directly, and `git` / `gh` / test runners through a PATH-prepended shim - each append their own evidence record when they actually execute.
