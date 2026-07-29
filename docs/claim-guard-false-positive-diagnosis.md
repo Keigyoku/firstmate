@@ -4,12 +4,15 @@ Diagnosis only.
 `bin/fm-claim-guard.sh` is unchanged and keeps the false positives described below.
 `docs/turnend-guard.md` remains the owner of the claim-guard contract.
 
-This records why `bin/fm-claim-guard.sh` blocked three consecutive primary turns on 2026-07-29, why the fix requested in the task brief is not implementable as specified, why the replacement that was built was dropped rather than shipped, and what the right seam looks like.
+The task brief commissioned this diagnosis against a reported subset of three consecutive primary turns on 2026-07-29.
+Firstmate subsequently reported the primary session total reaching ten and then sixteen blocks that day, every one a false positive.
+This records why that three-turn subset blocked, why the fix requested in the task brief is not implementable as specified, why the replacement that was built was dropped rather than shipped, and what the right seam looks like.
 
 ## Method
 
-All verdicts below were produced by piping payloads into the real tracked `bin/fm-claim-guard.sh` inside a primary-shaped temp home with a stale glass marker.
-No regex was read forward into a conclusion; every claim here is an observed exit status.
+The incident counts above are reported rather than independently verified here.
+The mechanism and every `BLOCK` / `allow` row below are first-hand: each verdict was produced by piping payloads into the real tracked `bin/fm-claim-guard.sh` inside a primary-shaped temp home with a stale glass marker.
+No regex was read forward into a conclusion about the mechanism.
 The full probe transcript is reproduced in the "Evidence transcript" section.
 
 ## Initiating trigger
