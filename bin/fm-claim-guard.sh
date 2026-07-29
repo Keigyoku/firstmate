@@ -97,8 +97,7 @@ fi
 # Deliberately coarse. Because a hit now costs one reminder line instead of a
 # round trip, noticing too often is cheap. There is no clause splitting, mood
 # exclusion, or quoted-span parsing here: those existed only to avoid false
-# BLOCKS, and every one of them leaked evidence across its own span boundary
-# (docs/claim-guard-false-positive-diagnosis.md).
+# BLOCKS, and every one of them leaked evidence across its own span boundary.
 
 # An outcome/state assertion. Bare "work" is absent: it is a noun in most prose.
 message_asserts_state() {

@@ -206,7 +206,7 @@ The injector applies those checks before inspecting pending state, so an out-of-
 
 Because a hit now costs one reminder line instead of a round trip, the predicate no longer has to be precise, and noticing too often is cheap.
 There is **no** clause splitting, mood exclusion, or quoted-span parsing.
-Those existed only to avoid false blocks, and each one leaked evidence across its own span boundary; `docs/claim-guard-false-positive-diagnosis.md` records that series and why span parsing was abandoned.
+Those existed only to avoid false blocks, and each one leaked evidence across its own span boundary.
 
 A line is recorded when the final assistant text asserts state AND carries none of:
 
@@ -228,7 +228,8 @@ A screenshot is the wrong instrument for a code, CI, or repo claim.
 The injector consumes the record whenever it looks at one - delivering it or discarding it - so nothing is ever left to rot.
 Delivery requires BOTH:
 
-- **Same session.** Both the recorded and current session ids must be non-empty and equal; otherwise the record is discarded unshown. This is what stops a missing id, unrelated session, or resumed session inheriting a nudge.
+- **Same session.** Both the recorded and current session ids must be non-empty and equal; otherwise the record is discarded unshown.
+  This stops a missing id, unrelated session, or newly resumed session with a different id from inheriting a nudge.
 - **Still fresh.** Older than `FM_CLAIM_COACH_MAX_AGE` is discarded unshown. This covers the same session resumed much later, where the id still matches but the claim is long out of view.
 
 If the session simply ends and the next prompt never comes, the record is scoped to a session that will not return and expires by time regardless.

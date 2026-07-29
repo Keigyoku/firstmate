@@ -67,8 +67,8 @@ REC_EPOCH=$(printf '%s' "$RECORD" | jq -r '.epoch // empty' 2>/dev/null) || exit
 REC_LINE=$(printf '%s' "$RECORD" | jq -r '.line // empty' 2>/dev/null) || exit 0
 [ -n "$REC_LINE" ] || exit 0
 
-# Session scoping: a reminder from another session never surfaces here. This is
-# what stops a resumed or unrelated session inheriting a stale nudge.
+# Session scoping: a reminder from another session never surfaces here. A
+# different or newly resumed session cannot inherit a stale nudge.
 CUR_SESSION=$(printf '%s' "$PAYLOAD" | jq -r '.session_id // empty' 2>/dev/null)
 [ -n "$REC_SESSION" ] || exit 0
 [ -n "$CUR_SESSION" ] || exit 0

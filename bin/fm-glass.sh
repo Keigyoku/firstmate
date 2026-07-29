@@ -15,7 +15,7 @@
 #
 # Degrades with a clear stderr error (exit 1) when spectacle or the Wayland
 # session socket is unavailable (SSH, headless, secondmate homes without a
-# desktop). Never blocks a turn by itself; only the claim guard does.
+# desktop). Neither this capture nor the claim-coaching path blocks a turn.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,7 +28,7 @@ usage() {
 Usage: fm-glass.sh [output-path]
 
 Capture the live desktop glass with spectacle and record a freshness marker
-under fm-state/last-glass-capture for the primary claim guard.
+under fm-state/last-glass-capture for the primary claim-coaching recorder.
 
 Prints the absolute capture path on success.
 EOF
