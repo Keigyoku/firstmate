@@ -157,98 +157,109 @@ Physical-identity matching and the settled healthy predicate remain the fork's p
 The default behavior suite does not invoke live language-model harnesses.
 `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` opts into the isolated interactive Pi regression recorded above.
 
-## Claim-vs-evidence glass guard
+## Claim-vs-evidence coaching reminder
 
-Captain-facing daily-driver app state (render / working / adopted) is proven only by a screenshot of the live desktop glass, never by logs, process census, ports, or API responses.
-Prose rules in `data/captain.md` and `data/learnings.md` failed three sessions running because they are advisory at message-composition time.
-This section owns the mechanical enforcement layer that closes that gap.
+**This is a reminder, not a gate.** `bin/fm-claim-guard.sh` always exits 0 and never blocks a turn.
+Nothing at this hook point can stop an unevidenced claim from reaching the captain, so the guard does not pretend to.
+It records one short coaching line, and `bin/fm-claim-coach-inject.sh` delivers it at the start of the next turn so the primary self-corrects.
+
+Do not restore blocking here.
+The next section is the measurement showing why it cannot work.
+
+### Why a gate is not achievable at this hook point
+
+A `Stop` hook fires when the turn ENDS - after the assistant message is already written and displayed.
+It cannot suppress anything.
+Exiting 2 only refuses to let the turn finish, which forces a second message, and the guard's own former remedy text said "resend the claim".
+So the unverified claim reached the captain 100% of the time and the guard DUPLICATED it rather than preventing it: the same paragraph twice with a block banner between.
+
+That is precisely the defect class this guard exists to catch - a detector running after the effect it is meant to prevent, reporting enforcement while the harm already happened - previously sitting inside the enforcement mechanism itself.
+
+Measured on Claude Code with `--model haiku`, in a scratch repo with a Stop hook printing distinct tokens to both streams and exiting 0:
+
+- `num_turns=1`; exit 0 correctly forces no continuation.
+- Resuming that session and asking the model whether it saw either token returned `NEITHER`.
+- The transcript JSONL confirmed it independently: the tokens appear only in `hook_success` attachment rows, carrying `{"stdout":"...","stderr":"..."}`. The session's only `hook_additional_context` row came from `SessionStart`, not from the Stop hook.
+- The same lab with a `UserPromptSubmit` hook printing a token on exit 0: the model quoted that token straight back.
+
+**A Stop hook that exits 0 is recorded in the transcript but is never injected into the model's context.**
+`UserPromptSubmit` stdout on exit 0 is.
+That is the whole reason this is a two-hook design: a single Stop hook can either block (duplicating the claim) or be silent to the agent. Neither is coaching.
 
 ### Components
 
 - `bin/fm-glass.sh` is the canonical capture entrypoint.
-  It runs the proven host command `spectacle -b -n -f -o <out>` with `XDG_RUNTIME_DIR` / `WAYLAND_DISPLAY` defaulting to the ambient session (or `/run/user/$(id -u)` and `wayland-0`).
-  It prints the absolute capture path and writes `fm-state/last-glass-capture` as `epoch path`.
-  Missing spectacle or a missing Wayland socket degrades with a clear stderr error and exit 1 (SSH, headless, secondmate homes without a desktop).
-- `bin/fm-claim-guard.sh` is the claim-vs-evidence check on the primary Stop-hook path.
-  It is a separate script so it does not bloat the supervision predicate; both compose on the same Claude Stop hook.
+  It runs `spectacle -b -n -f -o <out>`, prints the absolute capture path, and writes `fm-state/last-glass-capture` as `epoch path`.
+  Missing spectacle or a missing Wayland socket degrades with a clear stderr error and exit 1.
+- `bin/fm-claim-guard.sh` RECORDS on the primary `Stop` path. Always exit 0.
+- `bin/fm-claim-coach-inject.sh` DELIVERS on the primary `UserPromptSubmit` path. Always exit 0, prints at most one line.
 
-### Scope and loop guard
+### Scope and disable
 
-Unlike `bin/fm-turnend-guard.sh`, the claim guard retains the narrower main-primary Stop scope: `.fm-secondmate-home` and linked worktrees are inert, while `AGENTS.md`, `bin/`, and the state directory are required.
-`stop_hook_active=true` always allows the stop so at most one block fires per turn (shared loop-guard contract with the supervision guard).
-`config/claim-guard` exactly `off` disables only this check; absent or any other value leaves it enabled.
-`FM_CLAIM_GLASS_MAX_AGE` (default 900 seconds) is the freshness window for `fm-state/last-glass-capture`.
+`.fm-secondmate-home` homes and linked worktrees stay inert; `AGENTS.md`, `bin/`, and the state directory are required.
+`stop_hook_active=true` records nothing, so at most one line is produced per turn.
+`config/claim-guard` exactly `off` disables both halves.
+`FM_CLAIM_GLASS_MAX_AGE` (default 900s) is the glass freshness window; `FM_CLAIM_COACH_MAX_AGE` (default 1800s) is how long a recorded reminder stays deliverable.
 
-### Claim heuristic
+### Detection, deliberately coarse
 
-The guard prefers the Stop payload field `last_assistant_message` (Claude Code 2.1.x supplies it on every Stop event).
-It falls back to `transcript_path` JSONL only when that field is empty, because the transcript often still lacks the final assistant row at hook time.
-Missing, unreadable, or empty message content fails open.
-A message is an app-state claim only when BOTH of the following match case-insensitively in that text:
+Because a hit now costs one reminder line instead of a round trip, the predicate no longer has to be precise, and noticing too often is cheap.
+There is **no** clause splitting, mood exclusion, or quoted-span parsing.
+Those existed only to avoid false blocks, and each one leaked evidence across its own span boundary; `docs/claim-guard-false-positive-diagnosis.md` records that series and why span parsing was abandoned.
 
-1. An app referent: `vellum`, `daily-driver` / `daily driver`, `the app`, `dashboard`, `glass`, `resident`.
-2. A health/state assertion: `work` / `works` / `working`, `render` / `renders` / `rendering` / `rendered`, `adopted`, `booted clean`, `came up clean`, `is up`, `healthy`, `fixed`, `live`.
+A line is recorded when the final assistant text asserts state AND carries none of:
 
-Both classes are required so pure fleet status ("crew is working") and pure referent mentions ("open the dashboard") do not block.
-Word boundaries keep incidental substrings such as `hourglass` out.
+1. A source receipt - a URL, `file.ext:line`, a backticked command or path, or a 7-40 character hex sha containing at least one digit.
+2. An explicit unverified/attribution marker, the shape `data/captain.md` mandates when no receipt exists.
+3. For rendered-app claims only (`renders`/`rendering`/`rendered`, `adopted`, `booted clean`, `came up clean`), a fresh glass capture.
 
-### Evidence check
+Glass clears a rendered-state claim and nothing else, so a recent screenshot never silences an unrelated CI or repo claim.
 
-When a claim matches, the guard requires `fm-state/last-glass-capture` with a numeric epoch whose age is within `FM_CLAIM_GLASS_MAX_AGE`.
-Missing, malformed, or stale markers block.
-Blocking stderr names the remedy: run `bin/fm-glass.sh`, read the image, cite the path, resend the claim.
+The recorded line names the instrument that can actually evidence THAT kind of claim: glass for rendered app state, and a cited receipt for everything else.
+A screenshot is the wrong instrument for a code, CI, or repo claim.
 
-### Claude Stop-hook composition
+### The pending record, and why it cannot go stale
 
-`.claude/settings.json` runs the shared supervision guard first, then the claim guard when present:
+`fm-state/claim-coach-pending` holds `{session_id, epoch, line}`.
 
-```sh
-payload=$(cat); root=${CLAUDE_PROJECT_DIR:-$(pwd -P)};
-if [ -f "$root/AGENTS.md" ] && [ -f "$root/bin/fm-turnend-guard.sh" ]; then
-  printf '%s' "$payload" | "$root/bin/fm-turnend-guard.sh" || exit $?;
-  if [ -f "$root/bin/fm-claim-guard.sh" ]; then
-    printf '%s' "$payload" | "$root/bin/fm-claim-guard.sh";
-  fi;
-fi
-```
+The injector consumes the record whenever it looks at one - delivering it or discarding it - so nothing is ever left to rot.
+Delivery requires BOTH:
 
-Either guard may exit 2; `stop_hook_active` ensures only one forced continuation per turn.
-Codex / OpenCode / Pi / Grok adapters are unchanged by this addition (Claude is the daily primary); wiring other harnesses is a follow-up.
+- **Same session.** A record from another session is discarded unshown. This is what stops an unrelated or resumed session inheriting a nudge.
+- **Still fresh.** Older than `FM_CLAIM_COACH_MAX_AGE` is discarded unshown. This covers the same session resumed much later, where the id still matches but the claim is long out of view.
+
+If the session simply ends and the next prompt never comes, the record is scoped to a session that will not return and expires by time regardless.
+A reminder about a claim nobody remembers is worse than no reminder, because it teaches the reader to ignore the channel.
+
+### Claude hook composition
+
+`.claude/settings.json` runs the supervision guard then the claim recorder on `Stop`, and the injector on `UserPromptSubmit`.
+Only `bin/fm-turnend-guard.sh` can still block a turn; the claim path never does.
 
 ### Tests
 
-`tests/fm-claim-guard.test.sh` covers: claim + no/stale evidence blocks; claim + fresh evidence allows; no-claim allows; `stop_hook_active` allows; missing transcript fails open; non-primary scope allows; local `config/claim-guard=off`; composed Stop-hook shape; settings registration; and `fm-glass.sh` marker recording with a stub spectacle.
+`tests/fm-claim-guard.test.sh` covers: an unevidenced claim records coaching and never blocks; the non-rendered line does not prescribe a screenshot; receipted, attributed and non-claim messages record nothing; fresh glass clears a rendered claim; `stop_hook_active`; missing transcript; transcript fallback; non-primary scope; `config/claim-guard=off`; the composed Stop shape; settings registration of BOTH hooks; and for the injector - delivers and clears, never surfaces another session's line, never surfaces an expired line, and stays silent with nothing pending.
 
-### Empirical validation (2026-07-20)
+### Empirical validation (2026-07-29)
 
-Validated on the real Claude harness in a throwaway primary-shaped home under `/tmp/fm-claim-live.*`, not the captain's live fleet state.
+End-to-end on the live Claude harness in a throwaway primary-shaped home, `--model haiku`, with the tracked scripts and tracked hook wiring.
 
-- Claude Code: `2.1.193`
-- Model: `claude-haiku-4-5-20251001` via `claude -p ... --model haiku --dangerously-skip-permissions --output-format json`
-- Scratch layout: plain `git init` primary-shaped repo with tracked `bin/fm-claim-guard.sh`, `bin/fm-turnend-guard.sh`, and a Stop hook that logs `stop_hook_active` / `claim_exit` then runs both guards with `FM_HOME` pointed at the throwaway home.
-
-**RUN1 — stale glass marker (epoch 1577836800):**
+Turn 1, prompted to emit `Captain, the login defect is fixed and checks passed.`:
 
 ```text
-stop_active=false msg=Captain, the vellum dashboard is rendering and working.
-claim_exit=2
-stop_active=true msg=Stop hook executed successfully with no errors. Ready for your next task.
-claim_exit=0
+num_turns=1        # never blocked, no duplicated message
+fm-state/claim-coach-pending:
+{"session_id":"28daab2b-...","epoch":1785348591,"line":"claim-coach: last turn asserted state with no receipt - cite a URL, file.ext:line, a backticked command, or a commit sha, or mark the claim unverified."}
 ```
 
-Observed Claude result: `num_turns=2`, first stop blocked with the `UNVERIFIED APP-STATE CLAIM` banner naming `bin/fm-glass.sh`, second stop allowed via `stop_hook_active=true`.
-
-**RUN2 — fresh glass marker (epoch = now):**
+Turn 2, resuming the same session and asking whether any `claim-coach` text was injected - the model returned the line verbatim:
 
 ```text
-stop_active=false msg=Captain, the vellum dashboard is rendering and working.
-claim_exit=0
+claim-coach: last turn asserted state with no receipt - cite a URL, file.ext:line, a backticked command, or a commit sha, or mark the claim unverified.
 ```
 
-Observed Claude result: `num_turns=1`, claim allowed without a forced continuation.
+The pending record was cleared after delivery.
+Both halves are therefore measured: the turn is never blocked, and the reminder actually reaches the agent that can act on it.
 
-**Transcript race note:** on the same host, dumping the JSONL at first Stop showed `assistant_types=0` while `last_assistant_message` already held the claim text.
-That is why the guard prefers `last_assistant_message` and only falls back to transcript JSONL.
-
-`bin/fm-glass.sh` was also smoke-tested on the live desktop with spectacle 6.7.1:
+`bin/fm-glass.sh` was smoke-tested on the live desktop with spectacle 6.7.1:
 `spectacle -b -n -f -o /tmp/fm-glass-smoke-*.png` produced a 7681x2161 PNG and wrote `fm-state/last-glass-capture` as `epoch path`.
