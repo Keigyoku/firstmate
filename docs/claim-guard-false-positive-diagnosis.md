@@ -70,8 +70,8 @@ allow  Captain, reproduced - the dashboard is dropping the peer list on refresh.
 ```
 
 Every faithful rendering of catch 3 sails through.
-Catch 2 blocks in one phrasing and passes in two others.
-Recall is near zero; the precision that produced three good catches was luck.
+Catch 2 blocks in one phrasing and passes in one other.
+Observed recall was two of six renderings blocked; the precision that produced three good catches was luck.
 
 The decisive result is a minimal pair whose two members are the same string:
 
