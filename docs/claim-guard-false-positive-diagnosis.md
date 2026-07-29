@@ -1,10 +1,10 @@
 # Claim guard false-positive diagnosis (2026-07-29)
 
 Diagnosis only.
-No production behavior was changed by this document.
+`bin/fm-claim-guard.sh` is unchanged and keeps the false positives described below.
 `docs/turnend-guard.md` remains the owner of the claim-guard contract.
 
-This records why `bin/fm-claim-guard.sh` blocked three consecutive primary turns on 2026-07-29, and why the fix requested in the task brief is not implementable as specified.
+This records why `bin/fm-claim-guard.sh` blocked three consecutive primary turns on 2026-07-29, why the fix requested in the task brief is not implementable as specified, why the replacement that was built was dropped rather than shipped, and what the right seam looks like.
 
 ## Method
 
@@ -108,14 +108,65 @@ There is no seam at which a second evidence kind could attach, so the guard's le
 
 The real question the interface should answer is not "does this need evidence?" but "what kind of evidence does this claim need, and was that kind produced this turn?".
 
-## Options, for the decision this needs
+## What was attempted, and what the attempt established
 
-- **A. Narrow to glass-only vocabulary.** Drop the ambiguous assertions (`works`, `working`, `fixed`, `live`, `healthy`, `is up`) and keep only unambiguously-rendered ones (`renders`, `rendering`, `rendered`, `adopted`, `booted clean`, `came up clean`). The false positives vanish and the guard becomes exactly what its banner and remedy already claim. It loses all three catches, which were luck and were given the wrong remedy anyway. Smallest change; honest interface.
-- **B. Receipt predicate.** Replace "is this an app-state claim" with "does this captain-facing assertion carry a source receipt or an explicit unverified/attribution marker?", which is `data/captain.md:46` verbatim. Catches all three real instances by principle rather than luck, clears the false positives because receipted claims pass, and rewards the exact shapes the guard currently punishes. Widens the firing surface substantially and rewrites the contract and remedy text.
-- **C. Evidence-kind seam.** Classify claim to required evidence kind, add per-kind evidence channels on the existing PreToolUse stack (a marker when the turn ran `git ls-remote`, a check-runs query, or a repro command), then match kind to kind. A genuine second adapter at a real seam. Largest build; substantial rewrite of `docs/turnend-guard.md`.
+A receipt predicate was built and then dropped.
+It replaced "is this an app-state claim?" with "does this assertion carry its source receipt?", on the reasoning that receipt presence, unlike verified-ness, is a property of the text.
+It passed its own tests and lifted recall on the three recorded catches from two of six renderings to six of six.
 
-Recommendation is B with A's vocabulary correction folded in, because B enforces what the captain already wrote down and converts the guard from luck-based to principle-based.
-The choice is not the crewmate's to make: all three change a documented contract on the captain's daily driver, and B and C widen when the primary gets blocked.
+It was dropped anyway, because review found it leaked evidence between unrelated claims, and every attempt to stop the leak relocated it.
+
+**Five successive fixes each moved the boundary, and the leak reappeared at the new boundary.**
+That count is the evidence for the conclusion in the next section; it is not a list of unrelated bugs.
+
+1. **Whole message, referent and assertion.** The original predicate: any app referent token anywhere plus any health verb anywhere, unbound. `the Vellum crew is still working` blocked on `vellum` + `working`.
+2. **Whole message, assertion and receipt.** The receipt rewrite: any receipt anywhere cleared every assertion anywhere. `PR merged (https://...); CI is green` passed although the CI half had no receipt.
+3. **Clause span.** A clause splitter was added. It enumerated subjects, so comma-separated clauses and conjunctions still shared one receipt: `PR merged (url), deployment is live` remained a single unit.
+4. **Mood exclusion span.** A narrow prospective/conditional exclusion was added so `waiting for CI to turn green` would not fire. One marker then amnestied its whole clause: `If CI is green, deployment is live` discarded the definite unreceipted second assertion along with the conditional first.
+5. **Command string.** The seam moved to recording what the turn ran, but the recorder classified commands by regex over the raw command string with no quote or heredoc handling, so `printf '%s\n' '; git status'` recorded a `git-read` although only `printf` executed.
+
+Instances 1, 2, 3 and 5 are literally the same defect: unbound token matching over a span, where content that should not count leaks into the match.
+Instance 5 is the important one, because it appeared *after* the seam had supposedly moved off the message text.
+The evidence side was still being inferred from a string; only which string had changed.
+
+## Why the receipt rewrite was dropped rather than shipped
+
+The old guard is **noisy**. The receipt rewrite is **fail-open**.
+
+A noisy guard costs a rewritten message per false positive, and the reader knows it fired.
+A fail-open guard goes quiet while certifying claims nothing checked, and it is worse than the bug it replaces precisely because it *looks* fixed.
+One pasted link clearing every other assertion in the message is that failure mode exactly.
+
+Eating false positives is survivable.
+A guard that lies quietly is not.
+The guard therefore remains as-is, with the false positives documented above intact and unfixed.
+
+## Proposal: self-recording evidence, as a fresh task
+
+Every attempt so far kept evidence as something *inferred from a string* - message text, then clause, then command line.
+The class disappears when nothing has to be parsed at all: **the thing that actually ran writes its own record.**
+
+The primitive already exists in this repo, twice:
+
+- `bin/fm-glass.sh` writes `fm-state/last-glass-capture` from inside itself, only when it genuinely ran. Nothing infers a screenshot from prose.
+- The crew kill guard prepends a shim directory to the shell `PATH` (`/tmp/fm-<task-id>/killguard-bin`) so a real invocation passes through firstmate's own wrapper (`docs/crew-kill-guard.md`).
+
+Combining them: a small set of verification entrypoints - firstmate's own scripts directly, and `git` / `gh` / test runners through a PATH-prepended shim - each append their own evidence record when they actually execute.
+The guard then reads records, never text.
+
+**Why this removes the class instead of relocating it.**
+There is no span to parse, so there is no boundary to leak across.
+A record exists only as a side effect of real execution, so prose cannot forge one: no arrangement of message text, clause structure, or quoted shell argument can produce a record, because writing one requires having run the command.
+
+**The known bypass, stated plainly rather than glossed.**
+`docs/crew-kill-guard.md` records that an absolute utility path bypasses a PATH shim.
+That limitation applies here too - `/usr/bin/git` would not be recorded.
+The difference is the direction of the failure: a missed recording means the guard sees no evidence and **blocks**, producing a false positive, never a false clearance.
+Every failure mode of this design degrades toward blocking.
+That asymmetry is the whole argument for the seam, and it is the property none of the five attempts above had.
+
+This is a fresh task built on the right seam from the start, not a sixth patch on the wrong one.
+It should not be attempted as a continuation of the receipt rewrite.
 
 ## Evidence transcript
 
