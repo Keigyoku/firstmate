@@ -9,16 +9,6 @@ fm-scratch/
 .DS_Store
 .env
 inbox/
-config/crew-harness
-config/crew-dispatch.json
-config/secondmate-harness
-config/backlog-backend
-config/backend
-config/turnend-guard
-config/claim-guard
-config/watchdog.json
-config/x-mode.env
-config/cmux-socket-password
-config/wedge-alarm
+config/
 .god-node/provision.json
 crews/
