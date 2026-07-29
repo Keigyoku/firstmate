@@ -5,6 +5,18 @@ set -euo pipefail
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# The producer surface is vendored into the consumer build, whose brand-string guard
+# rejects the bare capitalized display-brand literal anywhere outside its own canonical
+# home; the lowercase codename is the sanctioned spelling. The consumer owns that policy
+# (its HC3 guard); this assertion only keeps firstmate's shipped surface passable.
+# Split literal so this file never becomes its own offender.
+BRAND_LITERAL='Vel''lum'
+if BRAND_HITS=$(grep -nE "\\b${BRAND_LITERAL}\\b" "$ROOT"/bin/fm-resident-*.sh); then
+  fail "vendored producer surface carries the consumer display-brand literal:
+$BRAND_HITS"
+fi
+pass "vendored producer surface carries no consumer display-brand literal"
+
 TEST_ROOT=$(fm_test_tmproot fm-resident)
 HOME_DIR="$TEST_ROOT/home"
 mkdir -p "$HOME_DIR/state" "$HOME_DIR/data" "$HOME_DIR/config" "$HOME_DIR/projects"

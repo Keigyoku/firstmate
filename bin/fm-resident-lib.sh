@@ -53,7 +53,7 @@ fm_resident_process_identity() {  # <pid>
   printf 'ps-lstart-v1:%s' "$start"
 }
 
-# --- multi-harness transcript discovery (Vellum ADR 0056) -------------------
+# --- multi-harness transcript discovery (vellum ADR 0056) -------------------
 
 # Canonical adapter id for a verified harness. Codex uses codex-rollout-v1
 # (ADR 0056); consumers may dual-accept legacy codex-jsonl-v1 during migration.
@@ -429,7 +429,7 @@ fm_resident_opencode_session_id_for_worktree() {  # <db> <worktree>
   printf '%s\n' "$best_sid"
 }
 
-# Hermes session discovery aligned with Vellum hermes_transcript (id, cwd,
+# Hermes session discovery aligned with vellum hermes_transcript (id, cwd,
 # started_at; archived filter when present). Uses PRAGMA column detection so
 # older state.db builds without cwd/archived degrade cleanly; HERMES_SESSION_ID
 # is the fallback when cwd matching is unavailable or finds nothing.

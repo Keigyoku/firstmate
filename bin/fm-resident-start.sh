@@ -12,7 +12,7 @@
 #     exec <cmd> so the pane's agent process is this entrypath → harness.
 #     exec replaces the shell image under the same PID, so state/.lock and
 #     resident-current process.pid stay honest for the live harness without a
-#     leftover start shell. Crew Lead / Vellum agent.start should use:
+#     leftover start shell. Crew Lead / vellum agent.start should use:
 #       bin/fm-resident-start.sh --launch <harness> [harness-args...]
 #     from the Crew Lead home. When FM_RESIDENT_HARNESS is unset, the basename
 #     of <cmd> is used for publish (override if the basename is not a verified
