@@ -27,7 +27,7 @@ Identity lives under the producer home so it survives worktree recycle.
 
 | Document | Schema | Mutability |
 | --- | --- | --- |
-| `contract.json` | `dev.vellum.child-node/1` with `minimum_reader: 1` | Written only when absent; must not hold instance identity |
+| `contract.json` | `dev.vellum.child-node/1` with `minimum_reader: 1` | Written only when absent; must not hold instance identity fields |
 | `provision.json` | `dev.vellum.child-node.provision/1`, UUID-v4 `container_id`, RFC3339 `created_at`, `identity_kind: child-container` | Immutable once a valid provision is present |
 | `child.json` | `dev.vellum.child/1` | Static descriptor; may be rewritten like `resident.json` |
 
@@ -56,10 +56,10 @@ Respawn, recovery, and a reused task id must not destroy a live identity:
 
 | File | When present and valid | When present and invalid | When absent |
 | --- | --- | --- | --- |
-| `contract.json` | Leave; validate shape | Fail closed (do not overwrite) | Create |
+| `contract.json` | Leave; require the supported schema and reader version and reject instance identity fields | Fail closed (do not overwrite) | Create |
 | `provision.json` | Keep `container_id` forever | **Refuse** (do not overwrite operator-owned content) | Create UUID-v4 |
-| `child.json` | Rewrite static descriptor | Rewrite when shape allows | Create |
-| `child-current.json` | Monotonic epoch publish for matching `container_id` | See publish fail-closed rules | First publish epoch 1 |
+| `child.json` | Rewrite static descriptor | Replace with the generated descriptor | Create |
+| `child-current.json` | Increment epoch when its schema and `container_id` match the provision | Publish a replacement at epoch 1 | First publish epoch 1 |
 
 This is deliberate: unconditional writes that clobber existing provision content are forbidden.
 A present non-provision document is an error, not a recreate signal.
@@ -75,7 +75,7 @@ Lifecycle values: `starting`, `ready`, `waiting`, `blocked`, `degraded`, `stoppe
 Birth publish uses `starting`.
 Optional backend, process (pid + creation_identity), status verb, and attestation method fields follow the resident pointer rules: PID alone is never liveness truth.
 
-Publication holds `state/child-current.lock`, increments epoch for the matching `container_id`, writes a coherent JSON snapshot to a same-directory temporary file, validates JSON, flushes, and renames into place via `fm_resident_atomic_json`.
+Publication holds `state/child-current.lock`, increments epoch for a readable pointer with the matching schema and `container_id`, writes a coherent JSON snapshot to a same-directory temporary file, validates JSON, flushes, and renames into place via `fm_resident_atomic_json`.
 Readers observe only the old complete document or the new complete document.
 
 ## Spawn integration
@@ -87,7 +87,9 @@ Readers observe only the old complete document or the new complete document.
 
 Failure of either step fails the spawn (fail closed).
 Dry-run exits before birth.
-Scripts are under `bin/fm-child-node-*.sh`; helpers live in `bin/fm-child-node-lib.sh` and reuse the resident atomic-JSON seam.
+Scripts are under `bin/fm-child-node-*.sh`; helpers live in `bin/fm-child-node-lib.sh`.
+Contract, descriptor, and current-state writes reuse the resident same-directory temporary-file validation and flush steps.
+Mutable files use the resident rename-into-place seam, while immutable `provision.json` is published with an exclusive hard link so a concurrent or existing identity cannot be replaced.
 
 ## Out of scope (this producer slice)
 

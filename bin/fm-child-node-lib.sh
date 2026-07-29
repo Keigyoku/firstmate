@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Child Node producer helpers (CN-P).
-# Source this file. Reuses the resident atomic-JSON write seam so birth and
-# publish share one rename-into-place pattern with Crew Lead setup.
+# Source this file.
+# Mutable descriptors and current-state publication reuse the resident atomic-JSON
+# write seam; immutable provision creation adds an exclusive no-clobber publish.
 #
 # Paths under the Crew Lead home (captain lock Q-CN1):
 #   crews/<task-id>/.child-node/{contract,provision,child}.json
