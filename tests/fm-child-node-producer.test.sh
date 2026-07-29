@@ -32,6 +32,10 @@ if bash -c '. "$1"; fm_child_node_valid_uuid_v4 zzzzzzzz-zzzz-4zzz-azzz-zzzzzzzz
   _ "$ROOT/bin/fm-child-node-lib.sh"; then
   fail "UUID-v4 validator accepted non-hexadecimal components"
 fi
+if bash -c '. "$1"; fm_child_node_valid_uuid_v4 --------------4----8----------------' \
+  _ "$ROOT/bin/fm-child-node-lib.sh"; then
+  fail "UUID-v4 validator accepted dashes as component data"
+fi
 bash -c '. "$1"; fm_child_node_valid_uuid_v4 12345678-9abc-4def-8abc-1234567890ab' \
   _ "$ROOT/bin/fm-child-node-lib.sh" \
   || fail "UUID-v4 validator rejected a hexadecimal UUID-v4"

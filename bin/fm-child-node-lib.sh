@@ -77,9 +77,5 @@ fm_child_node_exclusive_json() {  # <destination>
 }
 
 fm_child_node_valid_uuid_v4() {  # <id>
-  case "$1" in
-    *[!0-9a-f-]*) return 1 ;;
-    ????????-????-4???-[89ab]???-????????????) return 0 ;;
-    *) return 1 ;;
-  esac
+  [[ "$1" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
 }
