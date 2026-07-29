@@ -76,6 +76,7 @@ bin/                 helper scripts, committed; read each script's header before
 .god-node/contract.json  tracked Crew Lead contract schema marker; see docs/crew-lead-resident-contract.md
 .god-node/resident.json  tracked Crew Lead resident descriptor and entrypoint manifest; see docs/crew-lead-resident-contract.md
 .god-node/provision.json  LOCAL, gitignored Crew Lead container identity created by fm-resident-setup.sh; never commit or copy between homes
+crews/               LOCAL, gitignored Child Node homes per task (`crews/<task-id>/.child-node/` + `state/child-current.json`); provisioned on spawn by fm-child-node-setup.sh; see docs/crew-child-node-contract.md
 .env                 optional X-mode pairing token; LOCAL, gitignored; presence-gates section 14
 config/crew-harness  crewmate harness override; LOCAL, gitignored; absent or "default" starts from firstmate's own harness before watchdog rotation. Inherited as the literal file: a concrete primary adapter value also controls a secondmate home's own crewmates (section 4)
 config/crew-dispatch.json  optional crewmate dispatch profiles; LOCAL, gitignored; firstmate-maintained but human-editable natural-language rules that choose a per-task harness/model/effort profile (section 4). Inherited by secondmate homes
