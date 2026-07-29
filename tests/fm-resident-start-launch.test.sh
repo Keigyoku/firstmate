@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Behavior tests for Crew Lead start/restart --launch (firstmate-grade entrypath).
-# Contract: Vellum agent.start argv = bin/fm-resident-start.sh --launch <harness> [args...]
+# Contract: vellum agent.start argv = bin/fm-resident-start.sh --launch <harness> [args...]
 set -euo pipefail
 
 # shellcheck source=tests/lib.sh

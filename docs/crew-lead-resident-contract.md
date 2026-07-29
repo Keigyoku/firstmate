@@ -2,6 +2,9 @@
 
 This document is the reference for the portable state produced by firstmate's Crew Lead integration.
 Internal protocol paths retain the ratified `god-node` names.
+The producer surface under `bin/fm-resident-*.sh` is vendored into the vellum build, whose brand-string guard rejects that project's capitalized display-brand literal anywhere outside its own canonical brand module.
+Comments on this surface therefore use the sanctioned lowercase codename spelling; `tests/fm-resident-producer.test.sh` asserts it, and the vellum guard remains the sole owner of the policy.
+Lowercase `dev.vellum.*` schema strings and the uppercase `VELLUM_TRANSCRIPT_ROOT` environment name are wire identifiers rather than display brand, so the guard does not match them and they must not be renamed.
 
 ## Provisioned metadata
 
@@ -36,10 +39,10 @@ A consumer must validate both values before treating a PID as the same process.
 
 Conversation publication discovers the latest journal associated with the `FM_HOME` worktree for the effective harness, using the harness-specific home roots documented by `bin/fm-resident-lib.sh`.
 Explicit `FM_RESIDENT_TRANSCRIPT` and `FM_RESIDENT_SESSION_ID` values override journal discovery.
-`FM_RESIDENT_HARNESS` from Vellum Start is authoritative when set; publish never hardcodes Claude.
-Adapter ids follow Vellum ADR 0056: `claude-jsonl-v1`, `codex-rollout-v1`, `grok-chat-history-v1`, `cursor-agent-transcript-v1`, `opencode-db-v1`, `pi-session-jsonl-v1`, `hermes-state-db-v1`.
+`FM_RESIDENT_HARNESS` from vellum Start is authoritative when set; publish never hardcodes Claude.
+Adapter ids follow vellum ADR 0056: `claude-jsonl-v1`, `codex-rollout-v1`, `grok-chat-history-v1`, `cursor-agent-transcript-v1`, `opencode-db-v1`, `pi-session-jsonl-v1`, `hermes-state-db-v1`.
 Codex uses the single canonical spelling `codex-rollout-v1` (legacy producer `codex-jsonl-v1` may still be dual-accepted by consumers during migration).
-Hermes discovery uses `PRAGMA table_info(sessions)` so `cwd` / `started_at` / `archived` are used only when present (Vellum-aligned when available); when cwd matching is unavailable or empty, `HERMES_SESSION_ID` is the live-session fallback.
+Hermes discovery uses `PRAGMA table_info(sessions)` so `cwd` / `started_at` / `archived` are used only when present (vellum-aligned when available); when cwd matching is unavailable or empty, `HERMES_SESSION_ID` is the live-session fallback.
 The harness session identifier and absolute transcript path are mutable attributes and never replace container identity.
 `bin/fm-resident-doctor.sh` asserts conversation harness/adapter/id/path whenever conversation is present, for every verified harness.
 When a complete backend endpoint is available, input uses `backend-v1` with the same workspace and pane identifiers published in `backend`.
@@ -57,7 +60,7 @@ Adapters and rotation hooks may call `bin/fm-resident-publish.sh` for lifecycle,
 ### Start entrypath with harness launch
 
 `bin/fm-resident-start.sh` (and `bin/fm-resident-restart.sh`) default to lock-only re-publish for sessions that already run a harness.
-For Crew Lead / Vellum `agent.start`, use the firstmate-grade launch form so the pane process is honest:
+For Crew Lead / vellum `agent.start`, use the firstmate-grade launch form so the pane process is honest:
 
 ```text
 bin/fm-resident-start.sh --launch <harness> [harness-args...]
@@ -77,7 +80,7 @@ An upgrade changes tracked descriptor metadata but never rewrites `provision.jso
 
 ## Empirical verification
 
-Verification was run on 2026-07-13 against firstmate base commit `4679f18f2b513a76238f67132304b69096411d2b`, jq 1.8.1, and ShellCheck 0.11.0.
+Verification was re-run on 2026-07-28 against firstmate base commit `fce89a926d63275daf305a95cc05ae1232db6683`, jq 1.8.1, and ShellCheck 0.11.0.
 
 Command:
 
@@ -88,7 +91,9 @@ tests/fm-resident-producer.test.sh
 Output:
 
 ```text
+ok - vendored producer surface carries no consumer display-brand literal
 ok - provisioning creates local immutable identity and versioned manifest
+ok - publication cycle keeps crew.bridge-v1
 ok - session lock acquisition fails closed when resident publication fails
 ok - publisher lock recovers abandoned owner state
 ok - session rotation publishes endpoint, transcript, process identity, and monotonic epoch

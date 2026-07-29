@@ -5,7 +5,7 @@
 # WORKSPACE_ID,PANE_ID,PID} override automatic discovery.
 # Discovers journals associated with FM_HOME for claude, codex, opencode, pi,
 # grok, cursor, and hermes, using harness-home environment roots.
-# Adapter ids follow Vellum ADR 0056
+# Adapter ids follow vellum ADR 0056
 # (codex-rollout-v1 is the single canonical Codex spelling).
 set -euo pipefail
 
@@ -45,7 +45,7 @@ case "$OLD_EPOCH" in ''|*[!0-9]*) OLD_EPOCH=0 ;; esac
 EPOCH=$((OLD_EPOCH + 1))
 PUBLISHED_AT=$(fm_resident_rfc3339)
 
-# Prefer FM_RESIDENT_HARNESS from Vellum Start / adapter publish; never force claude.
+# Prefer FM_RESIDENT_HARNESS from vellum Start / adapter publish; never force claude.
 HARNESS=${FM_RESIDENT_HARNESS:-$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)}
 PID=${FM_RESIDENT_PID:-$(cat "$STATE/.lock" 2>/dev/null || printf '')}
 case "$PID" in ''|*[!0-9]*) PID='' ;; esac
