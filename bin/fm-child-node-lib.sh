@@ -55,14 +55,20 @@ fm_child_node_type_for_kind() {  # <kind>
 
 # True only when path is the complete documented provision shape.
 fm_child_node_provision_valid() {  # <provision.json path>
-  local path=$1
+  local path=$1 created_at parsed_at
   [ -f "$path" ] || return 1
-  jq -e "$fm_child_node_provision_shape_jq" "$path" >/dev/null 2>&1
+  jq -e "$fm_child_node_provision_shape_jq" "$path" >/dev/null 2>&1 || return 1
+  created_at=$(jq -er '.created_at' "$path") || return 1
+  parsed_at=$(date -u -d "$created_at" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null) \
+    || parsed_at=$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$created_at" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null) \
+    || return 1
+  [ "$parsed_at" = "$created_at" ]
 }
 
 fm_child_node_container_id() {  # <child-home>
-  jq -er "select($fm_child_node_provision_shape_jq) | .container_id" \
-    "$1/.child-node/provision.json"
+  local provision=$1/.child-node/provision.json
+  fm_child_node_provision_valid "$provision" || return 1
+  jq -er '.container_id' "$provision"
 }
 
 fm_child_node_uuid_v4() {

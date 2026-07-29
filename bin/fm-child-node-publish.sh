@@ -75,10 +75,6 @@ CONTAINER_ID=$(fm_child_node_container_id "$CHILD_HOME") || {
   echo "fm-child-node-publish: provision.json unreadable" >&2
   exit 1
 }
-fm_child_node_valid_uuid_v4 "$CONTAINER_ID" || {
-  echo "fm-child-node-publish: invalid child container_id" >&2
-  exit 1
-}
 
 PARENT_ID=$(fm_resident_container_id "$FM_HOME") || {
   echo "fm-child-node-publish: parent God Node provision missing" >&2

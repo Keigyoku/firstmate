@@ -50,8 +50,6 @@ jq -e '.schema == "dev.vellum.child-node/1" and .minimum_reader == 1' "$CONTRACT
 bash -c '. "$1"; fm_child_node_provision_valid "$2"' _ "$ROOT/bin/fm-child-node-lib.sh" "$PROVISION" \
   || fail "provision.json is not the complete Child Node provision shape"
 CHILD_ID=$(jq -r '.container_id' "$PROVISION")
-[[ "$CHILD_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] \
-  || fail "provision.container_id is not UUID-v4"
 pass "setup writes contract, provision, and child under crews/<task>/.child-node/"
 
 # --- slice 2: parent link is God Node provision id (durable), not god: session wire id ---
@@ -121,6 +119,38 @@ set -e
 [ "$WRONG_KIND_RC" -ne 0 ] || fail "setup accepted wrong identity_kind as valid provision shape"
 [ "$(cat "$WRONG_KIND_HOME/crews/wk-k1/.child-node/provision.json")" = "$WRONG_KIND_BEFORE" ] \
   || fail "setup clobbered wrong-identity_kind provision content"
+for invalid_created_at in 2026-99-99T99:99:99Z 2026-02-29T00:00:00Z; do
+  INVALID_TIME_HOME="$TEST_ROOT/invalid-time-${invalid_created_at//:/-}"
+  INVALID_TIME_PROVISION="$INVALID_TIME_HOME/crews/time-k1/.child-node/provision.json"
+  mkdir -p "$INVALID_TIME_HOME/crews/time-k1/.child-node" \
+    "$INVALID_TIME_HOME/state" "$INVALID_TIME_HOME/data" "$INVALID_TIME_HOME/config" "$INVALID_TIME_HOME/projects"
+  cp -a "$HOME_DIR/.god-node" "$INVALID_TIME_HOME/.god-node"
+  jq -n --arg created_at "$invalid_created_at" '{
+    schema:"dev.vellum.child-node.provision/1",
+    container_id:"12345678-9abc-4def-8abc-1234567890ab",
+    created_at:$created_at,
+    identity_kind:"child-container"
+  }' > "$INVALID_TIME_PROVISION"
+  if bash -c '. "$1"; fm_child_node_provision_valid "$2"' _ \
+    "$ROOT/bin/fm-child-node-lib.sh" "$INVALID_TIME_PROVISION"; then
+    fail "complete-shape predicate accepted impossible created_at $invalid_created_at"
+  fi
+  if bash -c '. "$1"; fm_child_node_container_id "$2"' _ \
+    "$ROOT/bin/fm-child-node-lib.sh" "$INVALID_TIME_HOME/crews/time-k1"; then
+    fail "container_id extraction bypassed impossible created_at $invalid_created_at"
+  fi
+  set +e
+  INVALID_TIME_OUT=$(FM_HOME="$INVALID_TIME_HOME" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-child-node-setup.sh" time-k1 --kind ship 2>&1)
+  INVALID_TIME_RC=$?
+  set -e
+  [ "$INVALID_TIME_RC" -ne 0 ] \
+    || fail "setup accepted impossible created_at $invalid_created_at as a valid provision shape"
+  case "$INVALID_TIME_OUT" in
+    *refusing*) ;;
+    *) fail "setup did not refuse impossible created_at $invalid_created_at" ;;
+  esac
+done
 pass "complete provision shape is required; half-formed docs are refused not published as valid"
 
 RACE_HOME="$TEST_ROOT/race-home"
