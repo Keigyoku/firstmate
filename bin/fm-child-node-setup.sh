@@ -88,9 +88,12 @@ if ! jq -e '.schema == "dev.vellum.child-node/1" and .minimum_reader == 1 and ha
   exit 1
 fi
 
-if ! jq -e '.schema == "dev.vellum.child-node.provision/1" and (.container_id | type == "string")' "$PROVISION" >/dev/null 2>&1; then
+# Keep only a complete provision shape (fm_child_node_provision_valid). Half-formed
+# documents with a string container_id but missing created_at/identity_kind are NOT
+# valid identities — refuse rather than preserve-and-publish them as valid.
+if ! fm_child_node_provision_valid "$PROVISION"; then
   # Refuse to replace a present but invalid provision document: that would clobber
-  # operator-owned content. Only create when missing or not a provision document.
+  # operator-owned content. Only create when missing.
   if [ -e "$PROVISION" ]; then
     echo "fm-child-node-setup: provision.json exists but is not a valid child-node provision; refusing to overwrite" >&2
     exit 1
@@ -111,15 +114,14 @@ if ! jq -e '.schema == "dev.vellum.child-node.provision/1" and (.container_id | 
         exit 1
       fi
     }
-  if ! jq -e '.schema == "dev.vellum.child-node.provision/1" and (.container_id | type == "string")' "$PROVISION" >/dev/null 2>&1; then
+  if ! fm_child_node_provision_valid "$PROVISION"; then
     echo "fm-child-node-setup: provision.json exists but is not a valid child-node provision; refusing to overwrite" >&2
     exit 1
   fi
 fi
 
-CONTAINER_ID=$(fm_child_node_container_id "$CHILD_HOME")
-fm_child_node_valid_uuid_v4 "$CONTAINER_ID" || {
-  echo "fm-child-node-setup: provision.json has an invalid UUID-v4 container_id" >&2
+CONTAINER_ID=$(fm_child_node_container_id "$CHILD_HOME") || {
+  echo "fm-child-node-setup: provision.json is not a complete Child Node provision shape" >&2
   exit 1
 }
 

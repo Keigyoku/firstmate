@@ -10,12 +10,28 @@
 #
 # Idempotency contract (never clobber a live identity):
 #   - contract.json: written only when absent; validated, never force-rewritten
-#   - provision.json: immutable once a valid UUID-v4 container_id is present
+#   - provision.json: immutable once it matches the complete provision shape below
 #   - child.json: static descriptor may be rewritten (template metadata)
 #   - child-current.json: atomic publish; epoch is monotonic for matching container_id
+#
+# Provision shape is ONE definition (fm_child_node_provision_shape_jq /
+# fm_child_node_provision_valid). A document is either the shape or it is not.
+# Do not accumulate field-by-field keep checks beside this predicate.
 
 # shellcheck source=bin/fm-resident-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-resident-lib.sh"
+
+# Authoritative complete Child Node provision document predicate (jq).
+# Fields: schema, UUID-v4 container_id, producer RFC3339Z created_at, identity_kind.
+# shellcheck disable=SC2016
+fm_child_node_provision_shape_jq='
+  .schema == "dev.vellum.child-node.provision/1"
+  and (.container_id | type == "string")
+  and (.container_id | test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"))
+  and (.created_at | type == "string")
+  and (.created_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+  and .identity_kind == "child-container"
+'
 
 fm_child_node_home() {  # <fm-home> <task-id>
   printf '%s/crews/%s\n' "$1" "$2"
@@ -37,8 +53,15 @@ fm_child_node_type_for_kind() {  # <kind>
   esac
 }
 
+# True only when path is the complete documented provision shape.
+fm_child_node_provision_valid() {  # <provision.json path>
+  local path=$1
+  [ -f "$path" ] || return 1
+  jq -e "$fm_child_node_provision_shape_jq" "$path" >/dev/null 2>&1
+}
+
 fm_child_node_container_id() {  # <child-home>
-  jq -er 'select(.schema == "dev.vellum.child-node.provision/1") | .container_id' \
+  jq -er "select($fm_child_node_provision_shape_jq) | .container_id" \
     "$1/.child-node/provision.json"
 }
 
@@ -77,6 +100,8 @@ fm_child_node_exclusive_json() {  # <destination>
   fi
 }
 
+# Standalone UUID-v4 check for non-provision ids (e.g. parent God Node id).
+# Child provision identity validation goes only through fm_child_node_provision_valid.
 fm_child_node_valid_uuid_v4() {  # <id>
   [[ "$1" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
 }

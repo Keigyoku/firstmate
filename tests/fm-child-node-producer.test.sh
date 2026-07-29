@@ -47,8 +47,8 @@ run_setup
 [ -f "$CHILD" ] || fail "setup did not write child.json under crews/$TASK_ID/.child-node/"
 jq -e '.schema == "dev.vellum.child-node/1" and .minimum_reader == 1' "$CONTRACT" >/dev/null \
   || fail "contract.json schema mismatch"
-jq -e '.schema == "dev.vellum.child-node.provision/1" and (.container_id | type == "string")' "$PROVISION" >/dev/null \
-  || fail "provision.json schema mismatch"
+bash -c '. "$1"; fm_child_node_provision_valid "$2"' _ "$ROOT/bin/fm-child-node-lib.sh" "$PROVISION" \
+  || fail "provision.json is not the complete Child Node provision shape"
 CHILD_ID=$(jq -r '.container_id' "$PROVISION")
 [[ "$CHILD_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] \
   || fail "provision.container_id is not UUID-v4"
@@ -87,6 +87,41 @@ case "$BAD_OUT" in
   *refusing*) ;;
   *) fail "setup did not report refuse-to-overwrite for invalid provision.json" ;;
 esac
+# Half-formed provision (schema + container_id only) must NOT keep as valid identity.
+HALF_HOME="$TEST_ROOT/half-provision-home"
+mkdir -p "$HALF_HOME/crews/half-k1/.child-node" "$HALF_HOME/state" "$HALF_HOME/data" "$HALF_HOME/config" "$HALF_HOME/projects"
+cp -a "$HOME_DIR/.god-node" "$HALF_HOME/.god-node"
+HALF_BEFORE='{"schema":"dev.vellum.child-node.provision/1","container_id":"12345678-9abc-4def-8abc-1234567890ab"}'
+printf '%s\n' "$HALF_BEFORE" > "$HALF_HOME/crews/half-k1/.child-node/provision.json"
+if bash -c '. "$1"; fm_child_node_provision_valid "$2"' _ "$ROOT/bin/fm-child-node-lib.sh" \
+  "$HALF_HOME/crews/half-k1/.child-node/provision.json"; then
+  fail "complete-shape predicate accepted a provision missing created_at and identity_kind"
+fi
+set +e
+HALF_OUT=$(FM_HOME="$HALF_HOME" FM_ROOT_OVERRIDE="$ROOT" \
+  "$ROOT/bin/fm-child-node-setup.sh" half-k1 --kind ship 2>&1)
+HALF_RC=$?
+set -e
+[ "$HALF_RC" -ne 0 ] || fail "setup treated a half-formed provision as a valid keep-identity"
+[ "$(cat "$HALF_HOME/crews/half-k1/.child-node/provision.json")" = "$HALF_BEFORE" ] \
+  || fail "setup clobbered half-formed provision content"
+case "$HALF_OUT" in
+  *refusing*) ;;
+  *) fail "setup did not refuse half-formed provision as invalid shape" ;;
+esac
+WRONG_KIND_HOME="$TEST_ROOT/wrong-kind-provision-home"
+mkdir -p "$WRONG_KIND_HOME/crews/wk-k1/.child-node" "$WRONG_KIND_HOME/state" "$WRONG_KIND_HOME/data" "$WRONG_KIND_HOME/config" "$WRONG_KIND_HOME/projects"
+cp -a "$HOME_DIR/.god-node" "$WRONG_KIND_HOME/.god-node"
+WRONG_KIND_BEFORE='{"schema":"dev.vellum.child-node.provision/1","container_id":"12345678-9abc-4def-8abc-1234567890ab","created_at":"2026-07-29T00:00:00Z","identity_kind":"not-child-container"}'
+printf '%s\n' "$WRONG_KIND_BEFORE" > "$WRONG_KIND_HOME/crews/wk-k1/.child-node/provision.json"
+set +e
+WRONG_KIND_RC=$(FM_HOME="$WRONG_KIND_HOME" FM_ROOT_OVERRIDE="$ROOT" \
+  "$ROOT/bin/fm-child-node-setup.sh" wk-k1 --kind ship >/dev/null 2>&1; echo $?)
+set -e
+[ "$WRONG_KIND_RC" -ne 0 ] || fail "setup accepted wrong identity_kind as valid provision shape"
+[ "$(cat "$WRONG_KIND_HOME/crews/wk-k1/.child-node/provision.json")" = "$WRONG_KIND_BEFORE" ] \
+  || fail "setup clobbered wrong-identity_kind provision content"
+pass "complete provision shape is required; half-formed docs are refused not published as valid"
 
 RACE_HOME="$TEST_ROOT/race-home"
 RACE_TASK=race-k2
