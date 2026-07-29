@@ -119,6 +119,11 @@ It was dropped anyway, because review found it leaked evidence between unrelated
 **Five successive fixes each moved the boundary, and the leak reappeared at the new boundary.**
 That count is the evidence for the conclusion in the next section; it is not a list of unrelated bugs.
 
+Read the count, not just the failures.
+One failed attempt says the problem is hard and the next attempt might land it.
+A converging series - five fixes, each competently addressing the previous defect, each reproducing it one boundary further out - says the approach is wrong, and that no sixth attempt along the same line will land it either.
+That distinction is the entire reason this document exists, and it is why the work was stopped rather than continued.
+
 1. **Whole message, referent and assertion.** The original predicate: any app referent token anywhere plus any health verb anywhere, unbound. `the Vellum crew is still working` blocked on `vellum` + `working`.
 2. **Whole message, assertion and receipt.** The receipt rewrite: any receipt anywhere cleared every assertion anywhere. `PR merged (https://...); CI is green` passed although the CI half had no receipt.
 3. **Clause span.** A clause splitter was added. It enumerated subjects, so comma-separated clauses and conjunctions still shared one receipt: `PR merged (url), deployment is live` remained a single unit.
@@ -167,6 +172,7 @@ That asymmetry is the whole argument for the seam, and it is the property none o
 
 This is a fresh task built on the right seam from the start, not a sixth patch on the wrong one.
 It should not be attempted as a continuation of the receipt rewrite.
+It is tracked as `fm-claim-guard-self-recording-seam-b3`.
 
 ## Evidence transcript
 
