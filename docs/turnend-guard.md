@@ -197,6 +197,7 @@ That is the whole reason this is a two-hook design: a single Stop hook can eithe
 ### Scope and disable
 
 `.fm-secondmate-home` homes and linked worktrees stay inert; `AGENTS.md`, `bin/`, and the state directory are required.
+The injector applies those checks before inspecting pending state, so an out-of-scope invocation leaves the record untouched for the primary.
 `stop_hook_active=true` records nothing, so at most one line is produced per turn.
 `config/claim-guard` exactly `off` disables both halves.
 `FM_CLAIM_GLASS_MAX_AGE` (default 900s) is the glass freshness window; `FM_CLAIM_COACH_MAX_AGE` (default 1800s) is how long a recorded reminder stays deliverable.
@@ -214,6 +215,8 @@ A line is recorded when the final assistant text asserts state AND carries none 
 3. For rendered-app claims only (`renders`/`rendering`/`rendered`, `adopted`, `booted clean`, `came up clean`), a fresh glass capture.
 
 Glass clears a rendered-state claim and nothing else, so a recent screenshot never silences an unrelated CI or repo claim.
+When a whole message contains both a rendered-state assertion and any non-rendered state assertion, the glass exemption is withheld and receipt-kind coaching is recorded.
+This mixed-kind check is one flat whole-message match over the existing assertion vocabulary and does not locate or parse clauses.
 
 The recorded line names the instrument that can actually evidence THAT kind of claim: glass for rendered app state, and a cited receipt for everything else.
 A screenshot is the wrong instrument for a code, CI, or repo claim.
@@ -225,7 +228,7 @@ A screenshot is the wrong instrument for a code, CI, or repo claim.
 The injector consumes the record whenever it looks at one - delivering it or discarding it - so nothing is ever left to rot.
 Delivery requires BOTH:
 
-- **Same session.** A record from another session is discarded unshown. This is what stops an unrelated or resumed session inheriting a nudge.
+- **Same session.** Both the recorded and current session ids must be non-empty and equal; otherwise the record is discarded unshown. This is what stops a missing id, unrelated session, or resumed session inheriting a nudge.
 - **Still fresh.** Older than `FM_CLAIM_COACH_MAX_AGE` is discarded unshown. This covers the same session resumed much later, where the id still matches but the claim is long out of view.
 
 If the session simply ends and the next prompt never comes, the record is scoped to a session that will not return and expires by time regardless.
@@ -238,7 +241,7 @@ Only `bin/fm-turnend-guard.sh` can still block a turn; the claim path never does
 
 ### Tests
 
-`tests/fm-claim-guard.test.sh` covers: an unevidenced claim records coaching and never blocks; the non-rendered line does not prescribe a screenshot; receipted, attributed and non-claim messages record nothing; fresh glass clears a rendered claim; `stop_hook_active`; missing transcript; transcript fallback; non-primary scope; `config/claim-guard=off`; the composed Stop shape; settings registration of BOTH hooks; and for the injector - delivers and clears, never surfaces another session's line, never surfaces an expired line, and stays silent with nothing pending.
+`tests/fm-claim-guard.test.sh` covers: an unevidenced claim records coaching and never blocks; the non-rendered line does not prescribe a screenshot; receipted, attributed and non-claim messages record nothing; fresh glass clears only a rendered-only claim; mixed rendered and CI claims still require a receipt; `stop_hook_active`; missing transcript; transcript fallback; non-primary scope; `config/claim-guard=off`; the composed Stop shape; settings registration of BOTH hooks; and for the injector - delivers and clears, requires two non-empty equal session ids, never surfaces another session's line, never surfaces an expired line, leaves out-of-scope pending state untouched, and stays silent with nothing pending.
 
 ### Empirical validation (2026-07-29)
 

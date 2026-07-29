@@ -106,11 +106,13 @@ payload_with_message() {
     '{last_assistant_message:$m, stop_hook_active:$a}'
 }
 
-CLAIM_TEXT='Captain, the vellum dashboard is rendering and working after the boot.'
+CLAIM_TEXT='Captain, the vellum dashboard rendered after the boot.'
 # No outcome/state assertion at all => nothing to coach.
 NO_CLAIM_TEXT='Captain, three items are queued behind the input-route change; I will flag the one that needs your eyes.'
 # A non-rendered state claim: the coaching line must NOT prescribe a screenshot.
 CLAIM_CI='Captain, the Vellum flake is fixed and checks passed.'
+# A fresh screenshot can evidence rendering, but not CI.
+CLAIM_MIXED='Captain, the Vellum dashboard rendered and CI passed.'
 # Same claim carrying its receipt => silent.
 CLAIM_CI_RECEIPT='Captain, the Vellum flake is fixed and checks passed (gh check-runs on 4a91c2f: all green).'
 # The attribution shape data/captain.md mandates => silent.
@@ -197,6 +199,22 @@ test_claim_fresh_evidence_allows() {
   pass "fm-claim-guard: claim + fresh evidence allows"
 }
 
+test_mixed_claim_requires_receipt_with_fresh_glass() {
+  local dir line payload status
+  dir=$(make_primary_dir "$TMP_ROOT/claim-mixed-fresh")
+  write_fresh_marker "$dir"
+  payload=$(payload_with_session "$CLAIM_MIXED" "$SESSION_A" false)
+  run_claim_hook "$dir" "$payload" >/dev/null; status=$?
+  expect_code 0 "$status" "mixed rendered and CI claim must never block"
+  assert_present "$dir/$PENDING_REL" "fresh glass must not clear a mixed rendered and CI claim"
+  line=$(jq -r '.line' "$dir/$PENDING_REL")
+  assert_contains "$line" 'cite a URL' "mixed claim must receive receipt-kind coaching"
+  case $line in
+    *fm-glass.sh*) fail "mixed claim must not receive rendered-only coaching: $line" ;;
+  esac
+  pass "fm-claim-guard: mixed claim with fresh glass still requires a receipt"
+}
+
 test_no_claim_allows() {
   local dir out status payload
   dir=$(make_primary_dir "$TMP_ROOT/claim-no-claim")
@@ -227,6 +245,28 @@ test_inject_drops_foreign_session() {
   esac
   assert_absent "$dir/$PENDING_REL" "a foreign-session pending record must be discarded, not kept"
   pass "fm-claim-coach-inject: never surfaces another session's pending line"
+}
+
+test_inject_drops_empty_recorded_session() {
+  local dir out
+  dir=$(make_primary_dir "$TMP_ROOT/coach-empty-session")
+  write_pending "$dir" "" "$(date +%s)" "claim-coach: unscoped line"
+  out=$(run_inject_hook "$dir" "$SESSION_A")
+  case $out in
+    *unscoped\ line*) fail "a pending line without a recorded session must never surface: $out" ;;
+  esac
+  assert_absent "$dir/$PENDING_REL" "an empty-session pending record must be discarded"
+  pass "fm-claim-coach-inject: empty recorded session never acts as a wildcard"
+}
+
+test_inject_out_of_scope_leaves_pending() {
+  local dir out
+  dir=$(make_secondmate_dir "$TMP_ROOT/coach-secondmate")
+  write_pending "$dir" "$SESSION_A" "$(date +%s)" "claim-coach: primary-only line"
+  out=$(run_inject_hook "$dir" "$SESSION_A")
+  [ -z "$out" ] || fail "out-of-scope injector must stay silent, got: $out"
+  assert_present "$dir/$PENDING_REL" "out-of-scope injector must leave pending state untouched"
+  pass "fm-claim-coach-inject: out-of-scope hook leaves pending state untouched"
 }
 
 test_inject_drops_expired() {
@@ -412,9 +452,12 @@ test_claim_records_coaching_never_blocks
 test_non_rendered_claim_coaching_is_kind_matched
 test_evidenced_message_records_nothing
 test_claim_fresh_evidence_allows
+test_mixed_claim_requires_receipt_with_fresh_glass
 test_no_claim_allows
 test_inject_delivers_and_clears
 test_inject_drops_foreign_session
+test_inject_drops_empty_recorded_session
+test_inject_out_of_scope_leaves_pending
 test_inject_drops_expired
 test_inject_silent_without_pending
 test_stop_hook_active_allows

@@ -15,8 +15,9 @@
 #
 # Behavior:
 #   - Always exits 0 and prints at most ONE line. Never blocks a prompt.
-#   - Delivers the pending line only when it belongs to THIS session and is
-#     still fresh, then clears it.
+#   - Scope to the main primary checkout before inspecting pending state.
+#   - Delivers the pending line only when both session ids are non-empty and
+#     equal and the record is still fresh, then clears it.
 #   - A pending record that is foreign-session or expired is DISCARDED, never
 #     shown. A reminder about a claim nobody remembers is worse than none: it
 #     teaches the reader to ignore the channel.
@@ -34,6 +35,7 @@ if [ -z "$FM_ROOT" ]; then
   fi
 fi
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 # How long a recorded reminder stays deliverable (seconds). Default 30 min.
 COACH_MAX_AGE=${FM_CLAIM_COACH_MAX_AGE:-1800}
@@ -41,6 +43,15 @@ COACH_MAX_AGE=${FM_CLAIM_COACH_MAX_AGE:-1800}
 PENDING="$FM_HOME/fm-state/claim-coach-pending"
 
 [ "$(cat "$CONFIG/claim-guard" 2>/dev/null || true)" = off ] && exit 0
+
+[ -f "$FM_ROOT/.fm-secondmate-home" ] && exit 0
+GIT_DIR=$(git -C "$FM_ROOT" rev-parse --git-dir 2>/dev/null) || exit 0
+GIT_COMMON_DIR=$(git -C "$FM_ROOT" rev-parse --git-common-dir 2>/dev/null) || exit 0
+[ "$GIT_DIR" = "$GIT_COMMON_DIR" ] || exit 0
+[ -f "$FM_ROOT/AGENTS.md" ] || exit 0
+[ -d "$FM_ROOT/bin" ] || exit 0
+[ -d "$STATE" ] || exit 0
+
 [ -f "$PENDING" ] || exit 0
 
 PAYLOAD=$(cat 2>/dev/null || true)
@@ -59,10 +70,9 @@ REC_LINE=$(printf '%s' "$RECORD" | jq -r '.line // empty' 2>/dev/null) || exit 0
 # Session scoping: a reminder from another session never surfaces here. This is
 # what stops a resumed or unrelated session inheriting a stale nudge.
 CUR_SESSION=$(printf '%s' "$PAYLOAD" | jq -r '.session_id // empty' 2>/dev/null)
-if [ -n "$REC_SESSION" ]; then
-  [ -n "$CUR_SESSION" ] || exit 0
-  [ "$REC_SESSION" = "$CUR_SESSION" ] || exit 0
-fi
+[ -n "$REC_SESSION" ] || exit 0
+[ -n "$CUR_SESSION" ] || exit 0
+[ "$REC_SESSION" = "$CUR_SESSION" ] || exit 0
 
 # Expiry: covers the same session resumed much later, where the session id
 # still matches but the claim is long out of view.

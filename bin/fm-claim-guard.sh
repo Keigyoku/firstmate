@@ -112,6 +112,11 @@ message_claims_rendered_state() {
     '(\b(renders?|rendering|rendered|adopted)\b|booted clean|came up clean)'
 }
 
+message_asserts_non_rendered_state() {
+  printf '%s' "$1" | grep -Eiq \
+    '(\b(works|working|passed|passing|green|clean|done|landed|merged|reproduced|confirmed|verified|resolved|deployed|shipped|completed?|fixed|live|healthy)\b|\bis up\b)'
+}
+
 message_carries_receipt() {
   local text=$1
   printf '%s' "$text" | grep -Eiq 'https?://[^[:space:]]' && return 0
@@ -152,7 +157,8 @@ glass_evidence_fresh() {
 # The remedy names the instrument that can actually evidence THIS kind of
 # claim. A screenshot is the wrong instrument for a code, CI, or repo claim
 # (data/learnings.md).
-if message_claims_rendered_state "$LAST_TEXT"; then
+if message_claims_rendered_state "$LAST_TEXT" &&
+   ! message_asserts_non_rendered_state "$LAST_TEXT"; then
   glass_evidence_fresh && exit 0
   LINE='claim-coach: last turn asserted rendered app state with no fresh glass - run bin/fm-glass.sh, read the image and cite its path, or mark the claim unverified.'
 else
