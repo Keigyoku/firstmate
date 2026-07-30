@@ -366,6 +366,10 @@ assert_arch_discipline_section() {
     "$label: missing scouting/reviewing/implementing scope"
   assert_grep "/improve-codebase-architecture" "$brief" \
     "$label: missing claude harness slash skill pointer"
+  assert_grep "On the \`claude\` harness: invoke \`/improve-codebase-architecture\` (or read" "$brief" \
+    "$label: missing claude absolute-path read fallback"
+  assert_grep "\`$skill_dir/DEEPENING.md\` in full)." "$brief" \
+    "$label: claude fallback must read all four vendored files in full"
   assert_grep "$skill_dir/SKILL.md" "$brief" \
     "$label: missing in-repo SKILL.md absolute path"
   assert_grep "$skill_dir/LANGUAGE.md" "$brief" \

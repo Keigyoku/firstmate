@@ -330,7 +330,11 @@ ARCH_SECTION=$(cat <<EOF
 
 Live by the in-repo \`improve-codebase-architecture\` skill while scouting, reviewing, and implementing.
 
-- On the \`claude\` harness: invoke \`/improve-codebase-architecture\` (firstmate-vendored skill under \`.agents/skills/\`).
+- On the \`claude\` harness: invoke \`/improve-codebase-architecture\` (or read
+  \`$ARCH_SKILL_DIR/SKILL.md\`,
+  \`$ARCH_SKILL_DIR/LANGUAGE.md\`,
+  \`$ARCH_SKILL_DIR/INTERFACE-DESIGN.md\`, and
+  \`$ARCH_SKILL_DIR/DEEPENING.md\` in full).
 - On any other harness: read \`$ARCH_SKILL_DIR/SKILL.md\` and its
   siblings \`$ARCH_SKILL_DIR/LANGUAGE.md\`,
   \`$ARCH_SKILL_DIR/INTERFACE-DESIGN.md\`, and
