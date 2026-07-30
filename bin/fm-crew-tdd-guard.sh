@@ -20,7 +20,8 @@
 #
 # Policy (v1, tunable):
 #   - Always allow test-runner commands (they are how RED is obtained).
-#   - Always allow when this task has a RED marker (tdd-red-seen next to this script).
+#   - Always allow when this task has a RED marker (tdd-red-seen next to the installed
+#     checker under tasktmp; source-tree bin/ redirects markers to sibling state/).
 #   - Deny clear production-source shell writes without a RED marker (F1 pin).
 #   - Cursor/Hermes have no pre-execution hook surface; outer gates only (brief +
 #     Review Crew + replay-red CI). See docs/crew-tdd-guard.md.
@@ -39,8 +40,21 @@ while [ "$#" -gt 0 ]; do
 done
 
 SELF_DIR=$(cd "$(dirname "$0")" && pwd -P)
-RED_MARK="$SELF_DIR/tdd-red-seen"
-PIN_MARK="$SELF_DIR/tdd-pin-delivered"
+# Runtime markers are per-install state, never tracked source.
+# Task-temp install (/tmp/fm-<id>/): keep markers beside the checker.
+# Source-tree bin/ copy: redirect into sibling state/ (gitignored operational dir)
+# so a --mark-red against the source script cannot dirty the working tree.
+case "$SELF_DIR" in
+  */bin)
+    MARK_DIR="$(cd "$SELF_DIR/.." && pwd -P)/state"
+    mkdir -p "$MARK_DIR"
+    ;;
+  *)
+    MARK_DIR="$SELF_DIR"
+    ;;
+esac
+RED_MARK="$MARK_DIR/tdd-red-seen"
+PIN_MARK="$MARK_DIR/tdd-pin-delivered"
 
 # Runtime escape hatch (uniform across every wired harness).
 if [ "${FM_TDD_HOOK_OFF:-}" = "1" ]; then

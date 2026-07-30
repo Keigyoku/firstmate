@@ -36,11 +36,12 @@ Secondmate primaries are exempt; ship crews they launch still get the copy via t
 ## Policy (v1)
 
 - Always allow test-runner commands (how RED is obtained).
-- Always allow when the task has a RED marker (`tdd-red-seen` beside the checker).
+- Always allow when the task has a RED marker (`tdd-red-seen` next to the installed checker under `/tmp/fm-<id>/`).
 - Deny clear production-source shell writes (narrow `sed -i` / redirect patterns) without that marker.
 - After a verified RED run, the crew marks RED with:
   `/tmp/fm-<id>/fm-crew-tdd-guard.sh --mark-red`
   or `touch /tmp/fm-<id>/tdd-red-seen`.
+- The source-tree copy under `bin/` never writes markers into tracked `bin/`; a direct `--mark-red` against that copy redirects into sibling `state/` (gitignored operational dir).
 - Claude also receives a one-shot allow-path pin pointing at the brief Test-first section and the tdd skill. The pin is `additionalContext` only (no `permissionDecision`), printed on **stdout** with exit 0 so Claude Code actually injects it and it never overrides the kill guard's deny.
 
 The canonical TDD how-to is the captain's `tdd` skill, referenced from the ship brief (Claude crews invoke `/tdd`; other harnesses read `$HOME/.claude/skills/tdd/SKILL.md` and siblings in place). Skills are never copied or symlinked into the worktree.

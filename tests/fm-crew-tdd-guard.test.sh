@@ -137,3 +137,36 @@ assert_grep 'Cursor and Hermes' "$ROOT/docs/crew-tdd-guard.md" 'crew-tdd-guard.m
 assert_grep 'outer-gate-only' "$ROOT/docs/crew-tdd-guard.md" 'crew-tdd-guard.md missing outer-gate-only wording'
 assert_grep 'crew-tdd-guard' "$ROOT/docs/crew-kill-guard.md" 'kill-guard.md should point at tdd-guard'
 pass 'docs record multi-harness TDD rails and outer-gate-only adapters'
+
+# Runtime markers must never land in tracked bin/. When the checker is invoked
+# from a path ending in /bin (source-tree copy), markers go to sibling state/
+# (gitignored operational dir). Task-temp installs keep markers beside the checker.
+BIN_FAKE="$TMP_ROOT/src/bin"
+STATE_FAKE="$TMP_ROOT/src/state"
+mkdir -p "$BIN_FAKE"
+install -m 0700 "$CHECK" "$BIN_FAKE/fm-crew-tdd-guard.sh"
+BIN_GUARD="$BIN_FAKE/fm-crew-tdd-guard.sh"
+rm -f "$BIN_FAKE/tdd-red-seen" "$BIN_FAKE/tdd-pin-delivered" "$STATE_FAKE/tdd-red-seen" "$STATE_FAKE/tdd-pin-delivered"
+"$BIN_GUARD" --mark-red
+assert_absent "$BIN_FAKE/tdd-red-seen" "mark-red must not write tdd-red-seen into bin/"
+assert_present "$STATE_FAKE/tdd-red-seen" "mark-red from bin/ must write tdd-red-seen under sibling state/"
+# Guard must honor the new location both directions.
+"$BIN_GUARD" --command 'cat > src/lib/foo.rs <<EOF
+x
+EOF' >/dev/null 2>"$TMP_ROOT/bin-allow.err"
+expect_code 0 $? "production write after mark-red under state/ must allow"
+rm -f "$STATE_FAKE/tdd-red-seen"
+"$BIN_GUARD" --command 'cat > src/lib/foo.rs <<EOF
+x
+EOF' >/dev/null 2>"$TMP_ROOT/bin-deny.err"
+expect_code 2 $? "production write after removing state/tdd-red-seen must deny"
+assert_grep 'crew-tdd-guard' "$TMP_ROOT/bin-deny.err" "deny after unmark missing tdd-guard label"
+pass 'tdd guard: source-tree bin/ redirects markers to state/ and reads them both ways'
+
+# Docs: marker is tasktmp-local for the installed checker; never tracked bin/.
+assert_grep 'tdd-red-seen' "$ROOT/docs/crew-tdd-guard.md" 'docs must still name tdd-red-seen'
+assert_not_contains "$(cat "$ROOT/docs/crew-tdd-guard.md")" 'beside the checker' \
+  'docs must not claim markers live beside the source checker in bin/'
+# Prefer explicit tasktmp / state wording after the move.
+assert_grep '/tmp/fm-' "$ROOT/docs/crew-tdd-guard.md" 'docs must keep tasktmp mark path'
+pass 'docs describe marker location without implying tracked bin/'
