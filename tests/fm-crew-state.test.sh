@@ -531,7 +531,7 @@ test_active_run_outranks_stale_paused_status() {
 }
 
 # Captain lock (paused-masks-failed-run): a declared paused: must NOT outrank an
-# authoritative failed/cancelled run-step. Failure is at least as captain-relevant
+# authoritative failed run-step. Failure is at least as captain-relevant
 # as blocked:; a stale pause written before the run failed must not swallow it.
 test_failed_run_not_outranked_by_paused_status() {
   reset_fakes

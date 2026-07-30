@@ -278,7 +278,7 @@ test_crew_absorb_class_declared_pause_outranks_terminal_run() {
   [ "$(crew_absorb_class a)" = none ] \
     || fail "blocked status under terminal run was classed paused: $(crew_absorb_class a)"
 
-  # Captain lock: paused: must NOT mask a FAILED (or cancelled→failed) run-step.
+  # Captain lock: paused: must NOT mask a FAILED run-step.
   # A stale paused: written before the run failed would otherwise swallow the
   # failure under the radar — same severity as blocked: escalate-immediately.
   printf 'paused: awaiting smoke r4 verdict\n' > "$state/a.status"
@@ -316,13 +316,8 @@ test_crew_absorb_class_failed_run_not_masked_by_paused_status() {
   ! crew_is_paused a || fail "crew_is_paused recognized pause over failed run"
   ! crew_is_provably_working a || fail "failed+paused classed as working"
 
-  # A DELIBERATE CUSTODY RELEASE IS NOT A FAILURE. `no-mistakes axi abort` after
-  # a green run is the sanctioned way to free the branch for the next crew, and
-  # it produces `cancelled`. Collapsing that onto `failed` made every correctly
-  # releasing crew permanently un-absorbable: a bare stale: wake every poll,
-  # forever, however properly it declared its wait (four confirmed reproductions
-  # 2026-07-26..30, incl. vellum-883-gauntlet-n5 after PR 883 went green). A
-  # cancelled run under a DECLARED pause absorbs exactly as done/checks-green does.
+  # A cancelled run records deliberate custody release, not failure. Under a
+  # declared pause it therefore absorbs exactly as done/checks-green does.
   FM_FAKE_CREW_STATE='state: cancelled · source: run-step · run cancelled'
   [ "$(crew_absorb_class a)" = paused ] \
     || fail "cancelled run under declared paused: was not absorbed: $(crew_absorb_class a)"
