@@ -283,6 +283,19 @@ outcome: failed
 EOF
 }
 
+run_cancelled() {  # <branch>
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: completed
+  head: "abc1234"
+  pr: ""
+  findings: none
+outcome: cancelled
+EOF
+}
+
 run_ci_monitoring() {  # <branch>
   cat <<EOF
 run:
@@ -518,7 +531,7 @@ test_active_run_outranks_stale_paused_status() {
 }
 
 # Captain lock (paused-masks-failed-run): a declared paused: must NOT outrank an
-# authoritative failed/cancelled run-step. Failure is at least as captain-relevant
+# authoritative failed run-step. Failure is at least as captain-relevant
 # as blocked:; a stale pause written before the run failed must not swallow it.
 test_failed_run_not_outranked_by_paused_status() {
   reset_fakes
@@ -534,6 +547,29 @@ test_failed_run_not_outranked_by_paused_status() {
   assert_contains "$out" "source: run-step" "failed run stays run-step sourced"
   assert_not_contains "$out" "state: paused" "paused: must not mask failed run-step"
   pass "failed run-step is not outranked by a declared paused: status line"
+}
+
+# A deliberate custody release and a genuine failure are OPPOSITE events, so the
+# interface must keep them distinguishable. `no-mistakes axi abort` is the
+# sanctioned way to release branch custody after a green run and produces
+# `cancelled`; collapsing it onto `failed` left every correctly-releasing crew
+# permanently un-absorbable (bare stale: every poll). crew_absorb_class owns the
+# absorb policy; this seam owns only reporting the two states apart.
+test_cancelled_run_is_distinct_from_failed() {
+  reset_fakes
+  local d; d=$(new_case cancelled-distinct)
+  make_repo_on_branch "$d/wt" fm/feat-cancelled
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-cancelled.meta" "window=fm:fm-feat-cancelled" "worktree=$d/wt" "kind=ship"
+  printf 'paused: PR 883 green, custody released, nothing unlanded\n' > "$d/state/feat-cancelled.status"
+  FM_FAKE_AXI_STATUS="$(run_cancelled fm/feat-cancelled)"
+  FM_FAKE_BUSY=0
+  local out; out=$(run_crew_state "$d" feat-cancelled)
+  assert_contains "$out" "state: cancelled" "cancelled run reports its own state"
+  assert_contains "$out" "source: run-step" "cancelled run stays run-step sourced"
+  assert_contains "$out" "run cancelled" "cancelled detail is preserved"
+  assert_not_contains "$out" "state: failed" "a custody release must not report as a failure"
+  pass "cancelled run-step is reported distinctly from failed"
 }
 
 test_parked_run_not_outranked_by_paused_status() {
@@ -1177,6 +1213,7 @@ test_ci_monitoring_checks_green_surfaces_done
 test_declared_pause_outranks_terminal_ci_monitor
 test_active_run_outranks_stale_paused_status
 test_failed_run_not_outranked_by_paused_status
+test_cancelled_run_is_distinct_from_failed
 test_parked_run_not_outranked_by_paused_status
 test_top_level_ci_checks_green_surfaces_done
 test_ci_monitoring_no_checks_terminal_surfaces_done

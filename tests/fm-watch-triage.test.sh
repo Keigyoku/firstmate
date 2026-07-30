@@ -278,7 +278,7 @@ test_crew_absorb_class_declared_pause_outranks_terminal_run() {
   [ "$(crew_absorb_class a)" = none ] \
     || fail "blocked status under terminal run was classed paused: $(crew_absorb_class a)"
 
-  # Captain lock: paused: must NOT mask a FAILED (or cancelled→failed) run-step.
+  # Captain lock: paused: must NOT mask a FAILED run-step.
   # A stale paused: written before the run failed would otherwise swallow the
   # failure under the radar — same severity as blocked: escalate-immediately.
   printf 'paused: awaiting smoke r4 verdict\n' > "$state/a.status"
@@ -316,19 +316,32 @@ test_crew_absorb_class_failed_run_not_masked_by_paused_status() {
   ! crew_is_paused a || fail "crew_is_paused recognized pause over failed run"
   ! crew_is_provably_working a || fail "failed+paused classed as working"
 
-  # Cancelled maps to failed in crew-state; same non-absorb.
-  FM_FAKE_CREW_STATE='state: failed · source: run-step · run cancelled'
+  # A cancelled run records deliberate custody release, not failure. Under a
+  # declared pause it therefore absorbs exactly as done/checks-green does.
+  FM_FAKE_CREW_STATE='state: cancelled · source: run-step · run cancelled'
+  [ "$(crew_absorb_class a)" = paused ] \
+    || fail "cancelled run under declared paused: was not absorbed: $(crew_absorb_class a)"
+  crew_is_paused a || fail "crew_is_paused missed a declared pause under a cancelled run"
+  ! crew_is_provably_working a || fail "cancelled+paused classed as provably working"
+
+  # ...but cancelled alone is NOT a blanket absorb: with no declared pause the
+  # crew has stopped with custody released and nothing said, which must surface.
+  printf 'working: implementing fix\n' > "$state/a.status"
   [ "$(crew_absorb_class a)" = none ] \
-    || fail "cancelled/failed run under paused: was absorbed: $(crew_absorb_class a)"
+    || fail "cancelled run without a declared pause was absorbed: $(crew_absorb_class a)"
+  printf 'blocked: needs credentials\n' > "$state/a.status"
+  [ "$(crew_absorb_class a)" = none ] \
+    || fail "blocked under a cancelled run was absorbed: $(crew_absorb_class a)"
 
   # done/checks-green under paused: still absorbs (the case the captain hit).
+  printf 'paused: holding for upstream release\n' > "$state/a.status"
   FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review (still monitoring for merge/close)'
   [ "$(crew_absorb_class a)" = paused ] \
     || fail "done/checks-green under paused: not absorbed: $(crew_absorb_class a)"
 
   unset FM_STATE_OVERRIDE
   unset FM_FAKE_CREW_STATE
-  pass "crew_absorb_class: failed/cancelled run-step escalates despite paused: status; done still absorbs"
+  pass "crew_absorb_class: failed escalates despite paused:; a declared-paused cancelled release absorbs"
 }
 
 # signal_crew_provably_working: a no-verb "signal:" wake is benign ONLY when EVERY
