@@ -60,6 +60,9 @@
 # evidence, typed exemptions, Closes #N PR-body guidance); scout briefs do not.
 # That block is the one owner of the full TDD contract text; Review Crew and
 # docs/crew-tdd-guard.md point at it rather than restating it.
+# Ship and scout briefs (including --role variants) also carry the Architecture
+# discipline standing order, pointing at the in-repo improve-codebase-architecture
+# skill under .agents/skills/; secondmate charters do not.
 # Refuses to overwrite an existing brief.
 set -eu
 
@@ -317,6 +320,27 @@ EOF
 )
 fi
 
+# Architecture discipline (fleet standing order): every ship/scout crew brief.
+# Points at the in-repo vendored skill via FM_ROOT (same path pattern as role
+# skills), not a captain user-level ~/.claude/skills path.
+# shellcheck disable=SC2016 # intentional: brief prose for the crewmate; only ARCH_SKILL_DIR expands.
+ARCH_SKILL_DIR="$FM_ROOT/.agents/skills/improve-codebase-architecture"
+ARCH_SECTION=$(cat <<EOF
+# Architecture discipline (fleet standing order)
+
+Live by the in-repo \`improve-codebase-architecture\` skill while scouting, reviewing, and implementing.
+
+- On the \`claude\` harness: invoke \`/improve-codebase-architecture\` (firstmate-vendored skill under \`.agents/skills/\`).
+- On any other harness: read \`$ARCH_SKILL_DIR/SKILL.md\` and its
+  siblings \`$ARCH_SKILL_DIR/LANGUAGE.md\`,
+  \`$ARCH_SKILL_DIR/INTERFACE-DESIGN.md\`, and
+  \`$ARCH_SKILL_DIR/DEEPENING.md\` via that absolute path.
+- Never copy or symlink skills into the worktree; read them in place.
+
+Use its vocabulary exactly — module, interface, implementation, depth, seam, adapter, leverage, locality; not "component", "service", "boundary".
+EOF
+)
+
 if [ "$KIND" = scout ]; then
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
@@ -325,6 +349,8 @@ You are a crewmate: an autonomous worker agent managed by firstmate. Work on you
 {TASK}
 
 $ROLE_SECTION
+
+$ARCH_SECTION
 
 $HERDR_SECTION
 
@@ -623,6 +649,8 @@ You are a crewmate: an autonomous worker agent managed by firstmate. Work on you
 {TASK}
 
 $ROLE_SECTION
+
+$ARCH_SECTION
 
 $HERDR_SECTION
 
