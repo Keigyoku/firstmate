@@ -335,14 +335,17 @@ signal_reason_is_actionable() {  # <file> ...
 #             marked ask-user gate still verified parked by its run-step; either
 #             hold is EXPECTED to idle. A terminal DONE run-step (e.g. ci-monitor
 #             checks-green) does NOT cancel a declared pause - that is the hold
-#             the crew is waiting through. A FAILED/CANCELLED run-step is never
-#             masked by a stale paused: line (captain radar: failures escalate).
+#             the crew is waiting through, and an authoritative CANCELLED run-step
+#             (custody deliberately released after green) absorbs the same way.
+#             A FAILED run-step is never masked by a stale paused: line (captain
+#             radar: failures escalate) - and cancelled is NOT failed, see below.
 #             An ACTIVE working run-step/pane still wins so a crew that resumed
 #             after pausing is never mis-absorbed;
 #   none    - neither, so the wake must surface (a stopped/finished/parked/failed/
 #             torn-down/unknown crew with no declared pause, or an unreadable
 #             verdict). blocked: is never paused. failed under a stale paused:
-#             line is never paused.
+#             line is never paused. done and cancelled absorb ONLY under a
+#             declared pause; on their own they still surface.
 # One fm-crew-state.sh read serves BOTH absorb reasons at once, then a cheap
 # last-status paused check covers the done/checks-green gap without weakening
 # stale detection for non-declaring idle crews or failed runs.
@@ -364,16 +367,24 @@ crew_absorb_class() {  # <id>
     src=${line#*source: }; src=${src%% *}
     case "$src" in run-step|pane) printf 'working'; return ;; esac
   fi
-  # FAILED/CANCELLED (mapped to failed by crew-state) must surface even when
-  # the last status event is a stale paused: line written before the failure.
+  # A genuine FAILURE must surface even when the last status event is a stale
+  # paused: line written before the failure. CANCELLED is deliberately NOT
+  # folded in here, and must never be re-collapsed onto failed: a deliberate
+  # custody release (`no-mistakes axi abort` after a green run - the sanctioned
+  # way to free the branch for the next crew) and a failure are OPPOSITE events.
+  # While they shared one state token, absorb had to choose between masking real
+  # failures and waking the captain every poll, forever, for provably healthy
+  # crews that released custody correctly - and it did the second.
   if [ "$state" = failed ]; then
     printf 'none'
     return
   fi
-  # A last-line declared external wait may absorb only an authoritative terminal
-  # done/checks-green state. Parked, unknown, and other non-terminal states must
-  # surface unless an earlier authoritative path classified them as a hold.
-  if [ "$state" = "done" ]; then
+  # A last-line declared external wait may absorb an authoritative terminal
+  # done/checks-green state, or an equally authoritative cancelled one (custody
+  # released, crew standing by). Parked, unknown, and other non-terminal states
+  # must surface unless an earlier authoritative path classified them as a hold.
+  # Neither absorbs on its own: without a declared pause both still surface.
+  if [ "$state" = "done" ] || [ "$state" = cancelled ]; then
     st=${STATE:-${FM_STATE_OVERRIDE:-}}
     if [ -n "$st" ]; then
       last=$(last_status_line "$st/$id.status")

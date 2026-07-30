@@ -31,7 +31,8 @@ Crew status files are append-only wake-event logs, not current-state fields.
 During no-mistakes' `ci` monitor phase, it also reads the ci step log tail because `axi status` reports both "still waiting on checks" and "checks green, waiting on merge" as `ci,running`.
 The most recent recognized ci log marker wins, so checks-green monitoring reports done while a later re-arm, failed-check, or issue marker returns the crew to working.
 Only when no matching run exists does it fall back to the pane busy-signature and then the status log; a dead pane without a run reports unknown instead of trusting a stale log.
-An explicit last-line `paused:` declaration overrides only a done/checks-green run-step and reports the distinct `paused` state with its reason; failed or cancelled run-steps remain authoritative.
+An explicit last-line `paused:` declaration overrides only a done/checks-green run-step and reports the distinct `paused` state with its reason; failed and cancelled run-steps remain authoritative.
+A cancelled run-step is reported as its own `cancelled` state rather than collapsed onto `failed`, because a deliberate custody release after a green run and a genuine failure are opposite events; the absorb classifier lets a cancelled crew that declared a pause be absorbed exactly as a done one is, while a failure always surfaces.
 For herdr, that pane fallback trusts a native `busy` verdict outright, but corroborates native `idle` or unknown verdicts against the rendered busy signature before deciding the crew is not working.
 For whole-fleet read-only review, `bin/fm-fleet-snapshot.sh --json` emits schema `fm-fleet-snapshot.v1` from the backlog, task metadata, current crew state, endpoint probes, PR/report pointers, scout reports, and secondmate return-channel guidance.
 `bin/fm-fleet-view.sh` renders that snapshot as Markdown for humans, so bearings and manual fleet reviews consume one structured contract instead of reparsing raw fleet files.
