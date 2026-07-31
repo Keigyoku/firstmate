@@ -406,7 +406,7 @@ ABSENT_ID=absent-hw-k1
 ABSENT_HOME="$HOME_DIR/crews/$ABSENT_ID"
 FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
   "$ROOT/bin/fm-child-node-setup.sh" "$ABSENT_ID" --kind ship
-# No meta file, no FM_CHILD_HARNESS / FM_CHILD_WORKTREE — publish must omit both fields.
+# No meta file, no FM_CHILD_HARNESS / FM_CHILD_WORKTREE - publish must omit both fields.
 rm -f "$HOME_DIR/state/$ABSENT_ID.meta"
 FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
   FM_CHILD_BACKEND_KIND=herdr FM_CHILD_WORKSPACE_ID=ws-a FM_CHILD_PANE_ID=pane-a \

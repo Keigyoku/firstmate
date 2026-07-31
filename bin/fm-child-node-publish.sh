@@ -10,7 +10,7 @@
 # Test/adapter seams: FM_CHILD_{BACKEND_KIND,WORKSPACE_ID,PANE_ID,PID,STATUS_VERB,STATUS_NOTE}
 # Optional conversation harness and worktree: FM_CHILD_{HARNESS,WORKTREE} override
 # state/<task-id>.meta when set (non-empty). When both env and meta omit a value,
-# the field is absent from the document — never invent a default harness or path.
+# the field is absent from the document - never invent a default harness or path.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -127,7 +127,7 @@ STATUS_VERB=${FM_CHILD_STATUS_VERB:-}
 STATUS_NOTE=${FM_CHILD_STATUS_NOTE:-}
 
 # Conversation harness and worktree: known values from task meta (or env override).
-# Omit when genuinely unknown — never default to claude or invent a cwd.
+# Omit when genuinely unknown - never default to claude or invent a cwd.
 TASK_META="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}/$TASK_ID.meta"
 HARNESS=${FM_CHILD_HARNESS:-}
 WORKTREE=${FM_CHILD_WORKTREE:-}
