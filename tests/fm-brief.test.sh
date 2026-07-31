@@ -353,6 +353,89 @@ test_scout_brief_has_no_tdd_contract() {
   pass "fm-brief.sh: scout briefs stay free of the ship TDD contract"
 }
 
+# Architecture discipline (captain standing order): every ship, scout, and
+# role-tagged brief points crews at the in-repo improve-codebase-architecture
+# skill (SKILL.md + LANGUAGE.md + INTERFACE-DESIGN.md + DEEPENING.md) and the
+# standing vocabulary. Secondmate charters are out of scope for this contract.
+assert_arch_discipline_section() {
+  local brief=$1 label=$2 skill_dir
+  skill_dir="$ROOT/.agents/skills/improve-codebase-architecture"
+  assert_grep "# Architecture discipline (fleet standing order)" "$brief" \
+    "$label: missing Architecture discipline heading"
+  assert_grep "while scouting, reviewing, and implementing" "$brief" \
+    "$label: missing scouting/reviewing/implementing scope"
+  assert_grep "/improve-codebase-architecture" "$brief" \
+    "$label: missing claude harness slash skill pointer"
+  assert_grep "On the \`claude\` harness: invoke \`/improve-codebase-architecture\` (or read" "$brief" \
+    "$label: missing claude absolute-path read fallback"
+  assert_grep "\`$skill_dir/DEEPENING.md\` in full)." "$brief" \
+    "$label: claude fallback must read all four vendored files in full"
+  assert_grep "$skill_dir/SKILL.md" "$brief" \
+    "$label: missing in-repo SKILL.md absolute path"
+  assert_grep "$skill_dir/LANGUAGE.md" "$brief" \
+    "$label: missing in-repo LANGUAGE.md absolute path"
+  assert_grep "$skill_dir/INTERFACE-DESIGN.md" "$brief" \
+    "$label: missing in-repo INTERFACE-DESIGN.md absolute path"
+  assert_grep "$skill_dir/DEEPENING.md" "$brief" \
+    "$label: missing in-repo DEEPENING.md absolute path"
+  assert_grep "Never copy or symlink skills into the worktree; read them in place." "$brief" \
+    "$label: missing read-in-place skill discipline line"
+  assert_grep 'module, interface, implementation, depth, seam, adapter, leverage, locality' "$brief" \
+    "$label: missing standing vocabulary order"
+  assert_grep 'not "component", "service", "boundary"' "$brief" \
+    "$label: missing forbidden-vocabulary clause"
+  assert_no_grep "$HOME/.claude/skills/improve-codebase-architecture" "$brief" \
+    "$label: must not point at captain user-level path"
+}
+
+test_briefs_emit_architecture_discipline() {
+  local home id brief
+  home="$TMP_ROOT/arch-discipline-home"
+  write_registry "$home"
+
+  id="brief-arch-ship"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "ship brief was not scaffolded"
+  assert_arch_discipline_section "$brief" "ship"
+
+  id="brief-arch-onb"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --on-branch fm/existing-arch >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "on-branch ship brief was not scaffolded"
+  assert_arch_discipline_section "$brief" "on-branch ship"
+
+  id="brief-arch-scout"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --scout >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "scout brief was not scaffolded"
+  assert_arch_discipline_section "$brief" "scout"
+
+  id="brief-arch-role"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --role review-crew >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "review-crew ship brief was not scaffolded"
+  assert_arch_discipline_section "$brief" "review-crew ship"
+  assert_grep "# Role identity" "$brief" "review-crew brief lost Role identity section"
+
+  id="brief-arch-scout-role"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --scout --role smoke-crew >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "smoke-crew scout brief was not scaffolded"
+  assert_arch_discipline_section "$brief" "smoke-crew scout"
+
+  # Secondmate charters are not crewmates; architecture standing order does not apply.
+  id="brief-arch-sm"
+  FM_HOME="$home" FM_SECONDMATE_CHARTER='test charter' \
+    "$ROOT/bin/fm-brief.sh" "$id" --secondmate --no-projects >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "secondmate charter was not scaffolded"
+  assert_no_grep "# Architecture discipline (fleet standing order)" "$brief" \
+    "secondmate charter must not carry crew architecture discipline"
+
+  pass "fm-brief.sh: ship/scout/role briefs emit architecture discipline; secondmate does not"
+}
+
 test_role_line_on_ship_and_scout() {
   local home id brief skill_abs
   home="$TMP_ROOT/role-brief-home"
@@ -596,6 +679,7 @@ test_pause_verb_override_renders_all_brief_scaffolds
 test_briefs_instruct_wait_status_contract
 test_ship_briefs_emit_tdd_contract
 test_scout_brief_has_no_tdd_contract
+test_briefs_emit_architecture_discipline
 test_role_line_on_ship_and_scout
 test_role_rejected_for_secondmate_and_unknown
 test_fresh_branch_setup_creates_task_branch
