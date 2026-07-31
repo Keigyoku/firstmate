@@ -381,3 +381,91 @@ jq -e '
 ' "$SM_CHILD_HOME/state/child-current.json" >/dev/null \
   || fail "secondmate spawn missing first child-current"
 pass "fm-spawn secondmate birth writes Child Node docs under crews/<task>"
+
+# --- slice 8: birth publish carries conversation harness + worktree from meta ---
+# Non-claude harness is required: claude is the accidental default consumers invent
+# when the field is absent, so a claude assertion cannot catch this bug.
+META_PATH="$HOME_DIR/state/$TASK_ID.meta"
+fm_write_meta "$META_PATH" \
+  "window=fm-$TASK_ID" \
+  "worktree=/tmp/fm-child-node-wt-codex" \
+  "harness=codex" \
+  "kind=ship" \
+  "mode=no-mistakes" \
+  "yolo=off"
+publish starting
+jq -e '
+  .harness == "codex"
+  and .worktree == "/tmp/fm-child-node-wt-codex"
+' "$POINTER" >/dev/null \
+  || fail "child-current missing harness/worktree from meta (got: $(jq -c '{harness,worktree}' "$POINTER" 2>/dev/null || cat "$POINTER"))"
+pass "child-current publishes non-claude harness and worktree from task meta"
+
+# --- slice 9: unknown harness/worktree stay absent (never invent claude or a path) ---
+ABSENT_ID=absent-hw-k1
+ABSENT_HOME="$HOME_DIR/crews/$ABSENT_ID"
+FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
+  "$ROOT/bin/fm-child-node-setup.sh" "$ABSENT_ID" --kind ship
+# No meta file, no FM_CHILD_HARNESS / FM_CHILD_WORKTREE - publish must omit both fields.
+rm -f "$HOME_DIR/state/$ABSENT_ID.meta"
+FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
+  FM_CHILD_BACKEND_KIND=herdr FM_CHILD_WORKSPACE_ID=ws-a FM_CHILD_PANE_ID=pane-a \
+  "$ROOT/bin/fm-child-node-publish.sh" "$ABSENT_ID" starting
+ABSENT_POINTER="$ABSENT_HOME/state/child-current.json"
+jq -e '
+  (has("harness") | not)
+  and (has("worktree") | not)
+' "$ABSENT_POINTER" >/dev/null \
+  || fail "absent harness/worktree must be omitted, not defaulted (got: $(jq -c '{harness,worktree}' "$ABSENT_POINTER"))"
+# Meta present but keys missing: still omit (do not invent).
+fm_write_meta "$HOME_DIR/state/$ABSENT_ID.meta" \
+  "window=fm-$ABSENT_ID" \
+  "kind=ship"
+FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
+  "$ROOT/bin/fm-child-node-publish.sh" "$ABSENT_ID" starting
+jq -e '(has("harness") | not) and (has("worktree") | not)' "$ABSENT_POINTER" >/dev/null \
+  || fail "meta without harness/worktree keys must not fabricate values (got: $(jq -c '{harness,worktree}' "$ABSENT_POINTER"))"
+pass "unknown harness and worktree are omitted, never fabricated"
+
+# --- slice 10: fm-spawn with non-claude harness publishes matching child-current ---
+SPAWN_CODEX_CASE="$TEST_ROOT/spawn-codex"
+SPAWN_CODEX_HOME="$SPAWN_CODEX_CASE/home"
+SPAWN_CODEX_PROJ="$SPAWN_CODEX_CASE/project"
+SPAWN_CODEX_WT="$SPAWN_CODEX_CASE/wt"
+SPAWN_CODEX_FAKE=$(make_spawn_fakebin "$SPAWN_CODEX_CASE/fake")
+mkdir -p "$SPAWN_CODEX_HOME/data" "$SPAWN_CODEX_HOME/projects" "$SPAWN_CODEX_HOME/state" "$SPAWN_CODEX_HOME/config"
+# Explicit codex so the assertion cannot pass by accident on a missing field.
+printf 'codex\n' > "$SPAWN_CODEX_HOME/config/crew-harness"
+fm_git_worktree "$SPAWN_CODEX_PROJ" "$SPAWN_CODEX_WT" wt-child-codex
+touch "$SPAWN_CODEX_HOME/state/.last-watcher-beat"
+CODEX_SHIP_ID=child-codex-k2
+mkdir -p "$SPAWN_CODEX_HOME/data/$CODEX_SHIP_ID"
+printf 'brief\n' > "$SPAWN_CODEX_HOME/data/$CODEX_SHIP_ID/brief.md"
+FM_HOME="$SPAWN_CODEX_HOME" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-resident-setup.sh"
+set +e
+SPAWN_CODEX_OUT=$(
+  FM_ROOT_OVERRIDE='' FM_HOME="$SPAWN_CODEX_HOME" \
+    FM_STATE_OVERRIDE="$SPAWN_CODEX_HOME/state" FM_DATA_OVERRIDE="$SPAWN_CODEX_HOME/data" \
+    FM_PROJECTS_OVERRIDE="$SPAWN_CODEX_HOME/projects" FM_CONFIG_OVERRIDE="$SPAWN_CODEX_HOME/config" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$SPAWN_CODEX_WT" TMUX="fake,1,0" \
+    PATH="$SPAWN_CODEX_FAKE:$PATH" \
+    "$SPAWN" "$CODEX_SHIP_ID" "$SPAWN_CODEX_PROJ" \
+      --harness codex \
+      --adopt-worktree --adopt-worktree-path "$SPAWN_CODEX_WT" 2>&1
+)
+SPAWN_CODEX_RC=$?
+set -e
+[ "$SPAWN_CODEX_RC" -eq 0 ] || fail "codex ship spawn failed: $SPAWN_CODEX_OUT"
+CODEX_CHILD_POINTER="$SPAWN_CODEX_HOME/crews/$CODEX_SHIP_ID/state/child-current.json"
+CODEX_META="$SPAWN_CODEX_HOME/state/$CODEX_SHIP_ID.meta"
+[ -f "$CODEX_META" ] || fail "codex spawn did not write task meta"
+META_HARNESS=$(grep '^harness=' "$CODEX_META" | cut -d= -f2-)
+META_WT=$(grep '^worktree=' "$CODEX_META" | cut -d= -f2-)
+[ "$META_HARNESS" = codex ] || fail "codex spawn meta harness=$META_HARNESS, want codex"
+jq -e --arg h "$META_HARNESS" --arg w "$META_WT" '
+  .harness == $h
+  and .worktree == $w
+  and .harness == "codex"
+' "$CODEX_CHILD_POINTER" >/dev/null \
+  || fail "codex spawn child-current harness/worktree mismatch meta (child=$(jq -c '{harness,worktree}' "$CODEX_CHILD_POINTER"); meta harness=$META_HARNESS worktree=$META_WT)"
+pass "fm-spawn non-claude harness and worktree match child-current"
