@@ -341,7 +341,7 @@ Live by the in-repo \`improve-codebase-architecture\` skill while scouting, revi
   \`$ARCH_SKILL_DIR/DEEPENING.md\` via that absolute path.
 - Never copy or symlink skills into the worktree; read them in place.
 
-Use its vocabulary exactly — module, interface, implementation, depth, seam, adapter, leverage, locality; not "component", "service", "boundary".
+Use its vocabulary exactly - module, interface, implementation, depth, seam, adapter, leverage, locality; not "component", "service", "boundary".
 EOF
 )
 

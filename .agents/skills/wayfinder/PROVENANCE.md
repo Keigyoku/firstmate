@@ -7,7 +7,7 @@ Vendored third-party skill from upstream.
 | Upstream repo | https://github.com/mattpocock/skills |
 | Upstream path | `skills/engineering/wayfinder/` (`SKILL.md` + `agents/`) |
 | Commit | `2ab9580` (2026-07-28) |
-| Licence | MIT (Copyright (c) 2026 Matt Pocock) — full text below |
+| Licence | MIT (Copyright (c) 2026 Matt Pocock) - full text below |
 
 Frontmatter is preserved exactly from upstream, including `disable-model-invocation: true` (captain-invoked via `/wayfinder`; must never fire on its own).
 
@@ -16,10 +16,10 @@ Frontmatter is preserved exactly from upstream, including `disable-model-invocat
 This skill is **not** self-contained in a fresh firstmate home.
 It hard-depends on skills that are **not** vendored in this repo:
 
-- `/grilling` — charting and ticket resolution
-- `/domain-modeling` — charting and ticket resolution
-- `/research` — research tickets (subagent)
-- `/prototype` — prototype tickets
+- `/grilling` - charting and ticket resolution
+- `/domain-modeling` - charting and ticket resolution
+- `/research` - research tickets (subagent)
+- `/prototype` - prototype tickets
 
 Those are typically installed at user level (e.g. under `~/.claude/skills/`) on the captain's machine.
 They are intentionally **not** vendored here; scope was only `wayfinder` and `improve-codebase-architecture`.

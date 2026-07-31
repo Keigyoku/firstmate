@@ -7,8 +7,13 @@ Vendored third-party skill (captain-pinned copy; **not** current upstream).
 | Upstream repo | https://github.com/mattpocock/skills |
 | Upstream path (historical) | `skills/engineering/improve-codebase-architecture/` (restructured upstream after pin) |
 | Source of this pin | Captain's user-level copy at `~/.claude/skills/improve-codebase-architecture/` |
-| Upstream commit reference | `2ab9580` (2026-07-28) |
 | Pin rationale | Captain standing rule requires the four-file layout (`SKILL.md`, `LANGUAGE.md`, `INTERFACE-DESIGN.md`, `DEEPENING.md`) and the Glossary vocabulary. Current upstream dropped those companion files and the Glossary; refreshing from upstream would delete the vocabulary the standing law rests on. |
+
+## Unvendored references
+
+The pinned `SKILL.md` links to `CONTEXT-FORMAT.md` and `ADR-FORMAT.md` under a sibling `grill-with-docs` skill.
+Those relative links do not resolve in this vendored layout because that sibling skill is not vendored here.
+Agents needing those formats must read the corresponding files from the captain's user-level `~/.claude/skills/grill-with-docs/` installation.
 
 ## Licence
 
