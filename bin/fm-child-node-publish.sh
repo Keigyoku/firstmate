@@ -8,6 +8,9 @@
 # descriptor parent.container_id (fail closed on mismatch).
 #
 # Test/adapter seams: FM_CHILD_{BACKEND_KIND,WORKSPACE_ID,PANE_ID,PID,STATUS_VERB,STATUS_NOTE}
+# Optional conversation harness and worktree: FM_CHILD_{HARNESS,WORKTREE} override
+# state/<task-id>.meta when set (non-empty). When both env and meta omit a value,
+# the field is absent from the document — never invent a default harness or path.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,6 +21,13 @@ FM_HOME="${GOD_NODE_HOME:-${RESIDENT_HOME:-${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_RO
 . "$SCRIPT_DIR/fm-child-node-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+
+# Read one key=value line from task meta (last wins). Empty when meta or key is absent.
+fm_child_meta_get() {  # <meta-file> <key>
+  local meta=$1 key=$2
+  [ -f "$meta" ] || return 0
+  grep "^${key}=" "$meta" 2>/dev/null | tail -1 | cut -d= -f2- || true
+}
 
 usage() {
   sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
@@ -116,6 +126,18 @@ CREATION_IDENTITY=''
 STATUS_VERB=${FM_CHILD_STATUS_VERB:-}
 STATUS_NOTE=${FM_CHILD_STATUS_NOTE:-}
 
+# Conversation harness and worktree: known values from task meta (or env override).
+# Omit when genuinely unknown — never default to claude or invent a cwd.
+TASK_META="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}/$TASK_ID.meta"
+HARNESS=${FM_CHILD_HARNESS:-}
+WORKTREE=${FM_CHILD_WORKTREE:-}
+if [ -z "$HARNESS" ]; then
+  HARNESS=$(fm_child_meta_get "$TASK_META" harness)
+fi
+if [ -z "$WORKTREE" ]; then
+  WORKTREE=$(fm_child_meta_get "$TASK_META" worktree)
+fi
+
 BASE=$(jq -n \
   --arg container_id "$CONTAINER_ID" \
   --arg parent_id "$PARENT_ID" \
@@ -150,6 +172,13 @@ fi
 if [ -n "$STATUS_VERB" ]; then
   BASE=$(jq --arg verb "$STATUS_VERB" --arg note "$STATUS_NOTE" --arg at "$PUBLISHED_AT" \
     '. + {status:{verb:$verb,note:$note,at:$at}}' <<<"$BASE")
+fi
+
+if [ -n "$HARNESS" ]; then
+  BASE=$(jq --arg harness "$HARNESS" '. + {harness:$harness}' <<<"$BASE")
+fi
+if [ -n "$WORKTREE" ]; then
+  BASE=$(jq --arg worktree "$WORKTREE" '. + {worktree:$worktree}' <<<"$BASE")
 fi
 
 printf '%s\n' "$BASE" | fm_resident_atomic_json "$POINTER"

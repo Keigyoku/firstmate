@@ -75,6 +75,21 @@ Lifecycle values: `starting`, `ready`, `waiting`, `blocked`, `degraded`, `stoppe
 Birth publish uses `starting`.
 Optional backend, process (pid + creation_identity), status verb, and attestation method fields follow the resident pointer rules: PID alone is never liveness truth.
 
+### Optional conversation harness and worktree
+
+When known, the pointer also advertises:
+
+| Field | Source | Meaning |
+| --- | --- | --- |
+| `harness` | `state/<task-id>.meta` `harness=` (or non-empty `FM_CHILD_HARNESS` override) | Conversation harness the agent actually runs on (`claude`, `codex`, `grok`, …) |
+| `worktree` | `state/<task-id>.meta` `worktree=` (or non-empty `FM_CHILD_WORKTREE` override) | Absolute task worktree path used for transcript bind and cwd |
+
+These are additive optional fields on `dev.vellum.child-current/1`.
+Additive fields within a supported major version may be ignored by readers; breaking field or semantic changes require a new major schema string (same versioning rule as [crew-lead-resident-contract.md](crew-lead-resident-contract.md)).
+Absent means not currently advertised: **omit the field**.
+Never invent a default harness (in particular never default to `claude`) and never invent a worktree path.
+Spawn writes task meta before the first Child Node publish, so a successful birth publish carries the same `harness` and `worktree` values as meta when those keys are present.
+
 Publication holds `state/child-current.lock`, increments epoch for a readable pointer with the matching schema and `container_id`, writes a coherent JSON snapshot to a same-directory temporary file, validates JSON, flushes, and renames into place via `fm_resident_atomic_json`.
 Readers observe only the old complete document or the new complete document.
 
@@ -100,7 +115,7 @@ Mutable files use the resident rename-into-place seam, while immutable `provisio
 
 ## Empirical verification
 
-Verification was run on 2026-07-29 against this branch's producer birth path, jq, and ShellCheck.
+Verification was re-run on 2026-07-31 against this branch's producer birth path (including harness/worktree publication), jq, and ShellCheck.
 
 Command:
 
@@ -113,12 +128,16 @@ Output:
 ```text
 ok - setup writes contract, provision, and child under crews/<task>/.child-node/
 ok - parent link is God Node provision container_id
+ok - complete provision shape is required; half-formed docs are refused not published as valid
 ok - idempotent setup preserves identity and refuses clobber of invalid provision
 ok - first child-current pointer publishes with durable parent and monotonic epoch
 ok - failed pre-rename writes leave the previous complete child-current intact
 ok - secondmate path uses the same Child Node birth contract
 ok - fm-spawn ship birth writes Child Node docs and first current
 ok - fm-spawn secondmate birth writes Child Node docs under crews/<task>
+ok - child-current publishes non-claude harness and worktree from task meta
+ok - unknown harness and worktree are omitted, never fabricated
+ok - fm-spawn non-claude harness and worktree match child-current
 ```
 
 Command:
