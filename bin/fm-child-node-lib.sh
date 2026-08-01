@@ -14,6 +14,10 @@
 #   - child.json: static descriptor may be rewritten (template metadata)
 #   - child-current.json: atomic publish; epoch is monotonic for matching container_id
 #
+# Conversation completion: fm_child_node_try_refresh re-invokes publish with
+# lifecycle omitted so nested conversation fills when a transcript becomes real
+# (status/turn-end path). Publish itself owns discovery and never invents.
+#
 # Provision shape is ONE definition (fm_child_node_provision_shape_jq /
 # fm_child_node_provision_valid). A document is either the shape or it is not.
 # Do not accumulate field-by-field keep checks beside this predicate.
@@ -109,4 +113,24 @@ fm_child_node_exclusive_json() {  # <destination>
 # Child provision identity validation goes only through fm_child_node_provision_valid.
 fm_child_node_valid_uuid_v4() {  # <id>
   [[ "$1" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+}
+
+# Best-effort conversation completion refresh for a provisioned Child Node.
+# Re-invokes publish with lifecycle omitted so prior lifecycle/backend/status are
+# preserved and nested conversation is filled when a transcript is now real.
+# Never fails the caller (watcher status/turn-end path).
+fm_child_node_try_refresh() {  # <fm-home> <task-id> [fm-root]
+  local home=$1 task=$2 root=${3:-} pointer script
+  [ -n "$home" ] && [ -n "$task" ] || return 0
+  case "$task" in */*|*..*|"") return 0 ;; esac
+  pointer=$(fm_child_node_home "$home" "$task")/state/child-current.json
+  [ -s "$pointer" ] || return 0
+  if [ -z "$root" ]; then
+    root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+  fi
+  script=$root/bin/fm-child-node-publish.sh
+  [ -x "$script" ] || return 0
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" \
+    FM_STATE_OVERRIDE="${FM_STATE_OVERRIDE:-$home/state}" \
+    "$script" "$task" >/dev/null 2>&1 || true
 }

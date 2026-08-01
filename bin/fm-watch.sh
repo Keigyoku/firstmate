@@ -68,6 +68,8 @@ mkdir -p "$STATE"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-watchdog-lib.sh
 . "$SCRIPT_DIR/fm-watchdog-lib.sh"
+# shellcheck source=bin/fm-child-node-lib.sh
+. "$SCRIPT_DIR/fm-child-node-lib.sh"
 
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
@@ -1094,6 +1096,19 @@ while :; do
     done <<EOF
 $pending
 EOF
+    # Status/turn-end is the natural conversation-completion point: a journal may
+    # only exist after the first agent turn. Best-effort Child Node refresh so
+    # nested conversation is published when knowable; never blocks triage.
+    for f in $files; do
+      [ -n "$f" ] || continue
+      task=$(basename "$f")
+      case "$task" in
+        *.status) task=${task%.status} ;;
+        *.turn-ended) task=${task%.turn-ended} ;;
+        *) continue ;;
+      esac
+      fm_child_node_try_refresh "$FM_HOME" "$task" "$FM_ROOT"
+    done
     reason="signal:$files"
     # Triage: a signal is ACTIONABLE when any of these holds (cheapest first):
     #   - the away-mode daemon owns triage (afk) and wants every wake;

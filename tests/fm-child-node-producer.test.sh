@@ -469,3 +469,225 @@ jq -e --arg h "$META_HARNESS" --arg w "$META_WT" '
 ' "$CODEX_CHILD_POINTER" >/dev/null \
   || fail "codex spawn child-current harness/worktree mismatch meta (child=$(jq -c '{harness,worktree}' "$CODEX_CHILD_POINTER"); meta harness=$META_HARNESS worktree=$META_WT)"
 pass "fm-spawn non-claude harness and worktree match child-current"
+
+# --- slice 11 (RED→GREEN): nested conversation when transcript is verified-real ---
+# Consumer shape mirrors vellum ChildCurrent / ChildConversation
+# (projects/vellum/crates/vellum-core/src/session/child_node.rs @ 591b31dc4).
+# An assertion that only checks top-level harness/worktree is the #50 failure mode.
+consumer_shape_accepts() {  # <child-current.json>
+  jq -e '
+    .schema == "dev.vellum.child-current/1"
+    and (.container_id | type == "string")
+    and (.parent_container_id | type == "string")
+    and (.epoch | type == "number")
+    and (.published_at | type == "string")
+    and (.lifecycle | type == "string")
+    and (.child_type | type == "string")
+    and (
+      (has("conversation") | not)
+      or (
+        (.conversation.harness | type == "string" and length > 0)
+        and (.conversation.session_id | type == "string" and length > 0)
+        and (.conversation.transcript.adapter | type == "string" and length > 0)
+        and (.conversation.transcript.id | type == "string" and length > 0)
+        and (.conversation.transcript.path | type == "string")
+        and (.conversation.transcript.path | startswith("/"))
+      )
+    )
+  ' "$1" >/dev/null
+}
+
+# Isolated harness roots so discovery never touches the operator's real journals.
+export GROK_HOME="$TEST_ROOT/grok-home"
+export CLAUDE_HOME="$TEST_ROOT/claude-home"
+export CODEX_HOME="$TEST_ROOT/codex-home"
+mkdir -p "$GROK_HOME/sessions" "$CLAUDE_HOME/.claude/projects" "$CODEX_HOME/sessions/2026/07/31"
+
+# shellcheck source=bin/fm-resident-lib.sh
+. "$ROOT/bin/fm-resident-lib.sh"
+
+CONV_ID=conv-grok-k1
+CONV_HOME="$HOME_DIR/crews/$CONV_ID"
+CONV_WT="$TEST_ROOT/conv-wt"
+mkdir -p "$CONV_WT"
+CONV_WT=$(cd "$CONV_WT" && pwd -P)
+FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
+  "$ROOT/bin/fm-child-node-setup.sh" "$CONV_ID" --kind ship
+fm_write_meta "$HOME_DIR/state/$CONV_ID.meta" \
+  "window=fm-$CONV_ID" \
+  "worktree=$CONV_WT" \
+  "harness=grok" \
+  "kind=ship" \
+  "mode=no-mistakes" \
+  "yolo=off"
+
+# Verified-real grok transcript under encoded cwd.
+GROK_ENC=$(fm_resident_grok_encode_cwd "$CONV_WT")
+GROK_SID=019fbbbb-cccc-dddd-eeee-111122223333
+mkdir -p "$GROK_HOME/sessions/$GROK_ENC/$GROK_SID"
+GROK_JSONL="$GROK_HOME/sessions/$GROK_ENC/$GROK_SID/chat_history.jsonl"
+printf '%s\n' '{"type":"user","content":"bind-me"}' > "$GROK_JSONL"
+GROK_JSONL=$(cd "$(dirname "$GROK_JSONL")" && printf '%s/%s\n' "$(pwd -P)" "$(basename "$GROK_JSONL")")
+
+FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
+  FM_CHILD_BACKEND_KIND=herdr FM_CHILD_WORKSPACE_ID=ws-conv FM_CHILD_PANE_ID=pane-conv \
+  "$ROOT/bin/fm-child-node-publish.sh" "$CONV_ID" ready
+CONV_POINTER="$CONV_HOME/state/child-current.json"
+consumer_shape_accepts "$CONV_POINTER" \
+  || fail "consumer shape rejected published child-current: $(cat "$CONV_POINTER")"
+jq -e --arg h grok --arg sid "$GROK_SID" --arg adapter grok-chat-history-v1 --arg path "$GROK_JSONL" --arg wt "$CONV_WT" '
+  .harness == $h
+  and .worktree == $wt
+  and .conversation.harness == $h
+  and .conversation.session_id == $sid
+  and .conversation.transcript.adapter == $adapter
+  and .conversation.transcript.id == $sid
+  and .conversation.transcript.path == $path
+' "$CONV_POINTER" >/dev/null \
+  || fail "nested conversation missing or wrong (got: $(jq -c '{harness,worktree,conversation}' "$CONV_POINTER"))"
+# Honest Vellum-side read: the nested object is what ChildConversation deserializes.
+# Top-level-only docs must NOT be treated as a full conversation bind.
+jq -e 'has("conversation") and (.conversation | has("harness") and has("session_id") and has("transcript"))' \
+  "$CONV_POINTER" >/dev/null \
+  || fail "consumer nested conversation contract not satisfied"
+pass "child-current publishes nested conversation; consumer shape deserializes it"
+
+# --- slice 12: unknown transcript stays absent (never invent conversation) ---
+NOCONV_ID=noconv-k2
+NOCONV_HOME="$HOME_DIR/crews/$NOCONV_ID"
+NOCONV_WT="$TEST_ROOT/noconv-wt"
+mkdir -p "$NOCONV_WT"
+NOCONV_WT=$(cd "$NOCONV_WT" && pwd -P)
+FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
+  "$ROOT/bin/fm-child-node-setup.sh" "$NOCONV_ID" --kind ship
+fm_write_meta "$HOME_DIR/state/$NOCONV_ID.meta" \
+  "window=fm-$NOCONV_ID" \
+  "worktree=$NOCONV_WT" \
+  "harness=grok" \
+  "kind=ship"
+# No transcript fixture under GROK_HOME for this worktree.
+FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
+  FM_CHILD_BACKEND_KIND=herdr FM_CHILD_WORKSPACE_ID=ws-n FM_CHILD_PANE_ID=pane-n \
+  "$ROOT/bin/fm-child-node-publish.sh" "$NOCONV_ID" starting
+NOCONV_POINTER="$NOCONV_HOME/state/child-current.json"
+jq -e '
+  .harness == "grok"
+  and .worktree != null
+  and (has("conversation") | not)
+' "$NOCONV_POINTER" >/dev/null \
+  || fail "absent transcript must omit conversation, keep top-level hints (got: $(jq -c '{harness,worktree,conversation}' "$NOCONV_POINTER"))"
+consumer_shape_accepts "$NOCONV_POINTER" \
+  || fail "consumer shape must accept pointer without conversation"
+pass "unknown transcript omits conversation; top-level hints still published"
+
+# --- slice 13: birth-then-complete — conversation completes after session is real ---
+# Birth at spawn has no journal; a later publish (status/turn-end path) completes it.
+COMPLETE_ID=complete-k3
+COMPLETE_HOME="$HOME_DIR/crews/$COMPLETE_ID"
+COMPLETE_WT="$TEST_ROOT/complete-wt"
+mkdir -p "$COMPLETE_WT"
+COMPLETE_WT=$(cd "$COMPLETE_WT" && pwd -P)
+FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
+  "$ROOT/bin/fm-child-node-setup.sh" "$COMPLETE_ID" --kind ship
+fm_write_meta "$HOME_DIR/state/$COMPLETE_ID.meta" \
+  "window=fm-$COMPLETE_ID" \
+  "worktree=$COMPLETE_WT" \
+  "harness=codex" \
+  "kind=ship"
+# Birth publish: no codex rollout yet → no conversation.
+FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
+  FM_CHILD_BACKEND_KIND=herdr FM_CHILD_WORKSPACE_ID=ws-c FM_CHILD_PANE_ID=pane-c \
+  FM_CHILD_STATUS_VERB=working \
+  "$ROOT/bin/fm-child-node-publish.sh" "$COMPLETE_ID" starting
+COMPLETE_POINTER="$COMPLETE_HOME/state/child-current.json"
+jq -e '.lifecycle == "starting" and (has("conversation") | not) and .harness == "codex"' \
+  "$COMPLETE_POINTER" >/dev/null \
+  || fail "birth without journal must omit conversation (got: $(jq -c . "$COMPLETE_POINTER"))"
+BIRTH_EPOCH=$(jq -r '.epoch' "$COMPLETE_POINTER")
+# Session becomes real (codex rollout for worktree).
+CODEX_SID=complete-codex-sid-1
+CODEX_JSONL="$CODEX_HOME/sessions/2026/07/31/rollout-complete-codex.jsonl"
+printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"session_id\":\"$CODEX_SID\",\"cwd\":\"$COMPLETE_WT\"}}" \
+  > "$CODEX_JSONL"
+CODEX_JSONL=$(cd "$(dirname "$CODEX_JSONL")" && printf '%s/%s\n' "$(pwd -P)" "$(basename "$CODEX_JSONL")")
+# Complete publish: omit lifecycle to preserve previous (refresh path).
+FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
+  "$ROOT/bin/fm-child-node-publish.sh" "$COMPLETE_ID"
+jq -e --arg sid "$CODEX_SID" --arg path "$CODEX_JSONL" --argjson birth "$BIRTH_EPOCH" '
+  .lifecycle == "starting"
+  and .epoch == ($birth + 1)
+  and .backend == {kind:"herdr",workspace_id:"ws-c",pane_id:"pane-c"}
+  and .status.verb == "working"
+  and .conversation.harness == "codex"
+  and .conversation.session_id == $sid
+  and .conversation.transcript.adapter == "codex-rollout-v1"
+  and .conversation.transcript.id == $sid
+  and .conversation.transcript.path == $path
+  and .harness == "codex"
+' "$COMPLETE_POINTER" >/dev/null \
+  || fail "complete publish did not fill nested conversation while preserving birth fields (got: $(jq -c . "$COMPLETE_POINTER"))"
+consumer_shape_accepts "$COMPLETE_POINTER" \
+  || fail "consumer shape rejected completed pointer"
+pass "birth-then-complete publish fills conversation; preserves lifecycle/backend/status"
+
+# --- slice 14: fm-spawn birth + complete publish (live path transcript) ---
+SPAWN_CONV_CASE="$TEST_ROOT/spawn-conv"
+SPAWN_CONV_HOME="$SPAWN_CONV_CASE/home"
+SPAWN_CONV_PROJ="$SPAWN_CONV_CASE/project"
+SPAWN_CONV_WT="$SPAWN_CONV_CASE/wt"
+SPAWN_CONV_FAKE=$(make_spawn_fakebin "$SPAWN_CONV_CASE/fake")
+mkdir -p "$SPAWN_CONV_HOME/data" "$SPAWN_CONV_HOME/projects" "$SPAWN_CONV_HOME/state" "$SPAWN_CONV_HOME/config"
+printf 'grok\n' > "$SPAWN_CONV_HOME/config/crew-harness"
+fm_git_worktree "$SPAWN_CONV_PROJ" "$SPAWN_CONV_WT" wt-child-conv
+SPAWN_CONV_WT=$(cd "$SPAWN_CONV_WT" && pwd -P)
+touch "$SPAWN_CONV_HOME/state/.last-watcher-beat"
+CONV_SHIP_ID=child-conv-k4
+mkdir -p "$SPAWN_CONV_HOME/data/$CONV_SHIP_ID"
+printf 'brief\n' > "$SPAWN_CONV_HOME/data/$CONV_SHIP_ID/brief.md"
+# Isolate grok discovery for this spawn home's worktree.
+export GROK_HOME="$SPAWN_CONV_CASE/grok-home"
+mkdir -p "$GROK_HOME/sessions"
+FM_HOME="$SPAWN_CONV_HOME" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-resident-setup.sh"
+set +e
+SPAWN_CONV_OUT=$(
+  FM_ROOT_OVERRIDE='' FM_HOME="$SPAWN_CONV_HOME" \
+    FM_STATE_OVERRIDE="$SPAWN_CONV_HOME/state" FM_DATA_OVERRIDE="$SPAWN_CONV_HOME/data" \
+    FM_PROJECTS_OVERRIDE="$SPAWN_CONV_HOME/projects" FM_CONFIG_OVERRIDE="$SPAWN_CONV_HOME/config" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$SPAWN_CONV_WT" TMUX="fake,1,0" \
+    PATH="$SPAWN_CONV_FAKE:$PATH" \
+    GROK_HOME="$GROK_HOME" \
+    "$SPAWN" "$CONV_SHIP_ID" "$SPAWN_CONV_PROJ" \
+      --harness grok \
+      --adopt-worktree --adopt-worktree-path "$SPAWN_CONV_WT" 2>&1
+)
+SPAWN_CONV_RC=$?
+set -e
+[ "$SPAWN_CONV_RC" -eq 0 ] || fail "grok ship spawn failed: $SPAWN_CONV_OUT"
+SPAWN_CONV_POINTER="$SPAWN_CONV_HOME/crews/$CONV_SHIP_ID/state/child-current.json"
+# Birth: harness/worktree present; conversation absent (no journal yet).
+jq -e '.harness == "grok" and .worktree != null and (has("conversation") | not)' \
+  "$SPAWN_CONV_POINTER" >/dev/null \
+  || fail "spawn birth should publish hints without inventing conversation (got: $(jq -c '{harness,worktree,conversation}' "$SPAWN_CONV_POINTER"))"
+# Journal appears; refresh publish completes conversation (omit lifecycle).
+SPAWN_GROK_ENC=$(fm_resident_grok_encode_cwd "$SPAWN_CONV_WT")
+SPAWN_GROK_SID=019fdddd-eeee-ffff-aaaa-555566667777
+mkdir -p "$GROK_HOME/sessions/$SPAWN_GROK_ENC/$SPAWN_GROK_SID"
+SPAWN_GROK_JSONL="$GROK_HOME/sessions/$SPAWN_GROK_ENC/$SPAWN_GROK_SID/chat_history.jsonl"
+printf '%s\n' '{"type":"user","content":"spawn-complete"}' > "$SPAWN_GROK_JSONL"
+SPAWN_GROK_JSONL=$(cd "$(dirname "$SPAWN_GROK_JSONL")" && printf '%s/%s\n' "$(pwd -P)" "$(basename "$SPAWN_GROK_JSONL")")
+FM_HOME="$SPAWN_CONV_HOME" FM_ROOT_OVERRIDE="$ROOT" \
+  FM_STATE_OVERRIDE="$SPAWN_CONV_HOME/state" \
+  GROK_HOME="$GROK_HOME" \
+  "$ROOT/bin/fm-child-node-publish.sh" "$CONV_SHIP_ID"
+jq -e --arg sid "$SPAWN_GROK_SID" --arg path "$SPAWN_GROK_JSONL" '
+  .lifecycle == "starting"
+  and .conversation.harness == "grok"
+  and .conversation.session_id == $sid
+  and .conversation.transcript.adapter == "grok-chat-history-v1"
+  and .conversation.transcript.path == $path
+  and .harness == "grok"
+' "$SPAWN_CONV_POINTER" >/dev/null \
+  || fail "spawn birth-then-complete failed (got: $(jq -c '{lifecycle,harness,conversation}' "$SPAWN_CONV_POINTER"))"
+consumer_shape_accepts "$SPAWN_CONV_POINTER" \
+  || fail "consumer shape rejected spawn-completed pointer"
+pass "fm-spawn birth-then-complete: nested conversation arrives for consumer read"

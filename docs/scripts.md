@@ -18,8 +18,8 @@ The shared no-mistakes gate refusal used by `fm-spawn.sh`, `fm-send.sh`, and `fm
 | `fm-resident-publish.sh` | Publish one atomic Crew Lead current-state pointer snapshot                          |
 | `fm-resident-lib.sh`     | Shared Crew Lead resident-container helpers                                         |
 | `fm-child-node-setup.sh` | Provision Child Node contract, immutable provision identity, and static descriptor under `crews/<task-id>/` |
-| `fm-child-node-publish.sh` | Publish one atomic Child Node current-state pointer snapshot                      |
-| `fm-child-node-lib.sh`   | Shared Child Node path, capability, and identity helpers (reuses resident atomic JSON) |
+| `fm-child-node-publish.sh` | Publish one atomic Child Node current-state pointer (hints + nested conversation when knowable) |
+| `fm-child-node-lib.sh`   | Shared Child Node path, capability, identity, and refresh helpers (reuses resident atomic JSON) |
 | `fm-fleet-sync.sh`       | Refresh project clones with safe fast-forwards, self-heals, `STUCK:` reports, and branch pruning |
 | `fm-fleet-snapshot.sh`   | Print the read-only structured fleet snapshot JSON (schema `fm-fleet-snapshot.v1`)   |
 | `fm-bearings-snapshot.sh` | Project the fleet snapshot to the compact TOON bearings view; local-only unless `--include-prs` |
