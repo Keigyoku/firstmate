@@ -1153,13 +1153,6 @@ EOF
   while IFS= read -r w; do
     kind=$(window_kind "$w")
     task=$(window_to_task "$w" "$STATE")
-    # held-gate parks clear themselves when the ask-user run-step resumes; other
-    # park reasons stay until firstmate runs fm-park.sh --clear.
-    if crew_is_parked "$task"; then
-      case "$(crew_parked_reason "$task")" in
-        'held for captain at ask-user gate') held_gate_is_verified "$task" || true ;;
-      esac
-    fi
     key=${w//:/_}
     key=${key//\//_}
     key=${key//./_}

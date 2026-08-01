@@ -327,7 +327,7 @@ test_classify_stale_verified_held_gate_pauses() {
   pass "away-mode stale classification reuses pause handling for a park marker"
 }
 
-test_housekeeping_held_gate_resurfaces_and_clears() {
+test_housekeeping_held_gate_resurfaces_and_persists() {
   local dir state fakebin win pane key
   dir=$(make_supercase held-gate-resurface)
   state="$dir/state"
@@ -353,10 +353,9 @@ test_housekeeping_held_gate_resurfaces_and_clears() {
   PATH="$fakebin:$PATH" FM_FAKE_CREW_STATE='state: working · source: run-step · validating (fixing)' \
     FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
     FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
-  [ ! -e "$state/held-gate-housekeeping.parked" ] || fail "away-mode reconciliation retained a resumed park marker"
-  [ ! -e "$state/.subsuper-paused-$key" ] || fail "away-mode reconciliation retained pause tracking after resume"
+  [ -e "$state/held-gate-housekeeping.parked" ] || fail "away-mode reconciliation cleared a durable park marker"
   unset FM_STATE_OVERRIDE FM_CREW_STATE_BIN FM_FAKE_CREW_STATE
-  pass "away-mode held gates re-surface on pause cadence and clear on authoritative resume"
+  pass "away-mode held gates re-surface and persist until structural clear"
 }
 
 test_classify_check_and_unknown_escalate() {
@@ -534,6 +533,26 @@ test_housekeeping_seeds_pause_marker_from_status() {
   [ ! -e "$state/.subsuper-stale-$key" ] || fail "park marker seeded wedge tracking"
   unset FM_STATE_OVERRIDE
   pass "housekeeping seeds pause tracking from park marker without a watcher marker"
+}
+
+test_pause_marker_record_anchors_on_parked_at() {
+  local dir state key win parked_at recorded
+  dir=$(make_supercase pause-anchor)
+  state="$dir/state"
+  win="sess:fm-held-anchor"
+  export FM_STATE_OVERRIDE="$state"
+  printf 'window=%s\nkind=ship\n' "$win" > "$state/held-anchor.meta"
+  park_write held-anchor 'awaiting the upstream release' 3600
+  parked_at=$(( $(date +%s) - 3500 ))
+  jq --argjson at "$parked_at" '.parked_at=$at' "$state/held-anchor.parked" > "$state/held-anchor.parked.tmp"
+  mv "$state/held-anchor.parked.tmp" "$state/held-anchor.parked"
+  pause_marker_record "$win" "$state"
+  key=$(printf '%s' "held-anchor" | tr '.:/' '___')
+  recorded=$(cat "$state/.subsuper-paused-$key" 2>/dev/null || true)
+  [ "$recorded" = "$parked_at" ] \
+    || fail "daemon pause cadence started at $recorded instead of parked_at $parked_at"
+  unset FM_STATE_OVERRIDE
+  pass "daemon pause tracking inherits the park marker cadence"
 }
 
 # housekeeping re-surfaces a park only past recheck_secs (never a wedge), and
@@ -2126,10 +2145,11 @@ test_handle_wake_terminal_signal_clears_pause_tracking
 test_housekeeping_migrates_watcher_pause_marker
 test_housekeeping_migrates_watcher_unpaused_marker_to_clear
 test_housekeeping_seeds_pause_marker_from_status
+test_pause_marker_record_anchors_on_parked_at
 test_housekeeping_persistent_stale_escalates
 test_housekeeping_resumed_stale_cleared
 test_housekeeping_paused_resurfaces_and_resets
-test_housekeeping_held_gate_resurfaces_and_clears
+test_housekeeping_held_gate_resurfaces_and_persists
 test_housekeeping_paused_resumed_cleared
 test_housekeeping_paused_unpaused_cleared
 test_housekeeping_stale_marker_transitions_to_pause

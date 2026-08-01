@@ -485,16 +485,21 @@ stale_marker_remove() {  # <window> <state>
   rm -f "$state/.subsuper-stale-$key"
 }
 
-# Pause marker: state/.subsuper-paused-<key> holds the epoch a deliberate hold was
-# first observed idle. Housekeeping ages it against PAUSE_RESURFACE_SECS (much
-# longer than a wedge) and re-surfaces the pause once per window. Recording is
-# create-if-absent so the timestamp is stable across a churny idle pane (many
-# distinct stale hashes map to one marker), keeping the cadence hash-immune.
+# Pause marker: state/.subsuper-paused-<key> holds the current recheck-window
+# epoch for a deliberate hold. Its first value comes from state/<id>.parked's
+# parked_at; after each re-surface housekeeping resets it for the next window.
+# Recording is create-if-absent so a churny idle pane cannot reset the cadence.
 pause_marker_record() {  # <window> <state> - create if absent
-  local win=$1 state=$2 key marker
-  key=$(_stale_key "$(window_to_task "$win" "$state")")
+  local win=$1 state=$2 task key marker at
+  task=$(window_to_task "$win" "$state")
+  key=$(_stale_key "$task")
   marker="$state/.subsuper-paused-$key"
-  [ -e "$marker" ] || _now > "$marker"
+  [ -e "$marker" ] && return
+  at=$(FM_STATE_OVERRIDE="$state" crew_parked_at "$task")
+  case "$at" in
+    ''|*[!0-9]*) _now > "$marker" ;;
+    *) printf '%s\n' "$at" > "$marker" ;;
+  esac
 }
 
 pause_marker_remove() {  # <window> <state>
@@ -519,14 +524,6 @@ reconcile_pause_tracking() {  # <window> <state> <last-status-line>
   key=$(_stale_key "$task")
   marker="$state/.subsuper-paused-$key"
   watcher_key=$(_stale_key "$win")
-  # Clear held-gate parks that no longer verify; other park reasons stay.
-  if FM_STATE_OVERRIDE="$state" crew_is_parked "$task"; then
-    case "$(FM_STATE_OVERRIDE="$state" crew_parked_reason "$task")" in
-      'held for captain at ask-user gate')
-        FM_STATE_OVERRIDE="$state" held_gate_is_verified "$task" || true
-        ;;
-    esac
-  fi
   if FM_STATE_OVERRIDE="$state" crew_is_parked "$task"; then
     stale_marker_remove "$win" "$state"
     pause_marker_record "$win" "$state"

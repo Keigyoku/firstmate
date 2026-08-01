@@ -226,9 +226,9 @@ test_crew_absorb_class_classifier() {
   [ "$(crew_absorb_class a)" = paused ] || fail "verified held ask-user gate not classed paused"
   [ -e "$state/a.parked" ] || fail "verified held park marker was cleared"
   FM_FAKE_CREW_STATE='state: working · source: run-step · validating (fixing)'
-  [ "$(crew_absorb_class a)" = working ] || fail "resumed held gate not classed working"
-  held_gate_is_verified a && fail "held_gate_is_verified true after resume"
-  [ ! -e "$state/a.parked" ] || fail "held-gate park marker not cleared on resume"
+  [ "$(crew_absorb_class a)" = paused ] || fail "post-write run-step state overrode held park"
+  [ -e "$state/a.parked" ] || fail "post-write run-step state cleared held park"
+  park_clear a
   FM_FAKE_CREW_STATE='state: working · source: status-log · working: compiling'
   [ "$(crew_absorb_class a)" = none ] || fail "stale working: status-log classed absorbable"
   FM_FAKE_CREW_STATE='state: unknown · source: none · worktree gone'
@@ -241,7 +241,7 @@ test_crew_absorb_class_classifier() {
 }
 
 # Park marker absorbs regardless of run-step shape; without marker, never absorbs
-# via status-verb corroboration. Active working still outranks a park marker.
+# via status-verb corroboration. Marker presence outranks run-step state.
 test_crew_absorb_class_declared_pause_outranks_terminal_run() {
   local dir fakebin state
   dir=$(make_case absorb-pause-outranks); fakebin="$dir/fakebin"; state="$dir/state"
@@ -275,11 +275,11 @@ test_crew_absorb_class_declared_pause_outranks_terminal_run() {
   [ "$(crew_absorb_class a)" = none ] \
     || fail "status paused: without park marker was absorbed under cancelled: $(crew_absorb_class a)"
 
-  # Active working run-step outranks a park marker (crew resumed).
+  # Active working run-step does not outrank a structural park marker.
   park_write a 'holding for upstream' 3600
   FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
-  [ "$(crew_absorb_class a)" = working ] \
-    || fail "active run-step did not outrank park marker: $(crew_absorb_class a)"
+  [ "$(crew_absorb_class a)" = paused ] \
+    || fail "active run-step overrode park marker: $(crew_absorb_class a)"
 
   # Without marker, blocked and empty status still surface.
   park_clear a
@@ -845,7 +845,7 @@ test_unmarked_parked_gate_still_surfaces() {
   pass "a parked ask-user gate without the firstmate marker still surfaces normally"
 }
 
-test_held_gate_marker_clears_before_stale() {
+test_held_gate_marker_persists_until_structural_clear() {
   local dir state fakebin out capture_file window pid sig
   dir=$(make_case held-gate-resumed-before-stale); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-held-resumed"
@@ -862,15 +862,15 @@ test_held_gate_marker_clears_before_stale() {
   watch_bg "$state" "$fakebin" "$out"
   pid=$!
   if ! wait_live "$pid" 30; then
-    reap "$pid"; fail "watcher exited while clearing a resumed held gate: $(cat "$out")"
+    reap "$pid"; fail "watcher exited while absorbing a durable held gate: $(cat "$out")"
   fi
-  [ ! -e "$state/held-resumed.parked" ] || {
+  [ -e "$state/held-resumed.parked" ] || {
     reap "$pid"
-    fail "watcher retained a park marker after the authoritative run resumed"
+    fail "watcher cleared a park marker after the run-step changed"
   }
   reap "$pid"
   unset FM_FAKE_CREW_STATE FM_STATE_OVERRIDE
-  pass "watcher clears a resumed held-gate park before stale classification"
+  pass "watcher preserves a held-gate park until structural clear"
 }
 
 test_secondmate_paused_resurfaces_in_normal_mode() {
@@ -1004,7 +1004,7 @@ test_nonterminal_stale_pause_transitions_reclassify_unchanged_hash() {
   pass "unchanged stale hashes reclassify when a crew enters or leaves park"
 }
 
-test_nonterminal_paused_rechecks_authoritative_state() {
+test_nonterminal_paused_ignores_post_write_run_state() {
   local dir state fakebin out capture_file window key pane_hash sig pid
   dir=$(make_case nonterminal-paused-recheck); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-pause-recheck"
@@ -1027,17 +1027,17 @@ test_nonterminal_paused_rechecks_authoritative_state() {
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
   if ! wait_live "$pid" 30; then
-    reap "$pid"; fail "an active run behind a park marker surfaced instead of resuming wedge tracking: $(cat "$out")"
+    reap "$pid"; fail "post-write run state surfaced a structurally parked crew: $(cat "$out")"
   fi
-  [ ! -e "$state/.paused-$key" ] || { reap "$pid"; fail "authoritative active run retained paused mode"; }
-  [ -s "$state/.stale-since-$key" ] || { reap "$pid"; fail "authoritative active run did not resume wedge tracking"; }
+  [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "post-write run state cleared paused mode"; }
+  [ ! -e "$state/.stale-since-$key" ] || { reap "$pid"; fail "post-write run state started wedge tracking"; }
   reap "$pid"
   unset FM_FAKE_CREW_STATE FM_STATE_OVERRIDE
-  pass "a park marker is rechecked against authoritative active-run state"
+  pass "a park marker remains authoritative across later run-step changes"
 }
 
-test_paused_authoritative_working_preserves_wedge_timer() {
-  local dir state fakebin out capture_file window key pane_hash sig pid since
+test_paused_post_write_working_clears_wedge_timer() {
+  local dir state fakebin out capture_file window key pane_hash sig pid
   dir=$(make_case paused-working-preserves-wedge-timer); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-paused-working"
   export FM_STATE_OVERRIDE="$state"
@@ -1052,30 +1052,21 @@ test_paused_authoritative_working_preserves_wedge_timer() {
   printf '%s' "$pane_hash" > "$state/.stale-$key"
   printf '1\n' > "$state/.count-$key"
   : > "$state/.paused-$key"
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
   export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
 
-  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
-    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
-    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
-  pid=$!
-  wait_numeric_file "$state/.stale-since-$key" 30 || { reap "$pid"; fail "authoritative working state did not start wedge tracking"; }
-  since=$(cat "$state/.stale-since-$key")
-  sleep 2
-  [ "$(cat "$state/.stale-since-$key" 2>/dev/null || true)" = "$since" ] \
-    || { reap "$pid"; fail "repeat authoritative working recheck reset the wedge timer"; }
-  reap "$pid"
-
-  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
-  : > "$out"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
-  wait_for_exit "$pid" 40 || fail "authoritative working state did not wedge-escalate past the threshold"
-  grep -F "possible wedge" "$out" >/dev/null || fail "authoritative working wedge escalation omitted its reason"
-  [ ! -e "$state/.stale-since-$key" ] || fail "wedge timer remained after authoritative working escalation"
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "post-write working state wedge-escalated a structurally parked crew: $(cat "$out")"
+  fi
+  [ ! -e "$state/.stale-since-$key" ] || { reap "$pid"; fail "park marker retained a wedge timer"; }
+  [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "post-write working state cleared paused mode"; }
+  reap "$pid"
   unset FM_FAKE_CREW_STATE FM_STATE_OVERRIDE
-  pass "a park overridden by authoritative working preserves its wedge timer and escalates"
+  pass "a park clears wedge timing despite later working run-step state"
 }
 
 # --- consecutive wedge escalations on the same pane demand deep inspection ----
@@ -1421,13 +1412,13 @@ test_nonterminal_stale_paused_under_terminal_run_absorbed
 test_blocked_stale_surfaces_immediately_never_pause_absorbed
 test_nonterminal_stale_held_gate_absorbed_then_resurfaced
 test_unmarked_parked_gate_still_surfaces
-test_held_gate_marker_clears_before_stale
+test_held_gate_marker_persists_until_structural_clear
 test_secondmate_paused_resurfaces_in_normal_mode
 test_secondmate_nonpaused_stale_remains_suppressed
 test_secondmate_unpause_clears_pause_tracking
 test_nonterminal_stale_pause_transitions_reclassify_unchanged_hash
-test_nonterminal_paused_rechecks_authoritative_state
-test_paused_authoritative_working_preserves_wedge_timer
+test_nonterminal_paused_ignores_post_write_run_state
+test_paused_post_write_working_clears_wedge_timer
 test_nonterminal_stale_repairs_missing_or_corrupt_timer
 test_triage_log_size_cap_accepts_spaced_wc_counts
 test_heartbeat_no_change_absorbed

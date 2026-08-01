@@ -169,12 +169,29 @@ test_held_ask_user_gate_writes_park_marker() {
     || fail "held-gate reason wrong: $(crew_parked_reason held)"
   [ "$(crew_absorb_class held)" = paused ] \
     || fail "held-gate park not classed paused: $(crew_absorb_class held)"
-  # Resume clears only held-gate parks via held_gate_is_verified.
+  # Post-write run-step changes do not revalidate or clear the durable marker.
   export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (fixing)'
-  held_gate_is_verified held && fail "held_gate_is_verified true after resume"
-  [ ! -e "$state/held.parked" ] || fail "held-gate park not cleared on resume"
+  [ "$(crew_absorb_class held)" = paused ] \
+    || fail "held-gate marker lost authority after run-step changed"
+  [ -e "$state/held.parked" ] || fail "held-gate park cleared by post-write run-step state"
   unset FM_STATE_OVERRIDE FM_FAKE_CREW_STATE
-  pass "held ask-user gate writes park marker with gate reason; resume clears it"
+  pass "held ask-user gate marker remains authoritative until structural clear"
+}
+
+test_failed_held_gate_mark_preserves_existing_park() {
+  local dir fakebin state
+  dir=$(make_case held-gate-failure); fakebin="$dir/fakebin"; state="$dir/state"
+  export FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh"
+  export FM_STATE_OVERRIDE="$state"
+  printf 'window=test:fm-held-failure\nkind=ship\n' > "$state/held-failure.meta"
+  park_write held-failure 'capacity backoff' 7200
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
+  mark_held_gate_if_verified held-failure && fail "non-gate run-step passed held-gate verification"
+  [ -e "$state/held-failure.parked" ] || fail "failed held-gate mark deleted an existing park"
+  [ "$(crew_parked_reason held-failure)" = 'capacity backoff' ] \
+    || fail "failed held-gate mark changed the existing park"
+  unset FM_STATE_OVERRIDE FM_FAKE_CREW_STATE
+  pass "failed held-gate mark preserves an existing structural park"
 }
 
 # Parked crew whose status then gains done:/blocked: still wakes (signal path).
@@ -292,8 +309,8 @@ test_parked_reviewer_stale_absorbed_then_resurfaced() {
   pass "parked reviewer stale is absorbed then re-surfaced once per cadence"
 }
 
-# Working evidence still outranks a park marker (resumed crew).
-test_active_run_outranks_stale_park_marker() {
+# A park marker remains authoritative even if the run-step later reads working.
+test_park_marker_outranks_active_run() {
   local dir fakebin state
   dir=$(make_case park-outranked); fakebin="$dir/fakebin"; state="$dir/state"
   export FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh"
@@ -301,10 +318,10 @@ test_active_run_outranks_stale_park_marker() {
   printf 'window=test:fm-x\nkind=ship\n' > "$state/x.meta"
   park_write x 'stale hold' 3600
   export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
-  [ "$(crew_absorb_class x)" = working ] \
-    || fail "active run did not outrank park marker: $(crew_absorb_class x)"
+  [ "$(crew_absorb_class x)" = paused ] \
+    || fail "active run overrode park marker: $(crew_absorb_class x)"
   unset FM_STATE_OVERRIDE FM_FAKE_CREW_STATE
-  pass "active working run-step outranks a stale park marker"
+  pass "park marker outranks post-write run-step state"
 }
 
 # --- run -------------------------------------------------------------------
@@ -314,9 +331,10 @@ test_parked_reviewer_cancelled_or_no_run_absorbs_with_marker
 test_needs_decision_board_poller_absorbs_with_marker
 test_capacity_backoff_absorbs_with_marker
 test_held_ask_user_gate_writes_park_marker
+test_failed_held_gate_mark_preserves_existing_park
 test_parked_crew_captain_relevant_status_still_wakes
 test_stopped_crew_without_marker_still_wakes
 test_parked_reviewer_stale_absorbed_then_resurfaced
-test_active_run_outranks_stale_park_marker
+test_park_marker_outranks_active_run
 
 echo "all fm-park tests passed"

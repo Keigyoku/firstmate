@@ -313,29 +313,6 @@ mark_held_gate_if_verified() {  # <id>
     park_write "$id" "held for captain at ask-user gate" "$recheck" ""
     return 0
   fi
-  park_clear "$id"
-  return 1
-}
-
-# 0 if a park marker is present for a still-verified ask-user gate; clears the
-# marker when the run-step no longer verifies the gate. Absorb no longer requires
-# this re-check - prefer crew_is_parked - but held-gate write and resume cleanup
-# still use it.
-held_gate_is_verified() {  # <id>
-  local id=$1 line
-  [ -n "$id" ] || return 1
-  crew_is_parked "$id" || return 1
-  line=$(crew_current_state_line "$id")
-  if crew_line_is_ask_user_gate "$line"; then
-    return 0
-  fi
-  # Only clear when the marker reason is the held-gate reason, so a capacity or
-  # external-wait park is not wiped by a non-gate run-step.
-  case "$(crew_parked_reason "$id")" in
-    'held for captain at ask-user gate')
-      park_clear "$id"
-      ;;
-  esac
   return 1
 }
 
@@ -449,14 +426,16 @@ signal_reason_is_actionable() {  # <file> ...
 #   none    - neither, so the wake must surface (a stopped crew with no park
 #             marker, or unreadable verdict). A stopped crew without a marker is
 #             NEVER silently absorbed.
-# Working evidence outranks a stale park marker so a crew that resumed after a
-# hold is never mis-absorbed as paused.
 # NOT a pure read: fm-crew-state.sh may make a bounded no-mistakes call for the
 # working decision, so callers run it only on no-verb signal and first-sighting
 # stale paths, never every wake. FM_CREW_STATE_BIN lets tests stub the verdict.
 crew_absorb_class() {  # <id>
   local id=$1 line state src
   [ -n "$id" ] || { printf 'none'; return; }
+  if crew_is_parked "$id"; then
+    printf 'paused'
+    return
+  fi
   line=$(crew_current_state_line "$id")
   if [ -n "$line" ]; then
     state=${line#state: }; state=${state%% *}
@@ -469,10 +448,6 @@ crew_absorb_class() {  # <id>
           ;;
       esac
     fi
-  fi
-  if crew_is_parked "$id"; then
-    printf 'paused'
-    return
   fi
   printf 'none'
 }
