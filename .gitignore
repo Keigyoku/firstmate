@@ -12,3 +12,4 @@ inbox/
 config/
 .god-node/provision.json
 crews/
+tests/fixtures/vellum-child-current-consumer/target/
