@@ -427,6 +427,12 @@ jq -e '(has("harness") | not) and (has("worktree") | not)' "$ABSENT_POINTER" >/d
   || fail "meta without harness/worktree keys must not fabricate values (got: $(jq -c '{harness,worktree}' "$ABSENT_POINTER"))"
 pass "unknown harness and worktree are omitted, never fabricated"
 
+# Isolate harness discovery before any fm-spawn case can consult a journal.
+export GROK_HOME="$TEST_ROOT/grok-home"
+export CLAUDE_HOME="$TEST_ROOT/claude-home"
+export CODEX_HOME="$TEST_ROOT/codex-home"
+mkdir -p "$GROK_HOME/sessions" "$CLAUDE_HOME/.claude/projects" "$CODEX_HOME/sessions/2026/07/31"
+
 # --- slice 10: fm-spawn with non-claude harness publishes matching child-current ---
 SPAWN_CODEX_CASE="$TEST_ROOT/spawn-codex"
 SPAWN_CODEX_HOME="$SPAWN_CODEX_CASE/home"
@@ -480,14 +486,10 @@ consumer_shape_deserialize() {
   "$CONSUMER_FIXTURE" "$@"
 }
 
-# Isolated harness roots so discovery never touches the operator's real journals.
-export GROK_HOME="$TEST_ROOT/grok-home"
-export CLAUDE_HOME="$TEST_ROOT/claude-home"
-export CODEX_HOME="$TEST_ROOT/codex-home"
-mkdir -p "$GROK_HOME/sessions" "$CLAUDE_HOME/.claude/projects" "$CODEX_HOME/sessions/2026/07/31"
-
 # shellcheck source=bin/fm-resident-lib.sh
 . "$ROOT/bin/fm-resident-lib.sh"
+# shellcheck source=bin/fm-child-node-lib.sh
+. "$ROOT/bin/fm-child-node-lib.sh"
 
 CONV_ID=conv-grok-k1
 CONV_HOME="$HOME_DIR/crews/$CONV_ID"
@@ -600,9 +602,9 @@ CODEX_JSONL="$CODEX_HOME/sessions/2026/07/31/rollout-complete-codex.jsonl"
 printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"session_id\":\"$CODEX_SID\",\"cwd\":\"$COMPLETE_WT\"}}" \
   > "$CODEX_JSONL"
 CODEX_JSONL=$(cd "$(dirname "$CODEX_JSONL")" && printf '%s/%s\n' "$(pwd -P)" "$(basename "$CODEX_JSONL")")
-# Complete publish: omit lifecycle to preserve previous (refresh path).
-FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
-  "$ROOT/bin/fm-child-node-publish.sh" "$COMPLETE_ID"
+# Complete through the same best-effort helper the watcher calls on status and
+# turn-end signals; omitted lifecycle preserves the prior observed state.
+fm_child_node_try_refresh "$HOME_DIR" "$COMPLETE_ID" "$ROOT"
 jq -e --arg sid "$CODEX_SID" --arg path "$CODEX_JSONL" --argjson birth "$BIRTH_EPOCH" \
   --argjson backend "$BIRTH_BACKEND" --argjson attestation "$BIRTH_ATTESTATION" \
   --argjson status "$BIRTH_STATUS" --argjson process "$BIRTH_PROCESS" '
@@ -721,10 +723,8 @@ mkdir -p "$GROK_HOME/sessions/$SPAWN_GROK_ENC/$SPAWN_GROK_SID"
 SPAWN_GROK_JSONL="$GROK_HOME/sessions/$SPAWN_GROK_ENC/$SPAWN_GROK_SID/chat_history.jsonl"
 printf '%s\n' '{"type":"user","content":"spawn-complete"}' > "$SPAWN_GROK_JSONL"
 SPAWN_GROK_JSONL=$(cd "$(dirname "$SPAWN_GROK_JSONL")" && printf '%s/%s\n' "$(pwd -P)" "$(basename "$SPAWN_GROK_JSONL")")
-FM_HOME="$SPAWN_CONV_HOME" FM_ROOT_OVERRIDE="$ROOT" \
-  FM_STATE_OVERRIDE="$SPAWN_CONV_HOME/state" \
-  GROK_HOME="$GROK_HOME" \
-  "$ROOT/bin/fm-child-node-publish.sh" "$CONV_SHIP_ID"
+FM_STATE_OVERRIDE="$SPAWN_CONV_HOME/state" GROK_HOME="$GROK_HOME" \
+  fm_child_node_try_refresh "$SPAWN_CONV_HOME" "$CONV_SHIP_ID" "$ROOT"
 jq -e --arg sid "$SPAWN_GROK_SID" --arg path "$SPAWN_GROK_JSONL" '
   .lifecycle == "starting"
   and .conversation.harness == "grok"

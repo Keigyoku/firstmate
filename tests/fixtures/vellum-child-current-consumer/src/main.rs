@@ -102,8 +102,9 @@ fn main() {
     let mut args = env::args().skip(1);
     let path = required_arg(&mut args, "json path");
     let mode = required_arg(&mut args, "mode");
-    let current: ChildCurrent = serde_json::from_reader(File::open(path).expect("open child-current"))
-        .expect("deserialize ChildCurrent");
+    let current: ChildCurrent =
+        serde_json::from_reader(File::open(path).expect("open child-current"))
+            .expect("deserialize ChildCurrent");
 
     match mode.as_str() {
         "absent" => assert!(current.conversation.is_none()),
