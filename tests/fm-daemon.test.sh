@@ -328,7 +328,7 @@ test_classify_stale_verified_held_gate_pauses() {
 }
 
 test_housekeeping_held_gate_resurfaces_and_persists() {
-  local dir state fakebin win pane key
+  local dir state fakebin win pane key back
   dir=$(make_supercase held-gate-resurface)
   state="$dir/state"
   fakebin="$dir/fakebin"
@@ -343,7 +343,11 @@ test_housekeeping_held_gate_resurfaces_and_persists() {
   export FM_FAKE_CREW_STATE='state: parked · source: run-step · parked at review: 1 finding(s) (ask-user: captain decision)'
   mark_held_gate_if_verified held-gate-housekeeping || fail "held-gate-housekeeping park write failed"
   key=$(printf '%s' "held-gate-housekeeping" | tr ':/.' '___')
-  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
+  back=$(( $(date +%s) - 5000 ))
+  jq --argjson at "$back" '.parked_at=$at' "$state/held-gate-housekeeping.parked" > "$state/held-gate-housekeeping.parked.tmp"
+  mv "$state/held-gate-housekeeping.parked.tmp" "$state/held-gate-housekeeping.parked"
+  echo "$back" > "$state/.subsuper-paused-$key"
+  crew_parked_recheck_advance held-gate-housekeeping "$back"
   PATH="$fakebin:$PATH" FM_FAKE_CREW_STATE='state: parked · source: run-step · parked at review: 1 finding(s) (ask-user: captain decision)' \
     FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
     FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
@@ -535,8 +539,8 @@ test_housekeeping_seeds_pause_marker_from_status() {
   pass "housekeeping seeds pause tracking from park marker without a watcher marker"
 }
 
-test_pause_marker_record_anchors_on_parked_at() {
-  local dir state key win parked_at recorded
+test_pause_marker_record_inherits_shared_recheck_epoch() {
+  local dir state key win parked_at rechecked recorded
   dir=$(make_supercase pause-anchor)
   state="$dir/state"
   win="sess:fm-held-anchor"
@@ -546,19 +550,21 @@ test_pause_marker_record_anchors_on_parked_at() {
   parked_at=$(( $(date +%s) - 3500 ))
   jq --argjson at "$parked_at" '.parked_at=$at' "$state/held-anchor.parked" > "$state/held-anchor.parked.tmp"
   mv "$state/held-anchor.parked.tmp" "$state/held-anchor.parked"
+  rechecked=$(( parked_at + 3000 ))
+  crew_parked_recheck_advance held-anchor "$rechecked"
   pause_marker_record "$win" "$state"
   key=$(printf '%s' "held-anchor" | tr '.:/' '___')
   recorded=$(cat "$state/.subsuper-paused-$key" 2>/dev/null || true)
-  [ "$recorded" = "$parked_at" ] \
-    || fail "daemon pause cadence started at $recorded instead of parked_at $parked_at"
+  [ "$recorded" = "$rechecked" ] \
+    || fail "daemon pause cadence started at $recorded instead of shared epoch $rechecked"
   unset FM_STATE_OVERRIDE
-  pass "daemon pause tracking inherits the park marker cadence"
+  pass "daemon pause tracking inherits the shared park cadence epoch"
 }
 
 # housekeeping re-surfaces a park only past recheck_secs (never a wedge), and
 # RESETS the daemon marker so the window repeats rather than firing once.
 test_housekeeping_paused_resurfaces_and_resets() {
-  local dir state fakebin win pane key age
+  local dir state fakebin win pane key age back
   dir=$(make_supercase paused-resurface)
   state="$dir/state"; fakebin="$dir/fakebin"
   win="sess:fm-held-w11"; pane="$dir/pane.txt"
@@ -568,7 +574,11 @@ test_housekeeping_paused_resurfaces_and_resets() {
   park_write held-w11 'holding for the upstream tool release' 240
   printf 'idle prompt $\n' > "$pane"
   key=$(printf '%s' "held-w11" | tr ':/.' '___')
-  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
+  back=$(( $(date +%s) - 5000 ))
+  jq --argjson at "$back" '.parked_at=$at' "$state/held-w11.parked" > "$state/held-w11.parked.tmp"
+  mv "$state/held-w11.parked.tmp" "$state/held-w11.parked"
+  echo "$back" > "$state/.subsuper-paused-$key"
+  crew_parked_recheck_advance held-w11 "$back"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
     FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
   grep -F "holding for the upstream tool release" "$state/.subsuper-escalations" >/dev/null 2>&1 \
@@ -577,13 +587,15 @@ test_housekeeping_paused_resurfaces_and_resets() {
   [ -e "$state/.subsuper-paused-$key" ] || fail "pause marker cleared instead of reset for the next window"
   age=$(( $(date +%s) - $(cat "$state/.subsuper-paused-$key" 2>/dev/null || echo 0) ))
   [ "$age" -lt 60 ] || fail "pause marker was not reset to now on re-surface (age ${age}s)"
+  age=$(( $(date +%s) - $(crew_parked_recheck_epoch held-w11) ))
+  [ "$age" -lt 60 ] || fail "shared park epoch was not advanced by daemon re-surface (age ${age}s)"
   unset FM_STATE_OVERRIDE
   pass "housekeeping re-surfaces a park on the long cadence and resets its window"
 }
 
 # A park whose pane became busy again drops its daemon marker without escalating.
 test_housekeeping_paused_resumed_cleared() {
-  local dir state fakebin win pane key
+  local dir state fakebin win pane key back
   dir=$(make_supercase paused-resumed)
   state="$dir/state"; fakebin="$dir/fakebin"
   win="sess:fm-held-w12"; pane="$dir/pane.txt"
@@ -593,7 +605,11 @@ test_housekeeping_paused_resumed_cleared() {
   park_write held-w12 'holding for the upstream tool release' 240
   printf 'Working...\n' > "$pane"
   key=$(printf '%s' "held-w12" | tr ':/.' '___')
-  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
+  back=$(( $(date +%s) - 5000 ))
+  jq --argjson at "$back" '.parked_at=$at' "$state/held-w12.parked" > "$state/held-w12.parked.tmp"
+  mv "$state/held-w12.parked.tmp" "$state/held-w12.parked"
+  echo "$back" > "$state/.subsuper-paused-$key"
+  crew_parked_recheck_advance held-w12 "$back"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
     FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
   [ -e "$state/.subsuper-paused-$key" ] && fail "resumed (busy) pause marker was not cleared"
@@ -2145,7 +2161,7 @@ test_handle_wake_terminal_signal_clears_pause_tracking
 test_housekeeping_migrates_watcher_pause_marker
 test_housekeeping_migrates_watcher_unpaused_marker_to_clear
 test_housekeeping_seeds_pause_marker_from_status
-test_pause_marker_record_anchors_on_parked_at
+test_pause_marker_record_inherits_shared_recheck_epoch
 test_housekeeping_persistent_stale_escalates
 test_housekeeping_resumed_stale_cleared
 test_housekeeping_paused_resurfaces_and_resets

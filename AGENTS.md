@@ -112,6 +112,7 @@ state/               volatile runtime signals; gitignored
   <id>.grok-killguard-token firstmate-owned grok kill-guard hook registry token for the task; removed by teardown
   <id>.grok-tddguard-token  firstmate-owned grok TDD pre-execution guard hook registry token for a ship task; removed by teardown
   <id>.parked        firstmate-owned deliberate-hold marker (JSON); written by bin/fm-park.sh; absorb ownership in docs/architecture.md; removed by teardown or fm-park.sh --clear
+  .park-rechecked-<id> shared watcher/daemon park-cadence epoch; initialized from <id>.parked and removed with it
   <id>.meta          written by fm-spawn: window=, worktree=, project=, harness=, model=, effort=, kind=, mode=, yolo=, tasktmp=, and optional role=; kind=secondmate also records home= and projects=; a non-default runtime backend records further backend-specific fields (docs/configuration.md "Runtime backend"; bin/fm-backend.sh, section 8); fm-pr-check, including through fm-pr-merge, appends pr= and GitHub's pr_head= when available; fm-x-link appends x_request=, x_request_ts=, x_followups=, and optional x_platform=/x_reply_max_chars= for an X-mode-originated task (section 14)
   For treehouse-backed ship/scout tasks, worktree= is stored with the `$HOME` spelling when that spelling resolves to the same physical directory as the backend-reported path, matching treehouse's registry on symlinked-home hosts.
   <id>.check.sh      optional slow poll you write per task (e.g. merged-PR check)

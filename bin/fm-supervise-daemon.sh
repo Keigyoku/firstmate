@@ -495,7 +495,7 @@ pause_marker_record() {  # <window> <state> - create if absent
   key=$(_stale_key "$task")
   marker="$state/.subsuper-paused-$key"
   [ -e "$marker" ] && return
-  at=$(FM_STATE_OVERRIDE="$state" crew_parked_at "$task")
+  at=$(FM_STATE_OVERRIDE="$state" crew_parked_recheck_epoch "$task")
   case "$at" in
     ''|*[!0-9]*) _now > "$marker" ;;
     *) printf '%s\n' "$at" > "$marker" ;;
@@ -1067,7 +1067,7 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
 #  3) heartbeat scan: every HEARTBEAT_SCAN_SECS, grep state/*.status for a
 #     captain-relevant line the per-wake classifier missed and escalate it.
 housekeeping() {  # <state>
-  local state=$1 now due f key task win marker age last max_defer oldest pause_secs
+  local state=$1 now due f key task win marker age last max_defer oldest pause_secs epoch
   now=$(_now)
   migrate_watcher_pause_markers "$state"
 
@@ -1150,8 +1150,10 @@ housekeeping() {  # <state>
       continue
     fi
     pause_secs=$(FM_STATE_OVERRIDE="$state" crew_parked_recheck_secs "$task")
-    case "$pause_secs" in ''|*[!0-9]*) pause_secs=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT} ;; esac
-    age=$(( now - $(cat "$marker" 2>/dev/null || echo "$now") ))
+    case "$pause_secs" in ''|0*|*[!0-9]*) pause_secs=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT} ;; esac
+    epoch=$(FM_STATE_OVERRIDE="$state" crew_parked_recheck_epoch "$task")
+    case "$epoch" in ''|*[!0-9]*) epoch=$now ;; esac
+    age=$(( now - epoch ))
     [ "$age" -ge "$pause_secs" ] || continue
     stale_window_is_busy "$win" "$state"
     case "$?" in
@@ -1161,6 +1163,7 @@ housekeeping() {  # <state>
         reason=$(FM_STATE_OVERRIDE="$state" crew_parked_reason "$task")
         [ -n "$reason" ] || reason='deliberate hold'
         escalate_add "$state" "paused ${age}s ($reason, recheck whether the wait still holds): $win"
+        FM_STATE_OVERRIDE="$state" crew_parked_recheck_advance "$task" "$now"
         _now > "$marker"
         ;;
     esac

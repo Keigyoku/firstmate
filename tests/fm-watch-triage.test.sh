@@ -690,7 +690,7 @@ test_nonterminal_stale_paused_absorbed_then_resurfaced() {
   grep -F "stale: $window" "$out" >/dev/null || fail "re-surface did not print a stale wake"
   grep -F "holding for the upstream tool release" "$out" >/dev/null || fail "re-surface was not labeled with park reason"
   grep -F "possible wedge" "$out" >/dev/null && fail "a park was mislabeled a possible wedge"
-  [ -e "$state/.paused-resurfaced-$key" ] || fail "the parked re-surface throttle marker was not recorded"
+  [ -e "$(park_recheck_marker held)" ] || fail "the shared park recheck epoch was not recorded"
   [ ! -e "$state/.stale-since-$key" ] || fail "a parked re-surface must not use the wedge timer"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the parked re-surface failed"
   grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "parked re-surface was not queued"
@@ -816,7 +816,7 @@ test_nonterminal_stale_held_gate_absorbed_then_resurfaced() {
   wait_for_exit "$pid" 40 || fail "watcher did not re-surface an aged held gate"
   grep -F "held for captain at ask-user gate" "$out" >/dev/null || fail "held-gate re-surface omitted its reason"
   grep -F "possible wedge" "$out" >/dev/null && fail "held gate was mislabeled a wedge"
-  [ -e "$state/.paused-resurfaced-$key" ] || fail "held-gate re-surface throttle was not recorded"
+  [ -e "$(park_recheck_marker held-gate)" ] || fail "held-gate shared recheck epoch was not recorded"
   unset FM_FAKE_CREW_STATE FM_STATE_OVERRIDE
   pass "a verified held gate is absorbed on pause cadence and re-surfaces once after the window"
 }

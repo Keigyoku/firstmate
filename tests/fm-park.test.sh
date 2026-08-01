@@ -54,7 +54,7 @@ seen_sig() {
 # --- park CLI + marker schema ----------------------------------------------
 
 test_park_cli_writes_and_clears_json_marker() {
-  local dir state marker
+  local dir state marker parked_at rechecked
   dir=$(make_case park-cli); state="$dir/state"
   export FM_STATE_OVERRIDE="$state"
   printf 'window=test:fm-a\nkind=ship\n' > "$state/a.meta"
@@ -69,11 +69,33 @@ test_park_cli_writes_and_clears_json_marker() {
   crew_is_parked a || fail "crew_is_parked false after park write"
   [ "$(crew_parked_reason a)" = 'capacity backoff' ] || fail "crew_parked_reason mismatch"
   [ "$(crew_parked_recheck_secs a)" = '1800' ] || fail "crew_parked_recheck_secs mismatch"
+  parked_at=$(crew_parked_at a)
+  rechecked=$(( parked_at + 1 ))
+  crew_parked_recheck_advance a "$rechecked" || fail "shared recheck epoch write failed"
+  [ "$(crew_parked_recheck_epoch a)" = "$rechecked" ] || fail "shared recheck epoch mismatch"
   "$PARK" --clear a || fail "fm-park.sh --clear failed"
   [ ! -e "$marker" ] || fail "park marker remained after --clear"
+  [ ! -e "$(park_recheck_marker a)" ] || fail "shared recheck epoch remained after --clear"
   ! crew_is_parked a || fail "crew_is_parked true after clear"
   unset FM_STATE_OVERRIDE
   pass "fm-park.sh writes JSON state/<id>.parked and --clear removes it"
+}
+
+test_park_cli_rejects_zero_recheck() {
+  local dir state err
+  dir=$(make_case park-zero); state="$dir/state"; err="$dir/err"
+  printf 'window=test:fm-zero\nkind=ship\n' > "$state/zero.meta"
+  if FM_STATE_OVERRIDE="$state" "$PARK" zero --recheck 0 2> "$err"; then
+    fail "fm-park.sh accepted --recheck 0"
+  fi
+  grep -F -- '--recheck must be a positive integer seconds' "$err" >/dev/null \
+    || fail "fm-park.sh zero rejection was unclear: $(cat "$err")"
+  [ ! -e "$state/zero.parked" ] || fail "zero recheck wrote a park marker"
+  if FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=0 "$PARK" zero 2> "$err"; then
+    fail "fm-park.sh accepted a zero default recheck"
+  fi
+  [ ! -e "$state/zero.parked" ] || fail "zero default recheck wrote a park marker"
+  pass "fm-park.sh rejects zero recheck intervals"
 }
 
 # Escape: parked reviewer with cancelled/no run + declared pause trips stale on
@@ -293,8 +315,23 @@ test_parked_reviewer_stale_absorbed_then_resurfaced() {
   jq --argjson at "$back" '.parked_at=$at | .recheck_secs=240' "$marker" > "$marker.tmp" && mv "$marker.tmp" "$marker"
   if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$marker"
   else touch -m -d "@$back" "$marker"; fi
+  crew_parked_recheck_advance rev "$(date +%s)"
   : > "$out"
   printf 'idle at review, cancelled run, still waiting' > "$capture_file"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "watcher duplicated a recent daemon park recheck: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || { reap "$pid"; fail "shared daemon epoch did not throttle watcher recheck"; }
+  reap "$pid"
+
+  crew_parked_recheck_advance rev "$back"
+  : > "$out"
+  printf 'idle at review, cancelled run, still waiting again' > "$capture_file"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
@@ -304,7 +341,7 @@ test_parked_reviewer_stale_absorbed_then_resurfaced() {
   grep -F "holding for captain review smoke" "$out" >/dev/null \
     || fail "parked re-surface omitted hold reason: $(cat "$out")"
   grep -F "possible wedge" "$out" >/dev/null && fail "parked reviewer was mislabeled a wedge"
-  [ -e "$state/.paused-resurfaced-$key" ] || fail "park re-surface throttle marker missing"
+  [ -e "$(park_recheck_marker rev)" ] || fail "shared park recheck epoch missing"
   unset FM_FAKE_CREW_STATE FM_STATE_OVERRIDE
   pass "parked reviewer stale is absorbed then re-surfaced once per cadence"
 }
@@ -327,6 +364,7 @@ test_park_marker_outranks_active_run() {
 # --- run -------------------------------------------------------------------
 
 test_park_cli_writes_and_clears_json_marker
+test_park_cli_rejects_zero_recheck
 test_parked_reviewer_cancelled_or_no_run_absorbs_with_marker
 test_needs_decision_board_poller_absorbs_with_marker
 test_capacity_backoff_absorbs_with_marker

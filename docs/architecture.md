@@ -15,11 +15,13 @@ Those actionable wakes are written to a durable local queue (`state/.wake-queue`
 No-verb wakes, such as `working:` notes and bare turn-ended signals, are benign only when `bin/fm-crew-state.sh` reports positive evidence that the crew is still working: an actively running no-mistakes step for that crew's branch or a backend busy signature.
 Deliberate holds are a representable state, not a secondary-field inference: firstmate writes `state/<id>.parked` through `bin/fm-park.sh` (JSON: `reason`, `parked_at`, `recheck_secs`, optional `until`) whenever it parks a crew for any reason - external wait, capacity backoff, board poll, held ask-user gate, and so on.
 Marker present: both the normal watcher and the away-mode daemon absorb that pane's idle/stale wedge noise and re-surface once per the marker's `recheck_secs` cadence.
+Both supervisors read and advance the same `state/.park-rechecked-<id>` epoch, initialized from `parked_at`, so changing supervision modes preserves one cadence.
 Marker absent: normal classification (provably-working absorb, or surface).
 Captain-relevant status signals (`done:`, `needs-decision:`, `blocked:`, `failed:`) still wake through the signal path regardless of the marker; park suppresses idle-pane wedge noise only.
 A stopped crew with no marker is never silently absorbed.
 `bin/fm-held-gate-mark.sh <id>` is a thin wrapper: it re-verifies the authoritative ask-user run-step as its own precondition, then writes the same park marker with reason `held for captain at ask-user gate`.
-Held-gate parks clear when that run-step no longer verifies; other park reasons clear only via `fm-park.sh --clear` or teardown.
+Held-gate run-step verification is a write precondition only.
+All park markers clear only through `fm-park.sh --clear`, teardown, or an explicit firstmate clear.
 `kind=secondmate` keeps its separate stale exemption because secondmates are persistent idle endpoints, not parked crews - they are not absorbed through the park marker unless firstmate explicitly parks one.
 Fresh stale panes still prefer an active run or busy pane over an old captain-relevant status-log line left behind before validation.
 No-change heartbeats are also benign.

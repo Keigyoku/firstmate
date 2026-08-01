@@ -114,12 +114,6 @@ case "$REASON" in
   '') fail "--reason must not be empty" ;;
 esac
 
-if [ -n "$RECHECK" ]; then
-  case "$RECHECK" in
-    ''|*[!0-9]*) fail "--recheck must be a non-negative integer seconds" ;;
-  esac
-fi
-
 if [ -n "$UNTIL" ]; then
   case "$UNTIL" in
     ''|*[!0-9]*) fail "--until must be a unix epoch integer" ;;
@@ -129,6 +123,10 @@ fi
 if [ -z "$RECHECK" ]; then
   RECHECK=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT}
 fi
+
+case "$RECHECK" in
+  ''|0*|*[!0-9]*) fail "--recheck must be a positive integer seconds" ;;
+esac
 
 park_write "$ID" "$REASON" "$RECHECK" "$UNTIL"
 printf 'parked %s reason=%s recheck_secs=%s\n' "$ID" "$REASON" "$RECHECK"

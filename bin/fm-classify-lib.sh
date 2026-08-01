@@ -186,6 +186,10 @@ parked_marker() {  # <id>
   printf '%s/%s.parked' "${STATE:-${FM_STATE_OVERRIDE:-}}" "$1"
 }
 
+park_recheck_marker() {  # <id>
+  printf '%s/.park-rechecked-%s' "${STATE:-${FM_STATE_OVERRIDE:-}}" "$1"
+}
+
 # Back-compat alias: older call sites and tests may still say "held gate marker".
 # The physical file is always state/<id>.parked.
 held_gate_marker() {  # <id>
@@ -234,7 +238,7 @@ crew_parked_recheck_secs() {  # <id>
   if [ -e "$marker" ] && command -v jq >/dev/null 2>&1; then
     secs=$(jq -r '.recheck_secs // empty' "$marker" 2>/dev/null) || secs=
     case "$secs" in
-      ''|*[!0-9]*) secs=$default ;;
+      ''|0*|*[!0-9]*) secs=$default ;;
     esac
   else
     secs=$default
@@ -255,11 +259,36 @@ crew_parked_at() {  # <id>
   printf '%s' "$at"
 }
 
+crew_parked_recheck_epoch() {  # <id>
+  local id=$1 parked_at rechecked
+  parked_at=$(crew_parked_at "$id")
+  rechecked=$(cat "$(park_recheck_marker "$id")" 2>/dev/null || true)
+  case "$parked_at" in ''|*[!0-9]*) parked_at=0 ;; esac
+  case "$rechecked" in ''|*[!0-9]*) rechecked=0 ;; esac
+  if [ "$rechecked" -gt "$parked_at" ]; then
+    printf '%s' "$rechecked"
+  else
+    printf '%s' "$parked_at"
+  fi
+}
+
+crew_parked_recheck_advance() {  # <id> [epoch]
+  local id=$1 epoch=${2:-} marker tmp
+  [ -n "$id" ] || return 1
+  [ -n "$epoch" ] || epoch=$(date +%s)
+  case "$epoch" in ''|*[!0-9]*) return 1 ;; esac
+  marker=$(park_recheck_marker "$id")
+  tmp="${marker}.tmp.$$"
+  printf '%s\n' "$epoch" > "$tmp" || return 1
+  mv -f "$tmp" "$marker"
+}
+
 # Write state/<id>.parked atomically. Args: id reason recheck_secs [until].
 # Intended for bin/fm-park.sh; other callers should use that CLI.
 park_write() {  # <id> <reason> <recheck_secs> [until]
   local id=$1 reason=$2 recheck=$3 until=${4:-} marker tmp now st
   [ -n "$id" ] || return 1
+  case "$recheck" in ''|0*|*[!0-9]*) return 1 ;; esac
   st=${STATE:-${FM_STATE_OVERRIDE:-}}
   [ -n "$st" ] || return 1
   mkdir -p "$st" || return 1
@@ -289,13 +318,14 @@ park_write() {  # <id> <reason> <recheck_secs> [until]
     return 1
   fi
   mv -f "$tmp" "$marker"
+  rm -f "$(park_recheck_marker "$id")"
 }
 
 park_clear() {  # <id>
   local id=$1 marker
   [ -n "$id" ] || return 1
   marker=$(parked_marker "$id")
-  rm -f "$marker"
+  rm -f "$marker" "$(park_recheck_marker "$id")"
   # Remove the legacy held-for-captain path if a pre-migration marker remains.
   rm -f "${STATE:-${FM_STATE_OVERRIDE:-}}/${id}.held-for-captain"
 }

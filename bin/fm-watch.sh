@@ -863,30 +863,27 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
 # Re-surface once per the marker's recheck_secs so the hold cannot rot invisibly.
 # Called on any stale poll once the crew is known paused (first sight after
 # crew_absorb_class; and repeat sights, gated by the .paused-<key> flag), so it
-# must be cheap: it NEVER re-reads run-step state. Age anchors on parked_at (or
-# marker mtime), not a per-hash timer, so a churny idle pane cannot reset the
-# cadence. A .paused-resurfaced-<key> throttle fires once per window.
+# must be cheap: it NEVER re-reads run-step state. Age anchors on the shared park
+# recheck epoch, not a per-hash timer, so a churny idle pane cannot reset the
+# cadence.
 handle_paused_stale() {  # <window> <task> <hash>
-  local win=$1 task=$2 h=$3 key parkf mtime age rf rf_age reason label recheck
+  local win=$1 task=$2 h=$3 key epoch age reason label recheck now
   key=$(printf '%s' "$win" | tr ':/.' '___')
   printf '%s' "$h" > "$STATE/.stale-$key"
   : > "$STATE/.paused-$key"
   rm -f "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key"
-  parkf=$(parked_marker "$task")
   label=$(crew_parked_reason "$task")
   [ -n "$label" ] || label="deliberate hold"
   recheck=$(crew_parked_recheck_secs "$task")
-  case "$recheck" in ''|*[!0-9]*) recheck=$PAUSE_RESURFACE_SECS ;; esac
-  mtime=$(crew_parked_at "$task")
-  case "$mtime" in ''|*[!0-9]*) mtime=$(stat_mtime "$parkf" 2>/dev/null || true) ;; esac
-  case "$mtime" in ''|*[!0-9]*) mtime=$(date +%s) ;; esac
-  age=$(( $(date +%s) - mtime ))
-  rf="$STATE/.paused-resurfaced-$key"
-  rf_age=$(age_of "$rf")   # 999999 when no prior re-surface
-  if [ "$age" -ge "$recheck" ] && [ "$rf_age" -ge "$recheck" ]; then
+  case "$recheck" in ''|0*|*[!0-9]*) recheck=$PAUSE_RESURFACE_SECS ;; esac
+  epoch=$(crew_parked_recheck_epoch "$task")
+  case "$epoch" in ''|*[!0-9]*) epoch=$(date +%s) ;; esac
+  now=$(date +%s)
+  age=$(( now - epoch ))
+  if [ "$age" -ge "$recheck" ]; then
     reason="stale: $win (paused ${age}s, $label, rechecked on a long cadence not a wedge; confirm the wait still holds)"
     fm_wake_append stale "$win" "$reason" || exit 1
-    date +%s > "$rf"
+    crew_parked_recheck_advance "$task" "$now" || exit 1
     wake "$reason"
   fi
   triage_log "absorbed stale (paused, $label, age ${age}s): $win"
