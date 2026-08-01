@@ -9,30 +9,33 @@ firstmate's full operating manual for the orchestrator agent itself is [`AGENTS.
 ## Event-driven supervision
 
 A zero-token bash watcher (`bin/fm-watch.sh`) sleeps on the fleet, classifies detected wakes in bash, and wakes the first mate only when something is actionable.
-Actionable wakes include captain-relevant status signals, no-verb signals whose crew is not provably working, check-script output such as PR merge polling or an X-mode mention, stale panes whose crew is not provably working whether their status log looks terminal or non-terminal, provably-working stale panes that persist past `FM_STALE_ESCALATE_SECS`, deliberate holds that remain parked past `FM_PAUSE_RESURFACE_SECS`, and heartbeat backstop hits.
+Actionable wakes include captain-relevant status signals, no-verb signals whose crew is not provably working, check-script output such as PR merge polling or an X-mode mention, stale panes whose crew is not provably working whether their status log looks terminal or non-terminal, provably-working stale panes that persist past `FM_STALE_ESCALATE_SECS`, deliberate holds that remain parked past the marker's `recheck_secs` cadence, and heartbeat backstop hits.
 Repeated provably-working stale escalations on the same unchanged pane add an escalation count to the wake reason and, at `FM_WEDGE_DEMAND_INSPECT_COUNT`, a `demand-deep-inspection` marker.
 Those actionable wakes are written to a durable local queue (`state/.wake-queue`) before detector state advances, so a missed process exit can be recovered by draining the queue.
 No-verb wakes, such as `working:` notes and bare turn-ended signals, are benign only when `bin/fm-crew-state.sh` reports positive evidence that the crew is still working: an actively running no-mistakes step for that crew's branch or a backend busy signature.
-A crew that declares `paused:` for a known external wait is separately absorbed while idle and re-surfaced only on the longer pause cadence, rather than being treated as a possible wedge.
-A declared pause's initial normal-mode status signal still surfaces through the no-verb path, while away mode self-handles that routine signal and owns the later recheck.
-The same mechanism covers a run-step verified ask-user gate only after firstmate relays the decision to the captain.
-Regardless of whether the decision arrived through a signal, stale, or heartbeat wake, firstmate then runs `bin/fm-held-gate-mark.sh <id>`, which re-verifies the authoritative run-step before writing `state/<id>.held-for-captain`.
-Both the normal watcher and the away-mode daemon absorb the parked pane on the pause cadence only while that marker and the authoritative ask-user gate remain present.
-Every normal watcher poll and away-mode pause reconciliation revalidates a held marker, removes it when the run resumes, advances, or becomes unverifiable, and teardown removes any remaining marker.
-Fresh stale panes use the same current-state read before trusting the status log, so an active run or busy pane outranks an old captain-relevant status-log line left behind before validation.
+Deliberate holds are a representable state, not a secondary-field inference: firstmate writes `state/<id>.parked` through `bin/fm-park.sh` (JSON: `reason`, `parked_at`, `recheck_secs`, optional `until`) whenever it parks a crew for any reason - external wait, capacity backoff, board poll, held ask-user gate, and so on.
+Marker present: both the normal watcher and the away-mode daemon absorb that pane's idle/stale wedge noise and re-surface once per the marker's `recheck_secs` cadence.
+Both supervisors read and advance the same `state/.park-rechecked-<id>` epoch, initialized from `parked_at`, so changing supervision modes preserves one cadence.
+Marker absent: normal classification (provably-working absorb, or surface).
+Captain-relevant status signals (`done:`, `needs-decision:`, `blocked:`, `failed:`) still wake through the signal path regardless of the marker; park suppresses idle-pane wedge noise only.
+A stopped crew with no marker is never silently absorbed.
+`bin/fm-held-gate-mark.sh <id>` is a thin wrapper: it re-verifies the authoritative ask-user run-step as its own precondition, then writes the same park marker with reason `held for captain at ask-user gate`.
+Held-gate run-step verification is a write precondition only.
+Park markers clear only through `fm-park.sh --clear` or teardown.
+`kind=secondmate` keeps its separate stale exemption because secondmates are persistent idle endpoints, not parked crews - they are not absorbed through the park marker unless firstmate explicitly parks one.
+Fresh stale panes still prefer an active run or busy pane over an old captain-relevant status-log line left behind before validation.
 No-change heartbeats are also benign.
 Absorbed wakes advance their suppression markers, log to `state/.watch-triage.log`, and keep the watcher blocking without a queue record or LLM turn.
 After each drain, `fm-wake-drain.sh` runs the same liveness guard as the supervision scripts, so a lapsed watcher chain surfaces even on a turn that only drains and handles queued wakes.
 After raw queue consumption commits, the drain also prints bounded best-effort annotations from structurally validated signal status keys; each annotation is labeled as wake-event context rather than current state, and annotation failure cannot restore, hide, or fail consumed queue rows.
 Routine watcher polling, supervision no-ops, elapsed waiting time, and absorbed benign wakes stay silent.
-Each deliberate hold trades that silence for one bounded recheck per pause window, so a forgotten wait or decision cannot remain invisible indefinitely.
+Each deliberate hold trades that silence for one bounded recheck per park cadence, so a forgotten wait or decision cannot remain invisible indefinitely.
 Crew status files are append-only wake-event logs, not current-state fields.
 `bin/fm-crew-state.sh <id>` is the cheap current-state read for an actionable heartbeat review: it attributes the matching no-mistakes run to the crew's own branch and keeps an active working or parked run-step authoritative even if the pane has closed.
 During no-mistakes' `ci` monitor phase, it also reads the ci step log tail because `axi status` reports both "still waiting on checks" and "checks green, waiting on merge" as `ci,running`.
 The most recent recognized ci log marker wins, so checks-green monitoring reports done while a later re-arm, failed-check, or issue marker returns the crew to working.
 Only when no matching run exists does it fall back to the pane busy-signature and then the status log; a dead pane without a run reports unknown instead of trusting a stale log.
-An explicit last-line `paused:` declaration overrides only a done/checks-green run-step and reports the distinct `paused` state with its reason; failed and cancelled run-steps remain authoritative.
-A cancelled run-step is reported as its own `cancelled` state rather than collapsed onto `failed`, because a deliberate custody release after a green run and a genuine failure are opposite events; the absorb classifier lets a cancelled crew that declared a pause be absorbed exactly as a done one is, while a failure always surfaces.
+An explicit last-line `paused:` declaration still informs `fm-crew-state.sh`'s reported state for humans and firstmate, but absorb no longer keys on that verb or on run-step corroboration - only on `state/<id>.parked`.
 For herdr, that pane fallback trusts a native `busy` verdict outright, but corroborates native `idle` or unknown verdicts against the rendered busy signature before deciding the crew is not working.
 For whole-fleet read-only review, `bin/fm-fleet-snapshot.sh --json` emits schema `fm-fleet-snapshot.v1` from the backlog, task metadata, current crew state, endpoint probes, PR/report pointers, scout reports, and secondmate return-channel guidance.
 `bin/fm-fleet-view.sh` renders that snapshot as Markdown for humans, so bearings and manual fleet reviews consume one structured contract instead of reparsing raw fleet files.

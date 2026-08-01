@@ -198,32 +198,37 @@ test_status_is_paused_classifier() {
   pass "status_is_paused: only the leading paused verb matches, and paused is not captain-relevant"
 }
 
-# crew_absorb_class: the single fm-crew-state.sh read that returns BOTH absorb
-# reasons - working (active run/busy pane), paused (declared external wait), or none
-# (surface it) - so the watcher's stale path gets both for one bounded call.
-# crew_is_paused delegates to it exactly as crew_is_provably_working does.
+# crew_absorb_class: working (active run/busy pane), paused (state/<id>.parked),
+# or none (surface). Park marker is the one deliberate-hold fact; no status-verb
+# or run-step corroboration. crew_is_paused delegates to it.
 test_crew_absorb_class_classifier() {
   local dir fakebin state
   dir=$(make_case absorb-class); fakebin="$dir/fakebin"; state="$dir/state"
   export FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh"
   export FM_STATE_OVERRIDE="$state"
   export FM_FAKE_CREW_STATE
+  printf 'window=test:fm-a\nkind=ship\n' > "$state/a.meta"
   FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
   [ "$(crew_absorb_class a)" = working ] || fail "active run-step not classed working"
   FM_FAKE_CREW_STATE='state: working · source: pane · harness busy'
   [ "$(crew_absorb_class a)" = working ] || fail "busy pane not classed working"
+  # Status-log paused without park marker does NOT absorb.
   FM_FAKE_CREW_STATE='state: paused · source: status-log · awaiting upstream'
-  [ "$(crew_absorb_class a)" = paused ] || fail "declared pause not classed paused"
-  crew_is_paused a || fail "crew_is_paused did not recognize a paused verdict"
-  ! crew_is_provably_working a || fail "a paused crew was treated as provably working"
+  [ "$(crew_absorb_class a)" = none ] || fail "status-log pause without park marker absorbed"
+  park_write a 'awaiting upstream' 3600
+  [ "$(crew_absorb_class a)" = paused ] || fail "park marker not classed paused"
+  crew_is_paused a || fail "crew_is_paused did not recognize park marker"
+  ! crew_is_provably_working a || fail "a parked crew was treated as provably working"
+  park_clear a
   FM_FAKE_CREW_STATE='state: parked · source: run-step · parked at review: 1 finding(s) (ask-user: captain decision)'
   mark_held_gate_if_verified a || fail "gate relay did not verify an ask-user gate"
-  [ -e "$state/a.held-for-captain" ] || fail "gate relay did not write the held marker"
+  [ -e "$state/a.parked" ] || fail "gate relay did not write the park marker"
   [ "$(crew_absorb_class a)" = paused ] || fail "verified held ask-user gate not classed paused"
-  [ -e "$state/a.held-for-captain" ] || fail "verified held gate marker was cleared"
+  [ -e "$state/a.parked" ] || fail "verified held park marker was cleared"
   FM_FAKE_CREW_STATE='state: working · source: run-step · validating (fixing)'
-  [ "$(crew_absorb_class a)" = working ] || fail "resumed held gate not classed working"
-  [ ! -e "$state/a.held-for-captain" ] || fail "held gate marker not cleared on resume"
+  [ "$(crew_absorb_class a)" = paused ] || fail "post-write run-step state overrode held park"
+  [ -e "$state/a.parked" ] || fail "post-write run-step state cleared held park"
+  park_clear a
   FM_FAKE_CREW_STATE='state: working · source: status-log · working: compiling'
   [ "$(crew_absorb_class a)" = none ] || fail "stale working: status-log classed absorbable"
   FM_FAKE_CREW_STATE='state: unknown · source: none · worktree gone'
@@ -232,116 +237,97 @@ test_crew_absorb_class_classifier() {
   [ "$(crew_absorb_class "")" = none ] || fail "empty id not classed none"
   unset FM_STATE_OVERRIDE
   unset FM_FAKE_CREW_STATE
-  pass "crew_absorb_class: working/paused/held/none share one read, and held markers clear on resume"
+  pass "crew_absorb_class: working/parked/held/none; park marker is the hold fact"
 }
 
-# Tonight's gap (fm-watcher-paused-absorb): a crew that declared paused: while its
-# no-mistakes run still reads terminal/done (ci-monitor checks-green) was classed
-# none because run-step done outranked the status-log pause. Absorb must honor the
-# declared pause so the watcher does not thrash stale wakes; an ACTIVE working
-# run-step still wins so a resumed crew is never mis-absorbed as paused; blocked
-# and non-declaring idle crews still surface.
+# Park marker absorbs regardless of run-step shape; without marker, never absorbs
+# via status-verb corroboration. Marker presence outranks run-step state.
 test_crew_absorb_class_declared_pause_outranks_terminal_run() {
   local dir fakebin state
   dir=$(make_case absorb-pause-outranks); fakebin="$dir/fakebin"; state="$dir/state"
   export FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh"
   export FM_STATE_OVERRIDE="$state"
   export FM_FAKE_CREW_STATE
+  printf 'window=test:fm-a\nkind=ship\n' > "$state/a.meta"
 
-  # Declared pause + terminal run-step (the ci-monitor checks-green case).
-  printf 'paused: PR 792 green, awaiting smoke r4 verdict\n' > "$state/a.status"
+  # Park marker + any run-step shape (including the old non-absorbing parked/unknown).
+  park_write a 'PR 792 green, awaiting smoke r4 verdict' 3600
   FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review (still monitoring for merge/close)'
   [ "$(crew_absorb_class a)" = paused ] \
-    || fail "declared pause under terminal run-step not classed paused: $(crew_absorb_class a)"
-  crew_is_paused a || fail "crew_is_paused missed declared pause under terminal run-step"
-  ! crew_is_provably_working a || fail "paused-under-done classed as provably working"
+    || fail "park marker under terminal run-step not classed paused: $(crew_absorb_class a)"
+  FM_FAKE_CREW_STATE='state: parked · source: run-step · parked at review'
+  [ "$(crew_absorb_class a)" = paused ] \
+    || fail "park marker under parked run-step not classed paused: $(crew_absorb_class a)"
+  FM_FAKE_CREW_STATE='state: unknown · source: run-step · outcome: mystery'
+  [ "$(crew_absorb_class a)" = paused ] \
+    || fail "park marker under unknown run-step not classed paused: $(crew_absorb_class a)"
+  FM_FAKE_CREW_STATE='state: cancelled · source: run-step · run cancelled'
+  [ "$(crew_absorb_class a)" = paused ] \
+    || fail "park marker under cancelled run not classed paused: $(crew_absorb_class a)"
 
-  # Same terminal run without a declared pause still surfaces (wedged/finished).
-  printf 'working: implementing fix\n' > "$state/a.status"
+  # Without marker: terminal/cancelled/parked all surface (no secondary corroboration).
+  park_clear a
+  printf 'paused: PR 792 green, awaiting smoke r4 verdict\n' > "$state/a.status"
+  FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review'
   [ "$(crew_absorb_class a)" = none ] \
-    || fail "terminal run without declared pause was absorbed: $(crew_absorb_class a)"
-
-  # Empty/non-declaring status under terminal run still surfaces.
-  : > "$state/a.status"
+    || fail "status paused: without park marker was absorbed under done: $(crew_absorb_class a)"
+  FM_FAKE_CREW_STATE='state: cancelled · source: run-step · run cancelled'
   [ "$(crew_absorb_class a)" = none ] \
-    || fail "terminal run with empty status was absorbed"
+    || fail "status paused: without park marker was absorbed under cancelled: $(crew_absorb_class a)"
 
-  # Active working run-step outranks a stale paused: line (crew resumed).
-  printf 'paused: holding for upstream\n' > "$state/a.status"
+  # Active working run-step does not outrank a structural park marker.
+  park_write a 'holding for upstream' 3600
   FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
-  [ "$(crew_absorb_class a)" = working ] \
-    || fail "active run-step did not outrank stale paused status: $(crew_absorb_class a)"
+  [ "$(crew_absorb_class a)" = paused ] \
+    || fail "active run-step overrode park marker: $(crew_absorb_class a)"
 
-  # blocked: is never a pause absorb, even under a terminal run-step.
+  # Without marker, blocked and empty status still surface.
+  park_clear a
   printf 'blocked: needs credentials\n' > "$state/a.status"
   FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review'
   [ "$(crew_absorb_class a)" = none ] \
-    || fail "blocked status under terminal run was classed paused: $(crew_absorb_class a)"
-
-  # Captain lock: paused: must NOT mask a FAILED run-step.
-  # A stale paused: written before the run failed would otherwise swallow the
-  # failure under the radar — same severity as blocked: escalate-immediately.
-  printf 'paused: awaiting smoke r4 verdict\n' > "$state/a.status"
-  FM_FAKE_CREW_STATE='state: failed · source: run-step · run failed'
-  [ "$(crew_absorb_class a)" = none ] \
-    || fail "declared pause under FAILED run-step was absorbed: $(crew_absorb_class a)"
-  ! crew_is_paused a || fail "crew_is_paused true under failed run-step with paused status"
-
-  FM_FAKE_CREW_STATE='state: parked · source: run-step · parked at review'
-  [ "$(crew_absorb_class a)" = none ] \
-    || fail "declared pause under unheld parked run-step was absorbed: $(crew_absorb_class a)"
-
-  FM_FAKE_CREW_STATE='state: unknown · source: run-step · outcome: mystery'
-  [ "$(crew_absorb_class a)" = none ] \
-    || fail "declared pause under unknown run-step was absorbed: $(crew_absorb_class a)"
+    || fail "blocked status was classed paused: $(crew_absorb_class a)"
 
   unset FM_STATE_OVERRIDE
   unset FM_FAKE_CREW_STATE
-  pass "crew_absorb_class: declared pause absorbs only terminal done run-step"
+  pass "crew_absorb_class: park marker absorbs any run-step; unmarked never corroborates"
 }
 
-# Captain-ordered restriction of paused-masks-failed-run: last status paused: +
-# authoritative FAILED run-step must surface (none), not absorb as paused.
+# Park marker is the hold fact even under failed run-step for idle-pane absorb;
+# captain-relevant status signals still wake via the signal path (covered in
+# tests/fm-park.test.sh). Without a marker, failed never absorbs.
 test_crew_absorb_class_failed_run_not_masked_by_paused_status() {
   local dir fakebin state
   dir=$(make_case absorb-failed-not-paused); fakebin="$dir/fakebin"; state="$dir/state"
   export FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh"
   export FM_STATE_OVERRIDE="$state"
   export FM_FAKE_CREW_STATE
+  printf 'window=test:fm-a\nkind=ship\n' > "$state/a.meta"
 
   printf 'paused: holding for upstream release\n' > "$state/a.status"
   FM_FAKE_CREW_STATE='state: failed · source: run-step · run failed'
   [ "$(crew_absorb_class a)" = none ] \
-    || fail "failed run under paused: status was classed $(crew_absorb_class a), want none"
-  ! crew_is_paused a || fail "crew_is_paused recognized pause over failed run"
-  ! crew_is_provably_working a || fail "failed+paused classed as working"
+    || fail "failed run without park marker was classed $(crew_absorb_class a), want none"
+  ! crew_is_paused a || fail "crew_is_paused true without park marker"
 
-  # A cancelled run records deliberate custody release, not failure. Under a
-  # declared pause it therefore absorbs exactly as done/checks-green does.
+  # With park marker, idle-pane absorb class is paused even under cancelled/done.
+  park_write a 'holding for upstream release' 3600
   FM_FAKE_CREW_STATE='state: cancelled · source: run-step · run cancelled'
   [ "$(crew_absorb_class a)" = paused ] \
-    || fail "cancelled run under declared paused: was not absorbed: $(crew_absorb_class a)"
-  crew_is_paused a || fail "crew_is_paused missed a declared pause under a cancelled run"
-  ! crew_is_provably_working a || fail "cancelled+paused classed as provably working"
-
-  # ...but cancelled alone is NOT a blanket absorb: with no declared pause the
-  # crew has stopped with custody released and nothing said, which must surface.
-  printf 'working: implementing fix\n' > "$state/a.status"
-  [ "$(crew_absorb_class a)" = none ] \
-    || fail "cancelled run without a declared pause was absorbed: $(crew_absorb_class a)"
-  printf 'blocked: needs credentials\n' > "$state/a.status"
-  [ "$(crew_absorb_class a)" = none ] \
-    || fail "blocked under a cancelled run was absorbed: $(crew_absorb_class a)"
-
-  # done/checks-green under paused: still absorbs (the case the captain hit).
-  printf 'paused: holding for upstream release\n' > "$state/a.status"
-  FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review (still monitoring for merge/close)'
+    || fail "park marker under cancelled not absorbed: $(crew_absorb_class a)"
+  FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review'
   [ "$(crew_absorb_class a)" = paused ] \
-    || fail "done/checks-green under paused: not absorbed: $(crew_absorb_class a)"
+    || fail "park marker under done not absorbed: $(crew_absorb_class a)"
+
+  park_clear a
+  printf 'working: implementing fix\n' > "$state/a.status"
+  FM_FAKE_CREW_STATE='state: cancelled · source: run-step · run cancelled'
+  [ "$(crew_absorb_class a)" = none ] \
+    || fail "cancelled run without park marker was absorbed: $(crew_absorb_class a)"
 
   unset FM_STATE_OVERRIDE
   unset FM_FAKE_CREW_STATE
-  pass "crew_absorb_class: failed escalates despite paused:; a declared-paused cancelled release absorbs"
+  pass "crew_absorb_class: park marker is the hold fact; unmarked cancelled/failed surface"
 }
 
 # signal_crew_provably_working: a no-verb "signal:" wake is benign ONLY when EVERY
@@ -468,10 +454,10 @@ test_actionable_signal_surfaced() {
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the actionable signal failed"
   grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$status_file" >/dev/null || fail "actionable signal was not queued"
   [ -s "$state/.hb-surfaced-task" ] || fail "actionable signal did not record the surfaced marker"
-  [ ! -e "$state/task.held-for-captain" ] || fail "queued ask-user wake recorded a held marker before relay"
+  [ ! -e "$state/task.parked" ] || fail "queued ask-user wake recorded a park marker before relay"
   FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" "$HELD_MARK" task \
     || fail "post-relay held-gate marker command failed"
-  [ -e "$state/task.held-for-captain" ] || fail "post-relay command did not record the held marker"
+  [ -e "$state/task.parked" ] || fail "post-relay command did not record the park marker"
   unset FM_FAKE_CREW_STATE
   pass "captain-relevant ask-user signal marks its hold only through the explicit post-relay command"
 }
@@ -651,91 +637,85 @@ test_nonterminal_stale_not_working_surfaced() {
   pass "a not-provably-working non-terminal stale is surfaced immediately (never left to wait out the timer)"
 }
 
-# --- non-terminal stale, crew DECLARED a pause: absorbed, re-surfaced on a long
-#     cadence, never wedge-escalated ------------------------------------------
-# The live 2026-07-09/10 case: a crew intentionally held awaiting an upstream tool
-# release (paused: ...) whose idle pane tripped repeated possible-wedge escalations
-# all day. With the paused verb, its stale is absorbed like a working crew but never
-# uses the wedge timer; it re-surfaces once past PAUSE_RESURFACE_SECS (anchored on
-# the pause's own status-file age, so a churny idle pane cannot reset the cadence)
-# for a recheck, so a forgotten pause cannot rot invisibly.
+# --- non-terminal stale with state/<id>.parked: absorbed, re-surfaced on the
+#     marker cadence, never wedge-escalated ----------------------------------
+# Historical: a crew intentionally held awaiting an upstream tool release whose
+# idle pane tripped repeated possible-wedge escalations. With the park marker,
+# its stale is absorbed and re-surfaces once past recheck_secs (anchored on
+# parked_at), so a forgotten hold cannot rot invisibly.
 test_nonterminal_stale_paused_absorbed_then_resurfaced() {
-  local dir state fakebin out drain_out capture_file window key pane_hash sig pid back statusf
+  local dir state fakebin out drain_out capture_file window key pane_hash sig pid back statusf parkf
   dir=$(make_case nonterminal-stale-paused); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
   window="test:fm-held"
+  export FM_STATE_OVERRIDE="$state"
   printf 'idle, holding for upstream' > "$capture_file"
   printf 'window=%s\nkind=ship\n' "$window" > "$state/held.meta"
   statusf="$state/held.status"
-  # A DECLARED pause (not captain-relevant), .seen-* primed so the signal scan does
-  # not pre-empt the stale path.
   printf 'paused: holding for the upstream tool release\n' > "$statusf"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-held_status"
+  park_write held 'holding for the upstream tool release' 3600
+  parkf="$state/held.parked"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle, holding for upstream")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
-  # crew_absorb_class reads the declared pause from fm-crew-state.sh.
-  export FM_FAKE_CREW_STATE='state: paused · source: status-log · holding for the upstream tool release'
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · holding for upstream'
 
-  # Phase A: a fresh pause (status file just written) under a high re-surface
-  # threshold is absorbed - no wake, no wedge timer.
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
   if ! wait_live "$pid" 30; then
-    reap "$pid"; fail "watcher exited for a fresh declared pause (should absorb): $(cat "$out")"
+    reap "$pid"; fail "watcher exited for a fresh park (should absorb): $(cat "$out")"
   fi
-  [ ! -s "$out" ] || fail "fresh paused stale printed a wake reason during absorb"
-  [ ! -s "$state/.wake-queue" ] || fail "fresh paused stale enqueued a wake during absorb"
-  [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] || fail "stale suppressor not advanced on paused absorb"
+  [ ! -s "$out" ] || fail "fresh parked stale printed a wake reason during absorb"
+  [ ! -s "$state/.wake-queue" ] || fail "fresh parked stale enqueued a wake during absorb"
+  [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] || fail "stale suppressor not advanced on parked absorb"
   [ -e "$state/.paused-$key" ] || fail "paused flag not recorded on absorb"
-  [ ! -e "$state/.stale-since-$key" ] || fail "a paused absorb must not start the wedge timer"
+  [ ! -e "$state/.stale-since-$key" ] || fail "a parked absorb must not start the wedge timer"
   reap "$pid"
 
-  # Phase B: age the pause past the (now normal) threshold by backdating its
-  # status file, re-prime .seen-* to the new signature so the signal scan stays
-  # quiet, and confirm it re-surfaces as a paused recheck - never a wedge.
   back=$(( $(date +%s) - 500 ))
-  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
-  else touch -m -d "@$back" "$statusf"; fi
-  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-held_status"
+  jq --argjson at "$back" '.parked_at=$at | .recheck_secs=240' "$parkf" > "$parkf.tmp" && mv "$parkf.tmp" "$parkf"
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$parkf"
+  else touch -m -d "@$back" "$parkf"; fi
   : > "$out"
   printf 'idle, holding for upstream (token 2)' > "$capture_file"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
-  wait_for_exit "$pid" 40 || fail "watcher did not re-surface a declared pause past the threshold"
+  wait_for_exit "$pid" 40 || fail "watcher did not re-surface a park past the threshold"
   grep -F "stale: $window" "$out" >/dev/null || fail "re-surface did not print a stale wake"
-  grep -F "awaiting external" "$out" >/dev/null || fail "re-surface was not labeled a paused/awaiting-external recheck"
-  grep -F "possible wedge" "$out" >/dev/null && fail "a declared pause was mislabeled a possible wedge"
-  [ -e "$state/.paused-resurfaced-$key" ] || fail "the paused re-surface throttle marker was not recorded"
-  [ ! -e "$state/.stale-since-$key" ] || fail "a paused re-surface must not use the wedge timer"
-  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the paused re-surface failed"
-  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "paused re-surface was not queued"
-  pass "a declared pause is absorbed on first sight, then re-surfaced as a recheck past the threshold, never wedge-escalated"
+  grep -F "holding for the upstream tool release" "$out" >/dev/null || fail "re-surface was not labeled with park reason"
+  grep -F "possible wedge" "$out" >/dev/null && fail "a park was mislabeled a possible wedge"
+  [ -e "$(park_recheck_marker held)" ] || fail "the shared park recheck epoch was not recorded"
+  [ ! -e "$state/.stale-since-$key" ] || fail "a parked re-surface must not use the wedge timer"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the parked re-surface failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "parked re-surface was not queued"
+  unset FM_STATE_OVERRIDE FM_FAKE_CREW_STATE
+  pass "a park marker is absorbed on first sight, then re-surfaced as a recheck past the threshold, never wedge-escalated"
 }
 
-# Integration form of tonight's gap: crew_absorb_class's fake returns terminal
-# run-step done (ci-monitor checks-green) while the status file declares paused:.
-# Watcher must absorb on the pause cadence, not surface immediate stale thrash.
+# Park marker absorbs even when run-step is terminal done (the historical gap
+# that secondary-field corroboration could only partially close).
 test_nonterminal_stale_paused_under_terminal_run_absorbed() {
   local dir state fakebin out capture_file window key pane_hash sig pid statusf
   dir=$(make_case nonterminal-stale-paused-under-done); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"
   window="test:fm-pause-done"
+  export FM_STATE_OVERRIDE="$state"
   printf 'idle, awaiting smoke verdict' > "$capture_file"
   printf 'window=%s\nkind=ship\n' "$window" > "$state/pause-done.meta"
   statusf="$state/pause-done.status"
   printf 'paused: PR 792 green, awaiting smoke r4 verdict then review round then captain merge word\n' > "$statusf"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-pause-done_status"
+  park_write pause-done 'PR 792 green, awaiting smoke r4 verdict' 3600
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle, awaiting smoke verdict")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
-  # The bug: authoritative state is done/ci-monitor, not state: paused.
   export FM_FAKE_CREW_STATE='state: done · source: run-step · checks green: PR ready for review (still monitoring for merge/close)'
 
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
@@ -743,14 +723,15 @@ test_nonterminal_stale_paused_under_terminal_run_absorbed() {
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
   if ! wait_live "$pid" 30; then
-    reap "$pid"; fail "watcher exited for paused under terminal run (should absorb): $(cat "$out")"
+    reap "$pid"; fail "watcher exited for park under terminal run (should absorb): $(cat "$out")"
   fi
-  [ ! -s "$out" ] || { reap "$pid"; fail "paused under terminal run printed a wake: $(cat "$out")"; }
-  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "paused under terminal run enqueued a wake"; }
-  [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "paused under terminal run did not enter pause tracking"; }
-  [ ! -e "$state/.stale-since-$key" ] || { reap "$pid"; fail "paused under terminal run started a wedge timer"; }
+  [ ! -s "$out" ] || { reap "$pid"; fail "park under terminal run printed a wake: $(cat "$out")"; }
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "park under terminal run enqueued a wake"; }
+  [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "park under terminal run did not enter pause tracking"; }
+  [ ! -e "$state/.stale-since-$key" ] || { reap "$pid"; fail "park under terminal run started a wedge timer"; }
   reap "$pid"
-  pass "declared pause under terminal run-step is absorbed (no stale thrash)"
+  unset FM_STATE_OVERRIDE FM_FAKE_CREW_STATE
+  pass "park marker under terminal run-step is absorbed (no stale thrash)"
 }
 
 # Anti-regression for the pause-absorb fix: blocked: is a stuck crew, never a
@@ -790,23 +771,25 @@ test_blocked_stale_surfaces_immediately_never_pause_absorbed() {
   pass "blocked: idle under terminal run surfaces immediately and never enters pause absorb"
 }
 
-# A captain-owed ask-user gate is a deliberate hold only after firstmate marked
-# the surfaced decision and the authoritative run-step still verifies the gate.
+# A captain-owed ask-user gate is a deliberate hold only after firstmate parks
+# via fm-held-gate-mark (writes state/<id>.parked with the gate reason).
 test_nonterminal_stale_held_gate_absorbed_then_resurfaced() {
   local dir state fakebin out capture_file window key pane_hash sig pid back heldf
   dir=$(make_case nonterminal-stale-held-gate); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-held-gate"
+  export FM_STATE_OVERRIDE="$state"
   printf 'idle at review gate' > "$capture_file"
   printf 'window=%s\nkind=ship\n' "$window" > "$state/held-gate.meta"
   printf 'needs-decision: choose review finding resolution\n' > "$state/held-gate.status"
   sig=$(seen_sig "$state/held-gate.status"); printf '%s' "$sig" > "$state/.seen-held-gate_status"
-  heldf="$state/held-gate.held-for-captain"
-  : > "$heldf"
+  export FM_FAKE_CREW_STATE='state: parked · source: run-step · parked at review: 1 finding(s) (ask-user: captain decision)'
+  mark_held_gate_if_verified held-gate || fail "held-gate park write failed"
+  heldf="$state/held-gate.parked"
+  [ -e "$heldf" ] || fail "held-gate park marker missing"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle at review gate")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
-  export FM_FAKE_CREW_STATE='state: parked · source: run-step · parked at review: 1 finding(s) (ask-user: captain decision)'
 
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
@@ -821,6 +804,7 @@ test_nonterminal_stale_held_gate_absorbed_then_resurfaced() {
   reap "$pid"
 
   back=$(( $(date +%s) - 500 ))
+  jq --argjson at "$back" '.parked_at=$at | .recheck_secs=240' "$heldf" > "$heldf.tmp" && mv "$heldf.tmp" "$heldf"
   if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$heldf"
   else touch -m -d "@$back" "$heldf"; fi
   : > "$out"
@@ -832,8 +816,8 @@ test_nonterminal_stale_held_gate_absorbed_then_resurfaced() {
   wait_for_exit "$pid" 40 || fail "watcher did not re-surface an aged held gate"
   grep -F "held for captain at ask-user gate" "$out" >/dev/null || fail "held-gate re-surface omitted its reason"
   grep -F "possible wedge" "$out" >/dev/null && fail "held gate was mislabeled a wedge"
-  [ -e "$state/.paused-resurfaced-$key" ] || fail "held-gate re-surface throttle was not recorded"
-  unset FM_FAKE_CREW_STATE
+  [ -e "$(park_recheck_marker held-gate)" ] || fail "held-gate shared recheck epoch was not recorded"
+  unset FM_FAKE_CREW_STATE FM_STATE_OVERRIDE
   pass "a verified held gate is absorbed on pause cadence and re-surfaces once after the window"
 }
 
@@ -861,7 +845,7 @@ test_unmarked_parked_gate_still_surfaces() {
   pass "a parked ask-user gate without the firstmate marker still surfaces normally"
 }
 
-test_held_gate_marker_clears_before_stale() {
+test_held_gate_marker_persists_until_structural_clear() {
   local dir state fakebin out capture_file window pid sig
   dir=$(make_case held-gate-resumed-before-stale); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-held-resumed"
@@ -870,49 +854,56 @@ test_held_gate_marker_clears_before_stale() {
   printf 'needs-decision: choose review finding resolution\n' > "$state/held-resumed.status"
   sig=$(seen_sig "$state/held-resumed.status")
   printf '%s' "$sig" > "$state/.seen-held-resumed_status"
-  : > "$state/held-resumed.held-for-captain"
+  export FM_STATE_OVERRIDE="$state"
+  export FM_FAKE_CREW_STATE='state: parked · source: run-step · parked at review: 1 finding(s) (ask-user: captain decision)'
+  mark_held_gate_if_verified held-resumed || fail "held-resumed park write failed"
+  [ -e "$state/held-resumed.parked" ] || fail "held-resumed park marker missing"
   export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (fixing)'
   watch_bg "$state" "$fakebin" "$out"
   pid=$!
   if ! wait_live "$pid" 30; then
-    reap "$pid"; fail "watcher exited while clearing a resumed held gate: $(cat "$out")"
+    reap "$pid"; fail "watcher exited while absorbing a durable held gate: $(cat "$out")"
   fi
-  [ ! -e "$state/held-resumed.held-for-captain" ] || {
+  [ -e "$state/held-resumed.parked" ] || {
     reap "$pid"
-    fail "watcher retained a held marker after the authoritative run resumed"
+    fail "watcher cleared a park marker after the run-step changed"
   }
   reap "$pid"
-  unset FM_FAKE_CREW_STATE
-  pass "watcher clears a resumed held gate before stale classification"
+  unset FM_FAKE_CREW_STATE FM_STATE_OVERRIDE
+  pass "watcher preserves a held-gate park until structural clear"
 }
 
 test_secondmate_paused_resurfaces_in_normal_mode() {
-  local dir state fakebin out capture_file statusf window key pane_hash sig pid back
+  local dir state fakebin out capture_file statusf window key pane_hash sig pid back parkf
   dir=$(make_case secondmate-paused-resurface); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/secondmate-held.status"
   window="test:fm-secondmate-held"
+  export FM_STATE_OVERRIDE="$state"
   printf 'idle awaiting external\n' > "$capture_file"
   printf 'window=%s\nkind=secondmate\n' "$window" > "$state/secondmate-held.meta"
   printf 'paused: awaiting the upstream release\n' > "$statusf"
+  park_write secondmate-held 'awaiting the upstream release' 240
+  parkf="$state/secondmate-held.parked"
   back=$(( $(date +%s) - 500 ))
-  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
-  else touch -m -d "@$back" "$statusf"; fi
+  jq --argjson at "$back" '.parked_at=$at | .recheck_secs=240' "$parkf" > "$parkf.tmp" && mv "$parkf.tmp" "$parkf"
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$parkf"
+  else touch -m -d "@$back" "$parkf"; fi
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-secondmate-held_status"
   key=$(printf '%s' "$window" | tr '.:/' '___')
   pane_hash=$(hash_text "idle awaiting external")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
-  export FM_FAKE_CREW_STATE='state: paused · source: status-log · awaiting the upstream release'
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · awaiting the upstream release'
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
-  wait_for_exit "$pid" 40 || fail "watcher did not re-surface a paused secondmate"
-  grep -F "stale: $window" "$out" >/dev/null || fail "paused secondmate did not emit a stale recheck"
-  grep -F "awaiting external" "$out" >/dev/null || fail "paused secondmate recheck omitted its external-wait reason"
-  grep -F "possible wedge" "$out" >/dev/null && fail "paused secondmate was mislabeled a wedge"
-  unset FM_FAKE_CREW_STATE
-  pass "a declared paused secondmate re-surfaces on the bounded normal-mode cadence"
+  wait_for_exit "$pid" 40 || fail "watcher did not re-surface a parked secondmate"
+  grep -F "stale: $window" "$out" >/dev/null || fail "parked secondmate did not emit a stale recheck"
+  grep -F "awaiting the upstream release" "$out" >/dev/null || fail "parked secondmate recheck omitted its reason"
+  grep -F "possible wedge" "$out" >/dev/null && fail "parked secondmate was mislabeled a wedge"
+  unset FM_FAKE_CREW_STATE FM_STATE_OVERRIDE
+  pass "an explicitly parked secondmate re-surfaces on the bounded normal-mode cadence"
 }
 
 test_secondmate_nonpaused_stale_remains_suppressed() {
@@ -969,29 +960,32 @@ test_nonterminal_stale_pause_transitions_reclassify_unchanged_hash() {
   local dir state fakebin out capture_file window key pane_hash sig pid
   dir=$(make_case nonterminal-stale-pause-transition); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-transition"
+  export FM_STATE_OVERRIDE="$state"
   printf 'idle awaiting external\n' > "$capture_file"
   printf 'window=%s\nkind=ship\n' "$window" > "$state/transition.meta"
   printf 'paused: awaiting the upstream release\n' > "$state/transition.status"
   sig=$(seen_sig "$state/transition.status"); printf '%s' "$sig" > "$state/.seen-transition_status"
+  park_write transition 'awaiting the upstream release' 999
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle awaiting external")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '%s' "$pane_hash" > "$state/.stale-$key"
   printf '1\n' > "$state/.count-$key"
   printf '%s\n' $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
-  export FM_FAKE_CREW_STATE='state: paused · source: status-log · awaiting the upstream release'
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · awaiting the upstream release'
 
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
   if ! wait_live "$pid" 30; then
-    reap "$pid"; fail "a stale hash that entered pause was wedge-escalated: $(cat "$out")"
+    reap "$pid"; fail "a stale hash that entered park was wedge-escalated: $(cat "$out")"
   fi
   [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "unchanged stale hash did not enter paused mode"; }
-  [ ! -e "$state/.stale-since-$key" ] || { reap "$pid"; fail "pause transition retained its wedge timer"; }
+  [ ! -e "$state/.stale-since-$key" ] || { reap "$pid"; fail "park transition retained its wedge timer"; }
   reap "$pid"
 
+  park_clear transition
   printf 'working: upstream landed, resuming\n' > "$state/transition.status"
   sig=$(seen_sig "$state/transition.status"); printf '%s' "$sig" > "$state/.seen-transition_status"
   FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
@@ -1001,23 +995,25 @@ test_nonterminal_stale_pause_transitions_reclassify_unchanged_hash() {
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
   if ! wait_live "$pid" 30; then
-    reap "$pid"; fail "a stale hash that left pause did not resume wedge tracking: $(cat "$out")"
+    reap "$pid"; fail "a stale hash that left park did not resume wedge tracking: $(cat "$out")"
   fi
-  [ ! -e "$state/.paused-$key" ] || { reap "$pid"; fail "unchanged stale hash retained paused mode after resume"; }
-  [ -s "$state/.stale-since-$key" ] || { reap "$pid"; fail "unchanged stale hash did not restart wedge tracking after resume"; }
+  [ ! -e "$state/.paused-$key" ] || { reap "$pid"; fail "unchanged stale hash retained paused mode after clear"; }
+  [ -s "$state/.stale-since-$key" ] || { reap "$pid"; fail "unchanged stale hash did not restart wedge tracking after clear"; }
   reap "$pid"
-  unset FM_FAKE_CREW_STATE
-  pass "unchanged stale hashes reclassify when a crew enters or leaves pause"
+  unset FM_FAKE_CREW_STATE FM_STATE_OVERRIDE
+  pass "unchanged stale hashes reclassify when a crew enters or leaves park"
 }
 
-test_nonterminal_paused_rechecks_authoritative_state() {
+test_nonterminal_paused_ignores_post_write_run_state() {
   local dir state fakebin out capture_file window key pane_hash sig pid
   dir=$(make_case nonterminal-paused-recheck); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-pause-recheck"
+  export FM_STATE_OVERRIDE="$state"
   printf 'idle awaiting external\n' > "$capture_file"
   printf 'window=%s\nkind=ship\n' "$window" > "$state/pause-recheck.meta"
   printf 'paused: awaiting the upstream release\n' > "$state/pause-recheck.status"
   sig=$(seen_sig "$state/pause-recheck.status"); printf '%s' "$sig" > "$state/.seen-pause-recheck_status"
+  park_write pause-recheck 'awaiting the upstream release' 3600
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle awaiting external")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
@@ -1031,53 +1027,46 @@ test_nonterminal_paused_rechecks_authoritative_state() {
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
   if ! wait_live "$pid" 30; then
-    reap "$pid"; fail "an active run behind a declared pause surfaced instead of resuming wedge tracking: $(cat "$out")"
+    reap "$pid"; fail "post-write run state surfaced a structurally parked crew: $(cat "$out")"
   fi
-  [ ! -e "$state/.paused-$key" ] || { reap "$pid"; fail "authoritative active run retained paused mode"; }
-  [ -s "$state/.stale-since-$key" ] || { reap "$pid"; fail "authoritative active run did not resume wedge tracking"; }
+  [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "post-write run state cleared paused mode"; }
+  [ ! -e "$state/.stale-since-$key" ] || { reap "$pid"; fail "post-write run state started wedge tracking"; }
   reap "$pid"
-  unset FM_FAKE_CREW_STATE
-  pass "a declared pause is periodically rechecked against authoritative active-run state"
+  unset FM_FAKE_CREW_STATE FM_STATE_OVERRIDE
+  pass "a park marker remains authoritative across later run-step changes"
 }
 
-test_paused_authoritative_working_preserves_wedge_timer() {
-  local dir state fakebin out capture_file window key pane_hash sig pid since
+test_paused_post_write_working_clears_wedge_timer() {
+  local dir state fakebin out capture_file window key pane_hash sig pid
   dir=$(make_case paused-working-preserves-wedge-timer); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-paused-working"
+  export FM_STATE_OVERRIDE="$state"
   printf 'idle awaiting external\n' > "$capture_file"
   printf 'window=%s\nkind=ship\n' "$window" > "$state/paused-working.meta"
   printf 'paused: awaiting the upstream release\n' > "$state/paused-working.status"
   sig=$(seen_sig "$state/paused-working.status"); printf '%s' "$sig" > "$state/.seen-paused-working_status"
+  park_write paused-working 'awaiting the upstream release' 3600
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle awaiting external")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '%s' "$pane_hash" > "$state/.stale-$key"
   printf '1\n' > "$state/.count-$key"
   : > "$state/.paused-$key"
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
   export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
 
-  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
-    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
-    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
-  pid=$!
-  wait_numeric_file "$state/.stale-since-$key" 30 || { reap "$pid"; fail "authoritative working state did not start wedge tracking"; }
-  since=$(cat "$state/.stale-since-$key")
-  sleep 2
-  [ "$(cat "$state/.stale-since-$key" 2>/dev/null || true)" = "$since" ] \
-    || { reap "$pid"; fail "repeat authoritative working recheck reset the wedge timer"; }
-  reap "$pid"
-
-  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
-  : > "$out"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
-  wait_for_exit "$pid" 40 || fail "authoritative working state did not wedge-escalate past the threshold"
-  grep -F "possible wedge" "$out" >/dev/null || fail "authoritative working wedge escalation omitted its reason"
-  [ ! -e "$state/.stale-since-$key" ] || fail "wedge timer remained after authoritative working escalation"
-  unset FM_FAKE_CREW_STATE
-  pass "a paused status overridden by authoritative working preserves its wedge timer and escalates"
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "post-write working state wedge-escalated a structurally parked crew: $(cat "$out")"
+  fi
+  [ ! -e "$state/.stale-since-$key" ] || { reap "$pid"; fail "park marker retained a wedge timer"; }
+  [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "post-write working state cleared paused mode"; }
+  reap "$pid"
+  unset FM_FAKE_CREW_STATE FM_STATE_OVERRIDE
+  pass "a park clears wedge timing despite later working run-step state"
 }
 
 # --- consecutive wedge escalations on the same pane demand deep inspection ----
@@ -1360,17 +1349,21 @@ test_afk_present_reverts_watcher_to_one_shot() {
 # must still hand off the plain window identity to the daemon, rather than running
 # the normal-mode pause re-surface and decorating the stale identity.
 test_afk_paused_changed_pane_hands_off_plain_stale() {
-  local dir state fakebin out drain_out capture_file statusf window key sig pid back
+  local dir state fakebin out drain_out capture_file statusf window key sig pid back parkf
   dir=$(make_case afk-paused-changed-pane); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
   window="test:fm-afk-held"
+  export FM_STATE_OVERRIDE="$state"
   printf 'idle, awaiting upstream\n' > "$capture_file"
   printf 'window=%s\nkind=ship\n' "$window" > "$state/afk-held.meta"
   statusf="$state/afk-held.status"
   printf 'paused: awaiting the upstream tool release\n' > "$statusf"
+  park_write afk-held 'awaiting the upstream tool release' 240
+  parkf="$state/afk-held.parked"
   back=$(( $(date +%s) - 500 ))
-  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
-  else touch -m -d "@$back" "$statusf"; fi
+  jq --argjson at "$back" '.parked_at=$at | .recheck_secs=240' "$parkf" > "$parkf.tmp" && mv "$parkf.tmp" "$parkf"
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$parkf"
+  else touch -m -d "@$back" "$parkf"; fi
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-afk-held_status"
   date '+%s' > "$state/.afk"
   key=$(printf '%s' "$window" | tr '.:/' '___')
@@ -1378,18 +1371,51 @@ test_afk_paused_changed_pane_hands_off_plain_stale() {
   # Deliberately do not seed .hash-*: this is the changed-pane path that used to
   # call handle_paused_stale before AFK's one-shot daemon handoff.
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
-    FM_FAKE_CREW_STATE='state: paused · source: status-log · awaiting the upstream tool release' \
+    FM_FAKE_CREW_STATE='state: unknown · source: none · awaiting the upstream tool release' \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
-  wait_for_exit "$pid" 40 || fail "AFK paused changed pane did not hand off a stale wake"
-  grep -Fx "stale: $window" "$out" >/dev/null || fail "AFK paused stale did not preserve its plain window identity: $(cat "$out")"
-  grep -F "awaiting external" "$out" >/dev/null && fail "AFK watcher decorated a stale identity instead of handing it to the daemon"
+  wait_for_exit "$pid" 40 || fail "AFK parked changed pane did not hand off a stale wake"
+  grep -Fx "stale: $window" "$out" >/dev/null || fail "AFK parked stale did not preserve its plain window identity: $(cat "$out")"
+  grep -F "awaiting the upstream tool release" "$out" >/dev/null && fail "AFK watcher decorated a stale identity instead of handing it to the daemon"
   [ ! -e "$state/.paused-$key" ] || fail "AFK watcher recorded normal-mode pause tracking instead of handing off"
-  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after AFK paused stale failed"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after AFK parked stale failed"
   grep "$(printf '\tstale\t')" "$drain_out" | grep -F "stale: $window" >/dev/null \
-    || fail "AFK paused stale was not queued with the plain window identity"
-  pass "AFK changed paused panes hand off plain stale identities for daemon-owned pause triage"
+    || fail "AFK parked stale was not queued with the plain window identity"
+  unset FM_STATE_OVERRIDE
+  pass "AFK changed parked panes hand off plain stale identities for daemon-owned pause triage"
+}
+
+test_afk_parked_secondmate_hands_off_plain_stale() {
+  local dir state fakebin out capture_file statusf window key pane_hash sig pid back parkf
+  dir=$(make_case afk-parked-secondmate); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-afk-secondmate"
+  export FM_STATE_OVERRIDE="$state"
+  printf 'idle, awaiting upstream\n' > "$capture_file"
+  printf 'window=%s\nkind=secondmate\n' "$window" > "$state/afk-secondmate.meta"
+  statusf="$state/afk-secondmate.status"
+  printf 'paused: awaiting the upstream tool release\n' > "$statusf"
+  park_write afk-secondmate 'awaiting the upstream tool release' 240
+  parkf="$state/afk-secondmate.parked"
+  back=$(( $(date +%s) - 500 ))
+  jq --argjson at "$back" '.parked_at=$at | .recheck_secs=240' "$parkf" > "$parkf.tmp" && mv "$parkf.tmp" "$parkf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-afk-secondmate_status"
+  date '+%s' > "$state/.afk"
+  key=$(printf '%s' "$window" | tr '.:/' '___')
+  pane_hash=$(hash_text "idle, awaiting upstream")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_CREW_STATE='state: unknown · source: none · awaiting the upstream tool release' \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "AFK parked secondmate did not hand off a stale wake"
+  grep -Fx "stale: $window" "$out" >/dev/null || fail "AFK parked secondmate did not preserve its plain stale identity: $(cat "$out")"
+  grep -F "awaiting the upstream tool release" "$out" >/dev/null && fail "AFK watcher owned the parked secondmate cadence"
+  [ ! -e "$(park_recheck_marker afk-secondmate)" ] || fail "AFK watcher advanced the parked secondmate cadence"
+  unset FM_STATE_OVERRIDE
+  pass "AFK parked secondmates hand off cadence ownership to the daemon"
 }
 
 test_signal_reason_is_actionable_classifier
@@ -1418,13 +1444,13 @@ test_nonterminal_stale_paused_under_terminal_run_absorbed
 test_blocked_stale_surfaces_immediately_never_pause_absorbed
 test_nonterminal_stale_held_gate_absorbed_then_resurfaced
 test_unmarked_parked_gate_still_surfaces
-test_held_gate_marker_clears_before_stale
+test_held_gate_marker_persists_until_structural_clear
 test_secondmate_paused_resurfaces_in_normal_mode
 test_secondmate_nonpaused_stale_remains_suppressed
 test_secondmate_unpause_clears_pause_tracking
 test_nonterminal_stale_pause_transitions_reclassify_unchanged_hash
-test_nonterminal_paused_rechecks_authoritative_state
-test_paused_authoritative_working_preserves_wedge_timer
+test_nonterminal_paused_ignores_post_write_run_state
+test_paused_post_write_working_clears_wedge_timer
 test_nonterminal_stale_repairs_missing_or_corrupt_timer
 test_triage_log_size_cap_accepts_spaced_wc_counts
 test_heartbeat_no_change_absorbed
@@ -1432,3 +1458,4 @@ test_heartbeat_backstop_surfaces_unsurfaced_status
 test_beacon_stays_fresh_while_absorbing
 test_afk_present_reverts_watcher_to_one_shot
 test_afk_paused_changed_pane_hands_off_plain_stale
+test_afk_parked_secondmate_hands_off_plain_stale

@@ -392,8 +392,35 @@ for meta in "$STATE"/*.meta; do
   else
     printf 'status tail: (no status file yet: %s)\n' "$status"
   fi
+  if [ -f "$STATE/$id.parked" ]; then
+    printf 'parked: '
+    if command -v jq >/dev/null 2>&1; then
+      jq -c '{reason,parked_at,recheck_secs,until}' "$STATE/$id.parked" 2>/dev/null \
+        || cat "$STATE/$id.parked"
+    else
+      cat "$STATE/$id.parked"
+    fi
+    printf '\n'
+  fi
 done
 [ "$META_FOUND" -eq 1 ] || printf '(none)\n'
+
+subsection "Live park markers (state/*.parked without matching .meta listed above)"
+PARK_ORPHAN_FOUND=0
+for park in "$STATE"/*.parked; do
+  [ -f "$park" ] || continue
+  id=$(basename "$park" .parked)
+  [ -f "$STATE/$id.meta" ] && continue
+  PARK_ORPHAN_FOUND=1
+  printf '\n--- %s (orphan park marker) ---\n' "$id"
+  if command -v jq >/dev/null 2>&1; then
+    jq -c . "$park" 2>/dev/null || cat "$park"
+  else
+    cat "$park"
+  fi
+  printf '\n'
+done
+[ "$PARK_ORPHAN_FOUND" -eq 1 ] || printf '(none)\n'
 
 subsection "Orphan status logs (state/*.status without matching .meta)"
 ORPHAN_STATUS_FOUND=0

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Record a captain-owned ask-user gate after firstmate relays it to the captain.
-# Refuses unless the authoritative run-step still verifies that parked gate.
+# Thin wrapper: after firstmate relays an ask-user gate to the captain, park the
+# crew only when the authoritative run-step still verifies that gate.
+# The run-step check is this wrapper's precondition; the park marker itself is
+# the absorb fact (see bin/fm-park.sh and docs/architecture.md).
 # Usage: fm-held-gate-mark.sh <task-id>
 set -u
 
@@ -11,6 +13,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 FM_CREW_STATE_BIN="${FM_CREW_STATE_BIN:-$SCRIPT_DIR/fm-crew-state.sh}"
 
 # shellcheck source=bin/fm-classify-lib.sh
+# shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 
 ID=${1:-}

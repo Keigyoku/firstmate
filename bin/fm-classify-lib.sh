@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Shared wake classifier: the common source of truth for captain-relevant status
-# tests, deliberate-hold vocabulary, and the working/paused absorb
+# tests, deliberate-hold vocabulary, and the working/parked absorb
 # classification that makes no-verb signal and stale-pane wakes safe to absorb.
 # Sourced by BOTH the always-on watcher
 # (bin/fm-watch.sh) and the away-mode daemon (bin/fm-supervise-daemon.sh) so the
@@ -13,13 +13,13 @@
 # daemon keeps its escalation-digest seen-markers; the watcher keeps its .seen-*
 # signatures).
 #
-# The one exception is the absorb classification (crew_absorb_class and its
-# working/paused wrappers). It is NOT a pure status-file read: it reuses
-# bin/fm-crew-state.sh, which may make a bounded no-mistakes call, to decide
-# whether a crew that just stopped its turn or went stale is working, deliberately
-# paused/held, or neither. Callers run it ONLY on no-verb signal handling and first
-# sighting of a stale hash, never on every wake, so the per-wake triage stays
-# cheap.
+# Deliberate holds are a representable state: state/<id>.parked, written only by
+# bin/fm-park.sh (and the thin fm-held-gate-mark.sh wrapper). Absorb of idle-pane
+# wedge noise keys on that marker alone - never on secondary run-step shapes or
+# status-verb corroboration. The absorb classification (crew_absorb_class) still
+# may call bin/fm-crew-state.sh for the separate "provably working" decision.
+# Callers run it ONLY on no-verb signal handling and first sighting of a stale
+# hash, never on every wake, so the per-wake triage stays cheap.
 
 # Directory of this library, used to locate the sibling fm-crew-state.sh reader.
 # Resolved at source time from BASH_SOURCE so it works whether sourced by a
@@ -180,12 +180,20 @@ status_open_activities() {  # <status-file-or-dash>
 }
 
 
-# Firstmate-owned marker for an ask-user review gate already relayed to the
-# captain. Its mtime anchors the same bounded re-surface cadence as a declared
-# pause. The marker is meaningful only while fm-crew-state.sh still verifies the
-# crew is parked at a run-step ask-user gate.
+# Firstmate-owned deliberate-hold marker. One path, one writer (bin/fm-park.sh).
+# JSON fields: reason, parked_at, recheck_secs, optional until.
+parked_marker() {  # <id>
+  printf '%s/%s.parked' "${STATE:-${FM_STATE_OVERRIDE:-}}" "$1"
+}
+
+park_recheck_marker() {  # <id>
+  printf '%s/.park-rechecked-%s' "${STATE:-${FM_STATE_OVERRIDE:-}}" "$1"
+}
+
+# Back-compat alias: older call sites and tests may still say "held gate marker".
+# The physical file is always state/<id>.parked.
 held_gate_marker() {  # <id>
-  printf '%s/%s.held-for-captain' "${STATE:-${FM_STATE_OVERRIDE:-}}" "$1"
+  parked_marker "$1"
 }
 
 crew_line_is_ask_user_gate() {  # <fm-crew-state line>
@@ -201,31 +209,140 @@ crew_current_state_line() {  # <id>
   case "$line" in state:*) printf '%s' "$line" ;; esac
 }
 
-# Gate-relay hook: after a captain-relevant status is durably surfaced, record a
-# hold only when the authoritative run-step proves it is an ask-user gate.
-mark_held_gate_if_verified() {  # <id>
-  local id=$1 line marker
+# 0 if state/<id>.parked exists (the primary deliberate-hold fact).
+crew_is_parked() {  # <id>
+  local id=$1 marker
   [ -n "$id" ] || return 1
-  marker=$(held_gate_marker "$id")
-  line=$(crew_current_state_line "$id")
-  if crew_line_is_ask_user_gate "$line"; then
-    : > "$marker"
-    return 0
-  fi
-  rm -f "$marker"
-  return 1
+  marker=$(parked_marker "$id")
+  [ -e "$marker" ]
 }
 
-held_gate_is_verified() {  # <id>
-  local id=$1 line marker
+# Print the park marker's reason, or empty when absent/unreadable.
+crew_parked_reason() {  # <id>
+  local marker reason
+  marker=$(parked_marker "$1")
+  [ -e "$marker" ] || return 0
+  if command -v jq >/dev/null 2>&1; then
+    reason=$(jq -r '.reason // empty' "$marker" 2>/dev/null) || reason=
+  else
+    reason=
+  fi
+  printf '%s' "$reason"
+}
+
+# Print recheck_secs from the marker, falling back to FM_PAUSE_RESURFACE_SECS default.
+crew_parked_recheck_secs() {  # <id>
+  local marker secs default
+  default=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT}
+  marker=$(parked_marker "$1")
+  if [ -e "$marker" ] && command -v jq >/dev/null 2>&1; then
+    secs=$(jq -r '.recheck_secs // empty' "$marker" 2>/dev/null) || secs=
+    case "$secs" in
+      ''|0*|*[!0-9]*) secs=$default ;;
+    esac
+  else
+    secs=$default
+  fi
+  printf '%s' "$secs"
+}
+
+# Print parked_at epoch from the marker, or empty when absent.
+crew_parked_at() {  # <id>
+  local marker at
+  marker=$(parked_marker "$1")
+  [ -e "$marker" ] || return 0
+  if command -v jq >/dev/null 2>&1; then
+    at=$(jq -r '.parked_at // empty' "$marker" 2>/dev/null) || at=
+  else
+    at=
+  fi
+  printf '%s' "$at"
+}
+
+crew_parked_recheck_epoch() {  # <id>
+  local id=$1 parked_at rechecked
+  parked_at=$(crew_parked_at "$id")
+  rechecked=$(cat "$(park_recheck_marker "$id")" 2>/dev/null || true)
+  case "$parked_at" in ''|*[!0-9]*) parked_at=0 ;; esac
+  case "$rechecked" in ''|*[!0-9]*) rechecked=0 ;; esac
+  if [ "$rechecked" -gt "$parked_at" ]; then
+    printf '%s' "$rechecked"
+  else
+    printf '%s' "$parked_at"
+  fi
+}
+
+crew_parked_recheck_advance() {  # <id> [epoch]
+  local id=$1 epoch=${2:-} marker tmp
   [ -n "$id" ] || return 1
-  marker=$(held_gate_marker "$id")
-  [ -e "$marker" ] || return 1
+  [ -n "$epoch" ] || epoch=$(date +%s)
+  case "$epoch" in ''|*[!0-9]*) return 1 ;; esac
+  marker=$(park_recheck_marker "$id")
+  tmp="${marker}.tmp.$$"
+  printf '%s\n' "$epoch" > "$tmp" || return 1
+  mv -f "$tmp" "$marker"
+}
+
+# Write state/<id>.parked atomically. Args: id reason recheck_secs [until].
+# Intended for bin/fm-park.sh; other callers should use that CLI.
+park_write() {  # <id> <reason> <recheck_secs> [until]
+  local id=$1 reason=$2 recheck=$3 until=${4:-} marker tmp now st
+  [ -n "$id" ] || return 1
+  case "$recheck" in ''|0*|*[!0-9]*) return 1 ;; esac
+  st=${STATE:-${FM_STATE_OVERRIDE:-}}
+  [ -n "$st" ] || return 1
+  mkdir -p "$st" || return 1
+  marker=$(parked_marker "$id")
+  now=$(date +%s)
+  tmp="${marker}.tmp.$$"
+  if command -v jq >/dev/null 2>&1; then
+    if [ -n "$until" ]; then
+      jq -n \
+        --arg reason "$reason" \
+        --argjson parked_at "$now" \
+        --argjson recheck_secs "$recheck" \
+        --argjson until "$until" \
+        '{reason:$reason, parked_at:$parked_at, recheck_secs:$recheck_secs, until:$until}' \
+        > "$tmp" || { rm -f "$tmp"; return 1; }
+    else
+      jq -n \
+        --arg reason "$reason" \
+        --argjson parked_at "$now" \
+        --argjson recheck_secs "$recheck" \
+        '{reason:$reason, parked_at:$parked_at, recheck_secs:$recheck_secs}' \
+        > "$tmp" || { rm -f "$tmp"; return 1; }
+    fi
+  else
+    # Fail closed without jq: park is a JSON contract.
+    rm -f "$tmp"
+    return 1
+  fi
+  mv -f "$tmp" "$marker"
+  rm -f "$(park_recheck_marker "$id")"
+}
+
+park_clear() {  # <id>
+  local id=$1 marker
+  [ -n "$id" ] || return 1
+  marker=$(parked_marker "$id")
+  rm -f "$marker" "$(park_recheck_marker "$id")"
+  # Remove the legacy held-for-captain path if a pre-migration marker remains.
+  rm -f "${STATE:-${FM_STATE_OVERRIDE:-}}/${id}.held-for-captain"
+}
+
+# Gate-relay hook: after a captain-relevant status is durably surfaced, record a
+# park only when the authoritative run-step proves it is an ask-user gate.
+# The run-step check is this wrapper's own precondition; the marker itself needs
+# none for absorb (crew_absorb_class keys on marker presence alone).
+mark_held_gate_if_verified() {  # <id>
+  local id=$1 line recheck
+  [ -n "$id" ] || return 1
   line=$(crew_current_state_line "$id")
   if crew_line_is_ask_user_gate "$line"; then
+    recheck=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT}
+    park_write "$id" "held for captain at ask-user gate" "$recheck" ""
     return 0
   fi
-  rm -f "$marker"
   return 1
 }
 
@@ -325,73 +442,41 @@ signal_reason_is_actionable() {  # <file> ...
   return 1
 }
 
-# Classify WHY an idle/stale crew MIGHT be safely absorbed instead of surfaced,
-# from bin/fm-crew-state.sh's one authoritative current-state line
-# ("state: <s> · source: <src> · <detail>"). Prints exactly one token:
+# Classify WHY an idle/stale crew MIGHT be safely absorbed instead of surfaced.
+# Prints exactly one token:
 #   working - an actively-running no-mistakes step (running/fixing/ci) or a busy
 #             pane; the crew is legitimately mid-work on a static-looking pane
 #             (e.g. waiting on CI);
-#   paused  - the crew DECLARED an external-wait pause (paused:), or a firstmate-
-#             marked ask-user gate still verified parked by its run-step; either
-#             hold is EXPECTED to idle. A terminal DONE run-step (e.g. ci-monitor
-#             checks-green) does NOT cancel a declared pause - that is the hold
-#             the crew is waiting through, and an authoritative CANCELLED run-step
-#             (custody deliberately released after green) absorbs the same way.
-#             A FAILED run-step is never masked by a stale paused: line (captain
-#             radar: failures escalate) - and cancelled is NOT failed, see below.
-#             An ACTIVE working run-step/pane still wins so a crew that resumed
-#             after pausing is never mis-absorbed;
-#   none    - neither, so the wake must surface (a stopped/finished/parked/failed/
-#             torn-down/unknown crew with no declared pause, or an unreadable
-#             verdict). blocked: is never paused. failed under a stale paused:
-#             line is never paused. done and cancelled absorb ONLY under a
-#             declared pause; on their own they still surface.
-# One fm-crew-state.sh read serves BOTH absorb reasons at once, then a cheap
-# last-status paused check covers the done/checks-green gap without weakening
-# stale detection for non-declaring idle crews or failed runs.
-# NOT a pure read: fm-crew-state.sh may make a bounded no-mistakes call, so callers
-# run it only on no-verb signal and first-sighting stale paths, never every wake.
-# FM_CREW_STATE_BIN lets tests stub the verdict.
+#   paused  - state/<id>.parked is present. Firstmate wrote that marker via
+#             bin/fm-park.sh for ANY deliberate hold (external wait, held ask-user
+#             gate, capacity backoff, board poll, ...). Marker presence alone is
+#             the absorb fact - no run-step shape or status-verb corroboration.
+#             Captain-relevant STATUS SIGNALS still wake through the signal path
+#             regardless of this class (park suppresses idle-pane wedge noise only);
+#   none    - neither, so the wake must surface (a stopped crew with no park
+#             marker, or unreadable verdict). A stopped crew without a marker is
+#             NEVER silently absorbed.
+# NOT a pure read: fm-crew-state.sh may make a bounded no-mistakes call for the
+# working decision, so callers run it only on no-verb signal and first-sighting
+# stale paths, never every wake. FM_CREW_STATE_BIN lets tests stub the verdict.
 crew_absorb_class() {  # <id>
-  local id=$1 line state src last st
+  local id=$1 line state src
   [ -n "$id" ] || { printf 'none'; return; }
-  if held_gate_is_verified "$id"; then
+  if crew_is_parked "$id"; then
     printf 'paused'
     return
   fi
   line=$(crew_current_state_line "$id")
-  [ -n "$line" ] || { printf 'none'; return; }
-  state=${line#state: }; state=${state%% *}
-  if [ "$state" = paused ]; then printf 'paused'; return; fi
-  if [ "$state" = working ]; then
-    src=${line#*source: }; src=${src%% *}
-    case "$src" in run-step|pane) printf 'working'; return ;; esac
-  fi
-  # A genuine FAILURE must surface even when the last status event is a stale
-  # paused: line written before the failure. CANCELLED is deliberately NOT
-  # folded in here, and must never be re-collapsed onto failed: a deliberate
-  # custody release (`no-mistakes axi abort` after a green run - the sanctioned
-  # way to free the branch for the next crew) and a failure are OPPOSITE events.
-  # While they shared one state token, absorb had to choose between masking real
-  # failures and waking the captain every poll, forever, for provably healthy
-  # crews that released custody correctly - and it did the second.
-  if [ "$state" = failed ]; then
-    printf 'none'
-    return
-  fi
-  # A last-line declared external wait may absorb an authoritative terminal
-  # done/checks-green state, or an equally authoritative cancelled one (custody
-  # released, crew standing by). Parked, unknown, and other non-terminal states
-  # must surface unless an earlier authoritative path classified them as a hold.
-  # Neither absorbs on its own: without a declared pause both still surface.
-  if [ "$state" = "done" ] || [ "$state" = cancelled ]; then
-    st=${STATE:-${FM_STATE_OVERRIDE:-}}
-    if [ -n "$st" ]; then
-      last=$(last_status_line "$st/$id.status")
-      if status_is_paused "$last"; then
-        printf 'paused'
-        return
-      fi
+  if [ -n "$line" ]; then
+    state=${line#state: }; state=${state%% *}
+    if [ "$state" = working ]; then
+      src=${line#*source: }; src=${src%% *}
+      case "$src" in
+        run-step|pane)
+          printf 'working'
+          return
+          ;;
+      esac
     fi
   fi
   printf 'none'
@@ -408,10 +493,9 @@ crew_is_provably_working() {  # <id>
   [ "$(crew_absorb_class "$1")" = working ]
 }
 
-# 0 if crew <id> is in a verified deliberate hold: either a declared external
-# wait or a firstmate-marked ask-user gate that remains authoritatively parked.
-# The stale path absorbs such a crew on a long cadence instead of escalating a
-# possible wedge.
+# 0 if crew <id> is deliberately held via state/<id>.parked (crew_absorb_class
+# reports `paused`). The stale path absorbs such a crew on the marker's recheck
+# cadence instead of escalating a possible wedge.
 crew_is_paused() {  # <id>
   [ "$(crew_absorb_class "$1")" = paused ]
 }
