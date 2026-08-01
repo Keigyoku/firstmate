@@ -656,6 +656,26 @@ jq -e 'has("worktree") | not' "$NOWORKTREE_POINTER" >/dev/null \
   || fail "worktree-less transcript bind invented a top-level worktree"
 pass "known transcript extracts session without unrelated worktree"
 
+FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
+  FM_CHILD_SESSION_ID=directory-session FM_CHILD_TRANSCRIPT="$TEST_ROOT" \
+  "$ROOT/bin/fm-child-node-publish.sh" "$NOWORKTREE_ID" ready
+jq -e 'has("conversation") | not' "$NOWORKTREE_POINTER" >/dev/null \
+  || fail "directory transcript override published an invented conversation"
+pass "directory transcript override is rejected"
+
+CODEX_SYMLINK="$TEST_ROOT/codex-transcript-link.jsonl"
+ln -s "$CODEX_JSONL" "$CODEX_SYMLINK"
+FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
+  FM_CHILD_TRANSCRIPT="$CODEX_SYMLINK" \
+  "$ROOT/bin/fm-child-node-publish.sh" "$NOWORKTREE_ID" ready
+consumer_shape_deserialize "$NOWORKTREE_POINTER" present \
+  codex "$CODEX_SID" codex-rollout-v1 "$CODEX_SID" "$CODEX_JSONL" \
+  || fail "consumer fixture rejected resolved transcript symlink"
+jq -e --arg path "$CODEX_JSONL" '.conversation.transcript.path == $path' \
+  "$NOWORKTREE_POINTER" >/dev/null \
+  || fail "transcript symlink was not resolved to its physical file"
+pass "transcript symlink publishes resolved physical file"
+
 # --- slice 14: fm-spawn birth + complete publish (live path transcript) ---
 SPAWN_CONV_CASE="$TEST_ROOT/spawn-conv"
 SPAWN_CONV_HOME="$SPAWN_CONV_CASE/home"

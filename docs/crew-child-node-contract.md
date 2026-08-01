@@ -98,13 +98,13 @@ When every field is knowable, publish:
 
 Rules:
 
-- Publish **only** when harness, session_id, adapter, and a **verified-real** absolute transcript path are all known.
+- Publish **only** when harness, session_id, adapter, and a **verified-real regular file** at an absolute transcript path are all known.
 - Discovery reuses the resident multi-harness helpers (`fm_resident_discover_transcript`, ADR 0056 adapters).
-- Paths are canonicalized to the physical spelling (`pwd -P` / `fm_resident_canonical_path`); prefer `/var/home` over a `/home` symlink.
+- Transcript paths are fully resolved through every symlink, including the filename, before publication; prefer `/var/home` over a `/home` symlink.
 - **Omit the entire `conversation` object** when any field is unknown - never invent a session id or path.
 - Full conversation is often unknowable at birth (`starting`); it completes when the session artifact becomes real.
 - The natural completion path is a later publish with lifecycle omitted (preserves prior lifecycle/backend/status) on status or turn-end, via `fm_child_node_try_refresh` from the watcher signal scan.
-- Env overrides for tests: `FM_CHILD_SESSION_ID`, `FM_CHILD_TRANSCRIPT` (path must exist).
+- Env overrides for tests: `FM_CHILD_SESSION_ID`, `FM_CHILD_TRANSCRIPT` (absolute path must resolve to a regular file).
 
 Harness alone is not enough for durable transcript bind.
 Top-level `harness` alone is not enough (firstmate PR #50 shape was insufficient for Chat: the then-shipped consumer only read nested `conversation`, so serde dropped the top-level fields unread).
@@ -190,6 +190,8 @@ ok - unknown transcript omits conversation; top-level hints still published
 ok - birth-then-complete publish preserves prior observed objects verbatim
 ok - explicit lifecycle transition does not inherit stale observed objects
 ok - known transcript extracts session without unrelated worktree
+ok - directory transcript override is rejected
+ok - transcript symlink publishes resolved physical file
 ok - fm-spawn birth-then-complete: nested conversation arrives for consumer read
 ```
 

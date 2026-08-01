@@ -14,7 +14,7 @@
 #
 # Test/adapter seams: FM_CHILD_{BACKEND_KIND,WORKSPACE_ID,PANE_ID,PID,STATUS_VERB,STATUS_NOTE}
 # Optional identity hints: FM_CHILD_{HARNESS,WORKTREE} override state/<task-id>.meta.
-# Optional conversation override: FM_CHILD_{SESSION_ID,TRANSCRIPT} (path must exist).
+# Optional conversation override: FM_CHILD_{SESSION_ID,TRANSCRIPT} (regular file only).
 # Nested conversation is published only when harness, session_id, adapter, and a
 # verified-real absolute transcript path are all knowable - never invent.
 # Top-level harness/worktree remain additive per-field hints (never invent).
@@ -35,6 +35,23 @@ fm_child_meta_get() {  # <meta-file> <key>
   local meta=$1 key=$2
   [ -f "$meta" ] || return 0
   grep "^${key}=" "$meta" 2>/dev/null | tail -1 | cut -d= -f2- || true
+}
+
+fm_child_real_file_path() {  # <path>
+  local path=$1 resolved
+  case "$path" in /*) ;; *) return 1 ;; esac
+  [ -f "$path" ] || return 1
+  if command -v realpath >/dev/null 2>&1; then
+    resolved=$(realpath "$path" 2>/dev/null) || return 1
+  elif command -v python3 >/dev/null 2>&1; then
+    resolved=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' \
+      "$path" 2>/dev/null) || return 1
+  else
+    return 1
+  fi
+  case "$resolved" in /*) ;; *) return 1 ;; esac
+  [ -f "$resolved" ] || return 1
+  printf '%s\n' "$resolved"
 }
 
 usage() {
@@ -207,14 +224,7 @@ fi
 if [ -n "$HARNESS" ] && [ -n "$WORKTREE" ] && [ -z "$TRANSCRIPT" ]; then
   TRANSCRIPT=$(fm_resident_discover_transcript "$HARNESS" "$WORKTREE" 2>/dev/null || true)
 fi
-if [ -n "$TRANSCRIPT" ] && [ -e "$TRANSCRIPT" ]; then
-  case "$TRANSCRIPT" in
-    /*) TRANSCRIPT=$(fm_resident_canonical_path "$TRANSCRIPT") ;;
-    *) TRANSCRIPT= ;;
-  esac
-else
-  TRANSCRIPT=
-fi
+TRANSCRIPT=$(fm_child_real_file_path "$TRANSCRIPT" 2>/dev/null || true)
 if [ -z "$SESSION_ID" ] && [ -n "$HARNESS" ] && [ -n "$TRANSCRIPT" ]; then
   case "$HARNESS" in
     opencode|hermes)
