@@ -111,6 +111,7 @@ state/               volatile runtime signals; gitignored
   <id>.grok-turnend-token   firstmate-owned grok hook registry token for the task; removed by teardown
   <id>.grok-killguard-token firstmate-owned grok kill-guard hook registry token for the task; removed by teardown
   <id>.grok-tddguard-token  firstmate-owned grok TDD pre-execution guard hook registry token for a ship task; removed by teardown
+  <id>.parked        firstmate-owned deliberate-hold marker (JSON); written by bin/fm-park.sh; absorb ownership in docs/architecture.md; removed by teardown or fm-park.sh --clear
   <id>.meta          written by fm-spawn: window=, worktree=, project=, harness=, model=, effort=, kind=, mode=, yolo=, tasktmp=, and optional role=; kind=secondmate also records home= and projects=; a non-default runtime backend records further backend-specific fields (docs/configuration.md "Runtime backend"; bin/fm-backend.sh, section 8); fm-pr-check, including through fm-pr-merge, appends pr= and GitHub's pr_head= when available; fm-x-link appends x_request=, x_request_ts=, x_followups=, and optional x_platform=/x_reply_max_chars= for an X-mode-originated task (section 14)
   For treehouse-backed ship/scout tasks, worktree= is stored with the `$HOME` spelling when that spelling resolves to the same physical directory as the backend-reported path, matching treehouse's registry on symlinked-home hosts.
   <id>.check.sh      optional slow poll you write per task (e.g. merged-PR check)
@@ -417,7 +418,7 @@ If `fm-guard.sh` surfaces `WATCHDOG HALTED - SUCCESSOR SPAWN FAILED`, inspect th
 The watcher classifies every wake in bash and absorbs the benign majority without waking you, but it never absorbs an unmarked crewmate that has stopped.
 The no-verb signal path is absorbed ONLY while that crewmate shows positive evidence it is still working: its no-mistakes run for its branch is in an actively-running step, or its pane shows the harness busy signature.
 For a fresh `stale` pane, the watcher checks the same positive evidence before trusting the status log.
-A crewmate that explicitly declares a deliberate external wait with `paused:` is the one other absorb case: its expected idle pane is absorbed and rechecked on the long pause cadence, with current-state precedence documented in [`docs/architecture.md`](docs/architecture.md#event-driven-supervision).
+A deliberate hold is the one other idle absorb case: firstmate writes `state/<id>.parked` via `bin/fm-park.sh` (for any park reason), and the watcher absorbs that pane on the marker's cadence; ownership and safety rules live in [`docs/architecture.md`](docs/architecture.md#event-driven-supervision).
 A `heartbeat` with no captain-relevant change is likewise absorbed.
 Only an actionable wake is written to the durable queue at `state/.wake-queue` and ends the current supervision wait.
 The classifier lives in `bin/fm-classify-lib.sh` and is shared with the away-mode daemon.
@@ -426,7 +427,7 @@ While `state/.afk` exists the daemon owns supervision, so the watcher reverts to
 At the start of every wake-handling turn, run `bin/fm-wake-drain.sh` before peeking panes, reading status files beyond the reason line, or starting new work.
 Session-start recovery is the exception: `bin/fm-session-start.sh` already drained the queue when locked, or deliberately skipped the drain when read-only.
 A status line is a wake event, not current state; use `bin/fm-crew-state.sh` when current state matters, especially before re-escalating an old decision, blocker, or pause.
-A declared `paused:` event means a bounded external wait expected to clear on its own, while `blocked:` means firstmate action is needed.
+A declared `paused:` event means a bounded external wait expected to clear on its own (firstmate should park via `bin/fm-park.sh` so the idle pane is absorbed), while `blocked:` means firstmate action is needed.
 
 Handle actionable wakes as follows:
 
