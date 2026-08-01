@@ -1386,6 +1386,38 @@ test_afk_paused_changed_pane_hands_off_plain_stale() {
   pass "AFK changed parked panes hand off plain stale identities for daemon-owned pause triage"
 }
 
+test_afk_parked_secondmate_hands_off_plain_stale() {
+  local dir state fakebin out capture_file statusf window key pane_hash sig pid back parkf
+  dir=$(make_case afk-parked-secondmate); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-afk-secondmate"
+  export FM_STATE_OVERRIDE="$state"
+  printf 'idle, awaiting upstream\n' > "$capture_file"
+  printf 'window=%s\nkind=secondmate\n' "$window" > "$state/afk-secondmate.meta"
+  statusf="$state/afk-secondmate.status"
+  printf 'paused: awaiting the upstream tool release\n' > "$statusf"
+  park_write afk-secondmate 'awaiting the upstream tool release' 240
+  parkf="$state/afk-secondmate.parked"
+  back=$(( $(date +%s) - 500 ))
+  jq --argjson at "$back" '.parked_at=$at | .recheck_secs=240' "$parkf" > "$parkf.tmp" && mv "$parkf.tmp" "$parkf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-afk-secondmate_status"
+  date '+%s' > "$state/.afk"
+  key=$(printf '%s' "$window" | tr '.:/' '___')
+  pane_hash=$(hash_text "idle, awaiting upstream")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_CREW_STATE='state: unknown · source: none · awaiting the upstream tool release' \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "AFK parked secondmate did not hand off a stale wake"
+  grep -Fx "stale: $window" "$out" >/dev/null || fail "AFK parked secondmate did not preserve its plain stale identity: $(cat "$out")"
+  grep -F "awaiting the upstream tool release" "$out" >/dev/null && fail "AFK watcher owned the parked secondmate cadence"
+  [ ! -e "$(park_recheck_marker afk-secondmate)" ] || fail "AFK watcher advanced the parked secondmate cadence"
+  unset FM_STATE_OVERRIDE
+  pass "AFK parked secondmates hand off cadence ownership to the daemon"
+}
+
 test_signal_reason_is_actionable_classifier
 test_stale_is_terminal_classifier
 test_scan_captain_relevant_statuses_classifier
@@ -1426,3 +1458,4 @@ test_heartbeat_backstop_surfaces_unsurfaced_status
 test_beacon_stays_fresh_while_absorbing
 test_afk_present_reverts_watcher_to_one_shot
 test_afk_paused_changed_pane_hands_off_plain_stale
+test_afk_parked_secondmate_hands_off_plain_stale
