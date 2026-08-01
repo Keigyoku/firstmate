@@ -18,7 +18,7 @@
 # Nested conversation is published only when harness, session_id, adapter, and a
 # verified-real absolute transcript path are all knowable - never invent.
 # Top-level harness/worktree remain additive per-field hints (never invent).
-# When env omits backend/status/pid on a refresh, prior pointer values are kept.
+# When env omits backend/status/pid on a refresh, prior objects are kept verbatim.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -119,6 +119,10 @@ trap 'fm_lock_release "$SERIAL" 2>/dev/null || true' EXIT
 
 OLD_EPOCH=0
 PREV_LIFECYCLE=
+PREV_BACKEND=
+PREV_ATTESTATION=
+PREV_STATUS=
+PREV_PROCESS=
 if [ -s "$POINTER" ]; then
   OLD_EPOCH=$(jq -r --arg container_id "$CONTAINER_ID" \
     'select(.schema == "dev.vellum.child-current/1" and .container_id == $container_id) | .epoch // 0' \
@@ -126,6 +130,20 @@ if [ -s "$POINTER" ]; then
   PREV_LIFECYCLE=$(jq -r --arg container_id "$CONTAINER_ID" \
     'select(.schema == "dev.vellum.child-current/1" and .container_id == $container_id) | .lifecycle // empty' \
     "$POINTER" 2>/dev/null || true)
+  if [ "$LIFECYCLE_SET" -eq 0 ]; then
+    PREV_BACKEND=$(jq -c --arg container_id "$CONTAINER_ID" \
+      'select(.schema == "dev.vellum.child-current/1" and .container_id == $container_id) | .backend // empty' \
+      "$POINTER" 2>/dev/null || true)
+    PREV_ATTESTATION=$(jq -c --arg container_id "$CONTAINER_ID" \
+      'select(.schema == "dev.vellum.child-current/1" and .container_id == $container_id) | .attestation // empty' \
+      "$POINTER" 2>/dev/null || true)
+    PREV_STATUS=$(jq -c --arg container_id "$CONTAINER_ID" \
+      'select(.schema == "dev.vellum.child-current/1" and .container_id == $container_id) | .status // empty' \
+      "$POINTER" 2>/dev/null || true)
+    PREV_PROCESS=$(jq -c --arg container_id "$CONTAINER_ID" \
+      'select(.schema == "dev.vellum.child-current/1" and .container_id == $container_id) | .process // empty' \
+      "$POINTER" 2>/dev/null || true)
+  fi
 fi
 case "$OLD_EPOCH" in ''|*[!0-9]*) OLD_EPOCH=0 ;; esac
 EPOCH=$((OLD_EPOCH + 1))
@@ -150,39 +168,12 @@ PID=${FM_CHILD_PID:-}
 STATUS_VERB=${FM_CHILD_STATUS_VERB:-}
 STATUS_NOTE=${FM_CHILD_STATUS_NOTE:-}
 
-# Refresh path: keep prior backend/status/pid when env did not re-supply them.
-if [ -s "$POINTER" ]; then
-  if [ -z "$BACKEND_KIND" ] || [ -z "$WORKSPACE_ID" ] || [ -z "$PANE_ID" ]; then
-    if [ -z "$BACKEND_KIND" ]; then
-      BACKEND_KIND=$(jq -r --arg container_id "$CONTAINER_ID" \
-        'select(.schema == "dev.vellum.child-current/1" and .container_id == $container_id) | .backend.kind // empty' \
-        "$POINTER" 2>/dev/null || true)
-    fi
-    if [ -z "$WORKSPACE_ID" ]; then
-      WORKSPACE_ID=$(jq -r --arg container_id "$CONTAINER_ID" \
-        'select(.schema == "dev.vellum.child-current/1" and .container_id == $container_id) | .backend.workspace_id // empty' \
-        "$POINTER" 2>/dev/null || true)
-    fi
-    if [ -z "$PANE_ID" ]; then
-      PANE_ID=$(jq -r --arg container_id "$CONTAINER_ID" \
-        'select(.schema == "dev.vellum.child-current/1" and .container_id == $container_id) | .backend.pane_id // empty' \
-        "$POINTER" 2>/dev/null || true)
-    fi
-  fi
-  if [ -z "$STATUS_VERB" ]; then
-    STATUS_VERB=$(jq -r --arg container_id "$CONTAINER_ID" \
-      'select(.schema == "dev.vellum.child-current/1" and .container_id == $container_id) | .status.verb // empty' \
-      "$POINTER" 2>/dev/null || true)
-    STATUS_NOTE=$(jq -r --arg container_id "$CONTAINER_ID" \
-      'select(.schema == "dev.vellum.child-current/1" and .container_id == $container_id) | .status.note // empty' \
-      "$POINTER" 2>/dev/null || true)
-  fi
-  if [ -z "$PID" ]; then
-    PID=$(jq -r --arg container_id "$CONTAINER_ID" \
-      'select(.schema == "dev.vellum.child-current/1" and .container_id == $container_id) | .process.pid // empty' \
-      "$POINTER" 2>/dev/null || true)
-  fi
-fi
+BACKEND_SUPPLIED=0
+STATUS_SUPPLIED=0
+PROCESS_SUPPLIED=0
+[ -z "$BACKEND_KIND$WORKSPACE_ID$PANE_ID" ] || BACKEND_SUPPLIED=1
+[ -z "$STATUS_VERB$STATUS_NOTE" ] || STATUS_SUPPLIED=1
+[ -z "$PID" ] || PROCESS_SUPPLIED=1
 
 case "$PID" in ''|*[!0-9]*) PID='' ;; esac
 CREATION_IDENTITY=''
@@ -213,13 +204,8 @@ TRANSCRIPT_ADAPTER=
 if [ -n "$HARNESS" ]; then
   TRANSCRIPT_ADAPTER=$(fm_resident_transcript_adapter "$HARNESS" 2>/dev/null || true)
 fi
-if [ -n "$HARNESS" ] && [ -n "$WORKTREE" ]; then
-  if [ -z "$TRANSCRIPT" ]; then
-    TRANSCRIPT=$(fm_resident_discover_transcript "$HARNESS" "$WORKTREE" 2>/dev/null || true)
-  fi
-  if [ -z "$SESSION_ID" ] && [ -n "$TRANSCRIPT" ]; then
-    SESSION_ID=$(fm_resident_session_id_from_transcript "$HARNESS" "$TRANSCRIPT" "$WORKTREE" 2>/dev/null || true)
-  fi
+if [ -n "$HARNESS" ] && [ -n "$WORKTREE" ] && [ -z "$TRANSCRIPT" ]; then
+  TRANSCRIPT=$(fm_resident_discover_transcript "$HARNESS" "$WORKTREE" 2>/dev/null || true)
 fi
 if [ -n "$TRANSCRIPT" ] && [ -e "$TRANSCRIPT" ]; then
   case "$TRANSCRIPT" in
@@ -228,6 +214,20 @@ if [ -n "$TRANSCRIPT" ] && [ -e "$TRANSCRIPT" ]; then
   esac
 else
   TRANSCRIPT=
+fi
+if [ -z "$SESSION_ID" ] && [ -n "$HARNESS" ] && [ -n "$TRANSCRIPT" ]; then
+  case "$HARNESS" in
+    opencode|hermes)
+      if [ -n "$WORKTREE" ]; then
+        SESSION_ID=$(fm_resident_session_id_from_transcript \
+          "$HARNESS" "$TRANSCRIPT" "$WORKTREE" 2>/dev/null || true)
+      fi
+      ;;
+    *)
+      SESSION_ID=$(fm_resident_session_id_from_transcript \
+        "$HARNESS" "$TRANSCRIPT" 2>/dev/null || true)
+      ;;
+  esac
 fi
 
 BASE=$(jq -n \
@@ -252,6 +252,8 @@ BASE=$(jq -n \
 if [ "$LIFECYCLE" != stopped ] && [ -n "$PID" ] && [ -n "$CREATION_IDENTITY" ]; then
   BASE=$(jq --argjson pid "$PID" --arg identity "$CREATION_IDENTITY" \
     '. + {process:{pid:$pid,creation_identity:$identity}}' <<<"$BASE")
+elif [ "$LIFECYCLE" != stopped ] && [ "$PROCESS_SUPPLIED" -eq 0 ] && [ -n "$PREV_PROCESS" ]; then
+  BASE=$(jq --argjson process "$PREV_PROCESS" '. + {process:$process}' <<<"$BASE")
 fi
 
 if [ "$LIFECYCLE" != stopped ] && [ -n "$BACKEND_KIND" ] && [ -n "$WORKSPACE_ID" ] && [ -n "$PANE_ID" ]; then
@@ -259,11 +261,21 @@ if [ "$LIFECYCLE" != stopped ] && [ -n "$BACKEND_KIND" ] && [ -n "$WORKSPACE_ID"
     --arg published_at "$PUBLISHED_AT" \
     '. + {backend:{kind:$kind,workspace_id:$workspace,pane_id:$pane},attestation:{method:"backend-pane-v1",observed_at:$published_at}}' \
     <<<"$BASE")
+elif [ "$LIFECYCLE" != stopped ] && [ "$BACKEND_SUPPLIED" -eq 0 ]; then
+  if [ -n "$PREV_BACKEND" ]; then
+    BASE=$(jq --argjson backend "$PREV_BACKEND" '. + {backend:$backend}' <<<"$BASE")
+  fi
+  if [ -n "$PREV_ATTESTATION" ]; then
+    BASE=$(jq --argjson attestation "$PREV_ATTESTATION" \
+      '. + {attestation:$attestation}' <<<"$BASE")
+  fi
 fi
 
 if [ -n "$STATUS_VERB" ]; then
   BASE=$(jq --arg verb "$STATUS_VERB" --arg note "$STATUS_NOTE" --arg at "$PUBLISHED_AT" \
     '. + {status:{verb:$verb,note:$note,at:$at}}' <<<"$BASE")
+elif [ "$STATUS_SUPPLIED" -eq 0 ] && [ -n "$PREV_STATUS" ]; then
+  BASE=$(jq --argjson status "$PREV_STATUS" '. + {status:$status}' <<<"$BASE")
 fi
 
 if [ -n "$HARNESS" ]; then

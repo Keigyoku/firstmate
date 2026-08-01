@@ -471,30 +471,13 @@ jq -e --arg h "$META_HARNESS" --arg w "$META_WT" '
 pass "fm-spawn non-claude harness and worktree match child-current"
 
 # --- slice 11 (RED→GREEN): nested conversation when transcript is verified-real ---
-# Consumer shape mirrors vellum ChildCurrent / ChildConversation
-# (projects/vellum/crates/vellum-core/src/session/child_node.rs @ 591b31dc4).
-# An assertion that only checks top-level harness/worktree is the #50 failure mode.
-consumer_shape_accepts() {  # <child-current.json>
-  jq -e '
-    .schema == "dev.vellum.child-current/1"
-    and (.container_id | type == "string")
-    and (.parent_container_id | type == "string")
-    and (.epoch | type == "number")
-    and (.published_at | type == "string")
-    and (.lifecycle | type == "string")
-    and (.child_type | type == "string")
-    and (
-      (has("conversation") | not)
-      or (
-        (.conversation.harness | type == "string" and length > 0)
-        and (.conversation.session_id | type == "string" and length > 0)
-        and (.conversation.transcript.adapter | type == "string" and length > 0)
-        and (.conversation.transcript.id | type == "string" and length > 0)
-        and (.conversation.transcript.path | type == "string")
-        and (.conversation.transcript.path | startswith("/"))
-      )
-    )
-  ' "$1" >/dev/null
+CONSUMER_MANIFEST="$ROOT/tests/fixtures/vellum-child-current-consumer/Cargo.toml"
+CONSUMER_TARGET="$TEST_ROOT/vellum-child-current-consumer-target"
+CARGO_TARGET_DIR="$CONSUMER_TARGET" cargo build --quiet --manifest-path "$CONSUMER_MANIFEST"
+CONSUMER_FIXTURE="$CONSUMER_TARGET/debug/vellum-child-current-consumer-fixture"
+
+consumer_shape_deserialize() {
+  "$CONSUMER_FIXTURE" "$@"
 }
 
 # Isolated harness roots so discovery never touches the operator's real journals.
@@ -533,8 +516,9 @@ FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
   FM_CHILD_BACKEND_KIND=herdr FM_CHILD_WORKSPACE_ID=ws-conv FM_CHILD_PANE_ID=pane-conv \
   "$ROOT/bin/fm-child-node-publish.sh" "$CONV_ID" ready
 CONV_POINTER="$CONV_HOME/state/child-current.json"
-consumer_shape_accepts "$CONV_POINTER" \
-  || fail "consumer shape rejected published child-current: $(cat "$CONV_POINTER")"
+consumer_shape_deserialize "$CONV_POINTER" present \
+  grok "$GROK_SID" grok-chat-history-v1 "$GROK_SID" "$GROK_JSONL" \
+  || fail "consumer fixture rejected published child-current: $(cat "$CONV_POINTER")"
 jq -e --arg h grok --arg sid "$GROK_SID" --arg adapter grok-chat-history-v1 --arg path "$GROK_JSONL" --arg wt "$CONV_WT" '
   .harness == $h
   and .worktree == $wt
@@ -545,11 +529,6 @@ jq -e --arg h grok --arg sid "$GROK_SID" --arg adapter grok-chat-history-v1 --ar
   and .conversation.transcript.path == $path
 ' "$CONV_POINTER" >/dev/null \
   || fail "nested conversation missing or wrong (got: $(jq -c '{harness,worktree,conversation}' "$CONV_POINTER"))"
-# Honest Vellum-side read: the nested object is what ChildConversation deserializes.
-# Top-level-only docs must NOT be treated as a full conversation bind.
-jq -e 'has("conversation") and (.conversation | has("harness") and has("session_id") and has("transcript"))' \
-  "$CONV_POINTER" >/dev/null \
-  || fail "consumer nested conversation contract not satisfied"
 pass "child-current publishes nested conversation; consumer shape deserializes it"
 
 # --- slice 12: unknown transcript stays absent (never invent conversation) ---
@@ -576,7 +555,7 @@ jq -e '
   and (has("conversation") | not)
 ' "$NOCONV_POINTER" >/dev/null \
   || fail "absent transcript must omit conversation, keep top-level hints (got: $(jq -c '{harness,worktree,conversation}' "$NOCONV_POINTER"))"
-consumer_shape_accepts "$NOCONV_POINTER" \
+consumer_shape_deserialize "$NOCONV_POINTER" absent \
   || fail "consumer shape must accept pointer without conversation"
 pass "unknown transcript omits conversation; top-level hints still published"
 
@@ -597,13 +576,24 @@ fm_write_meta "$HOME_DIR/state/$COMPLETE_ID.meta" \
 # Birth publish: no codex rollout yet → no conversation.
 FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
   FM_CHILD_BACKEND_KIND=herdr FM_CHILD_WORKSPACE_ID=ws-c FM_CHILD_PANE_ID=pane-c \
-  FM_CHILD_STATUS_VERB=working \
+  FM_CHILD_PID=$$ FM_CHILD_STATUS_VERB=working \
   "$ROOT/bin/fm-child-node-publish.sh" "$COMPLETE_ID" starting
 COMPLETE_POINTER="$COMPLETE_HOME/state/child-current.json"
 jq -e '.lifecycle == "starting" and (has("conversation") | not) and .harness == "codex"' \
   "$COMPLETE_POINTER" >/dev/null \
   || fail "birth without journal must omit conversation (got: $(jq -c . "$COMPLETE_POINTER"))"
 BIRTH_EPOCH=$(jq -r '.epoch' "$COMPLETE_POINTER")
+jq '
+  .process.creation_identity = "original-process-pair"
+  | .status.at = "2001-01-01T00:00:00Z"
+  | .attestation.observed_at = "2002-02-02T00:00:00Z"
+' "$COMPLETE_POINTER" \
+  > "$COMPLETE_POINTER.seed"
+mv "$COMPLETE_POINTER.seed" "$COMPLETE_POINTER"
+BIRTH_BACKEND=$(jq -c '.backend' "$COMPLETE_POINTER")
+BIRTH_ATTESTATION=$(jq -c '.attestation' "$COMPLETE_POINTER")
+BIRTH_STATUS=$(jq -c '.status' "$COMPLETE_POINTER")
+BIRTH_PROCESS=$(jq -c '.process' "$COMPLETE_POINTER")
 # Session becomes real (codex rollout for worktree).
 CODEX_SID=complete-codex-sid-1
 CODEX_JSONL="$CODEX_HOME/sessions/2026/07/31/rollout-complete-codex.jsonl"
@@ -613,11 +603,15 @@ CODEX_JSONL=$(cd "$(dirname "$CODEX_JSONL")" && printf '%s/%s\n' "$(pwd -P)" "$(
 # Complete publish: omit lifecycle to preserve previous (refresh path).
 FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
   "$ROOT/bin/fm-child-node-publish.sh" "$COMPLETE_ID"
-jq -e --arg sid "$CODEX_SID" --arg path "$CODEX_JSONL" --argjson birth "$BIRTH_EPOCH" '
+jq -e --arg sid "$CODEX_SID" --arg path "$CODEX_JSONL" --argjson birth "$BIRTH_EPOCH" \
+  --argjson backend "$BIRTH_BACKEND" --argjson attestation "$BIRTH_ATTESTATION" \
+  --argjson status "$BIRTH_STATUS" --argjson process "$BIRTH_PROCESS" '
   .lifecycle == "starting"
   and .epoch == ($birth + 1)
-  and .backend == {kind:"herdr",workspace_id:"ws-c",pane_id:"pane-c"}
-  and .status.verb == "working"
+  and .backend == $backend
+  and .attestation == $attestation
+  and .status == $status
+  and .process == $process
   and .conversation.harness == "codex"
   and .conversation.session_id == $sid
   and .conversation.transcript.adapter == "codex-rollout-v1"
@@ -626,9 +620,41 @@ jq -e --arg sid "$CODEX_SID" --arg path "$CODEX_JSONL" --argjson birth "$BIRTH_E
   and .harness == "codex"
 ' "$COMPLETE_POINTER" >/dev/null \
   || fail "complete publish did not fill nested conversation while preserving birth fields (got: $(jq -c . "$COMPLETE_POINTER"))"
-consumer_shape_accepts "$COMPLETE_POINTER" \
+consumer_shape_deserialize "$COMPLETE_POINTER" present \
+  codex "$CODEX_SID" codex-rollout-v1 "$CODEX_SID" "$CODEX_JSONL" \
   || fail "consumer shape rejected completed pointer"
-pass "birth-then-complete publish fills conversation; preserves lifecycle/backend/status"
+pass "birth-then-complete publish preserves prior observed objects verbatim"
+
+FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
+  "$ROOT/bin/fm-child-node-publish.sh" "$COMPLETE_ID" "done"
+jq -e '
+  .lifecycle == "done"
+  and (has("backend") | not)
+  and (has("attestation") | not)
+  and (has("status") | not)
+  and (has("process") | not)
+' "$COMPLETE_POINTER" >/dev/null \
+  || fail "explicit lifecycle inherited stale observed objects (got: $(jq -c . "$COMPLETE_POINTER"))"
+pass "explicit lifecycle transition does not inherit stale observed objects"
+
+NOWORKTREE_ID=no-worktree-k4
+NOWORKTREE_HOME="$HOME_DIR/crews/$NOWORKTREE_ID"
+FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
+  "$ROOT/bin/fm-child-node-setup.sh" "$NOWORKTREE_ID" --kind ship
+fm_write_meta "$HOME_DIR/state/$NOWORKTREE_ID.meta" \
+  "window=fm-$NOWORKTREE_ID" \
+  "harness=codex" \
+  "kind=ship"
+FM_HOME="$HOME_DIR" FM_ROOT_OVERRIDE="$ROOT" \
+  FM_CHILD_TRANSCRIPT="$CODEX_JSONL" \
+  "$ROOT/bin/fm-child-node-publish.sh" "$NOWORKTREE_ID" ready
+NOWORKTREE_POINTER="$NOWORKTREE_HOME/state/child-current.json"
+consumer_shape_deserialize "$NOWORKTREE_POINTER" present \
+  codex "$CODEX_SID" codex-rollout-v1 "$CODEX_SID" "$CODEX_JSONL" \
+  || fail "consumer fixture rejected transcript bind without worktree"
+jq -e 'has("worktree") | not' "$NOWORKTREE_POINTER" >/dev/null \
+  || fail "worktree-less transcript bind invented a top-level worktree"
+pass "known transcript extracts session without unrelated worktree"
 
 # --- slice 14: fm-spawn birth + complete publish (live path transcript) ---
 SPAWN_CONV_CASE="$TEST_ROOT/spawn-conv"
@@ -688,6 +714,7 @@ jq -e --arg sid "$SPAWN_GROK_SID" --arg path "$SPAWN_GROK_JSONL" '
   and .harness == "grok"
 ' "$SPAWN_CONV_POINTER" >/dev/null \
   || fail "spawn birth-then-complete failed (got: $(jq -c '{lifecycle,harness,conversation}' "$SPAWN_CONV_POINTER"))"
-consumer_shape_accepts "$SPAWN_CONV_POINTER" \
+consumer_shape_deserialize "$SPAWN_CONV_POINTER" present \
+  grok "$SPAWN_GROK_SID" grok-chat-history-v1 "$SPAWN_GROK_SID" "$SPAWN_GROK_JSONL" \
   || fail "consumer shape rejected spawn-completed pointer"
 pass "fm-spawn birth-then-complete: nested conversation arrives for consumer read"

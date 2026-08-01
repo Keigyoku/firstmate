@@ -134,7 +134,10 @@ Top-level hints are retained as salvageable additive identity; this producer sli
 Publication holds `state/child-current.lock`, increments epoch for a readable pointer with the matching schema and `container_id`, writes a coherent JSON snapshot to a same-directory temporary file, validates JSON, flushes, and renames into place via `fm_resident_atomic_json`.
 Readers observe only the old complete document or the new complete document.
 When lifecycle is omitted on a later publish and a matching pointer exists, the previous lifecycle is preserved (conversation-completion refresh).
-When env omits backend/status/pid on a refresh, prior pointer values for those fields are kept.
+On a lifecycle-omitted refresh, prior backend, attestation, status, and process objects are preserved verbatim when their corresponding env values are omitted.
+An explicit lifecycle transition never inherits those prior objects.
+Fresh backend triples and status verbs receive the new publication timestamp; carried observations retain their original timestamps.
+An inherited process keeps its original pid and creation identity as one pair and is never re-observed by pid.
 
 ## Spawn integration
 
@@ -184,7 +187,9 @@ ok - unknown harness and worktree are omitted, never fabricated
 ok - fm-spawn non-claude harness and worktree match child-current
 ok - child-current publishes nested conversation; consumer shape deserializes it
 ok - unknown transcript omits conversation; top-level hints still published
-ok - birth-then-complete publish fills conversation; preserves lifecycle/backend/status
+ok - birth-then-complete publish preserves prior observed objects verbatim
+ok - explicit lifecycle transition does not inherit stale observed objects
+ok - known transcript extracts session without unrelated worktree
 ok - fm-spawn birth-then-complete: nested conversation arrives for consumer read
 ```
 
